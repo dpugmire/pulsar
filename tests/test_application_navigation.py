@@ -1597,6 +1597,161 @@ class CampaignDbNavigationTests(unittest.TestCase):
             {"source_dataset": {"$in": ["run-128/output.bp"]}},
         )
 
+    def test_source_restriction_preserves_concrete_source_when_producer_is_shared(self):
+        for source_dataset, max_value in (
+            ("mhd-low/output.bp", 6.0),
+            ("mhd-high/output.bp", 8.0),
+        ):
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "rho",
+                    "variable_name": "rho",
+                    "variable_type": "variable",
+                    "source_dataset": source_dataset,
+                    "producer": "mhd",
+                    "variable_path": f"{source_dataset}/rho",
+                    "min": 1.0,
+                    "max": max_value,
+                    "metadata": {"Shape": "64,64"},
+                }
+            )
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "pressure",
+                    "variable_name": "pressure",
+                    "variable_type": "variable",
+                    "source_dataset": source_dataset,
+                    "producer": "mhd",
+                    "variable_path": f"{source_dataset}/pressure",
+                    "min": 1.0,
+                    "max": 10.0,
+                    "metadata": {"Shape": "64,64"},
+                }
+            )
+
+        _query_filter, source_filters = python_query_to_filters(
+            'source(id == "rho" and max < 7)'
+        )
+
+        restriction = self.db.source_restriction_summary(source_filters)
+        pressure_summary = self.db.variable_min_max_summary(
+            "pressure",
+            extra_filter=restriction["filter"],
+        )
+
+        self.assertEqual(restriction["count"], 1)
+        self.assertEqual(
+            restriction["filter"],
+            {"source_dataset": {"$in": ["mhd-low/output.bp"]}},
+        )
+        self.assertEqual(
+            [source["source_dataset"] for source in pressure_summary["sources"]],
+            ["mhd-low/output.bp"],
+        )
+
+    def test_source_restriction_uses_source_level_extrema_not_frame_extrema(self):
+        for source_dataset, aggregate_max, frame_max in (
+            ("mhd-low/output.bp", 3.5, 1.0),
+            ("mhd-high/output.bp", 8.0, 2.0),
+        ):
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "pressure",
+                    "variable_name": "pressure",
+                    "variable_type": "variable",
+                    "source_dataset": source_dataset,
+                    "producer": "mhd",
+                    "variable_path": f"{source_dataset}/pressure",
+                    "min": 1.0,
+                    "max": aggregate_max,
+                    "metadata": {"Shape": "64,64"},
+                }
+            )
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "pressure",
+                    "variable_name": "pressure",
+                    "variable_type": "scalarField",
+                    "source_dataset": source_dataset,
+                    "producer": "mhd",
+                    "visualization_name": "heatmap",
+                    "variable_path": f"visualizations/{source_dataset}/pressure.0",
+                    "frame_index": 0,
+                    "min": 0.0,
+                    "max": frame_max,
+                    "metadata": {"Shape": "64,64"},
+                }
+            )
+
+        _query_filter, source_filters = python_query_to_filters(
+            'source(id == "pressure" and max < 4)'
+        )
+
+        restriction = self.db.source_restriction_summary(source_filters)
+        pressure_summary = self.db.variable_min_max_summary(
+            "pressure",
+            extra_filter=restriction["filter"],
+        )
+
+        self.assertEqual(restriction["count"], 1)
+        self.assertEqual(
+            restriction["filter"],
+            {"source_dataset": {"$in": ["mhd-low/output.bp"]}},
+        )
+        self.assertEqual(
+            [source["source_dataset"] for source in pressure_summary["sources"]],
+            ["mhd-low/output.bp"],
+        )
+        self.assertEqual(pressure_summary["sources"][0]["max"], 3.5)
+
+    def test_source_restriction_prefers_variable_extrema_for_exact_matches(self):
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "pressure",
+                "variable_name": "pressure",
+                "variable_type": "variable",
+                "source_dataset": "mhd-rounded/output.bp",
+                "producer": "mhd",
+                "variable_path": "mhd-rounded/output.bp/pressure",
+                "min": 1.0,
+                "max": 3.5,
+                "metadata": {"Shape": "64,64"},
+            }
+        )
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "pressure",
+                "variable_name": "pressure",
+                "variable_type": "scalarField",
+                "source_dataset": "mhd-rounded/output.bp",
+                "producer": "mhd",
+                "visualization_name": "heatmap",
+                "variable_path": "visualizations/mhd-rounded/output.bp/pressure.0",
+                "frame_index": 0,
+                "min": 0.0,
+                "max": 3.5001,
+                "metadata": {"Shape": "64,64"},
+            }
+        )
+
+        _query_filter, source_filters = python_query_to_filters(
+            'source(id == "pressure" and max == 3.5)'
+        )
+
+        restriction = self.db.source_restriction_summary(source_filters)
+
+        self.assertEqual(restriction["count"], 1)
+        self.assertEqual(
+            restriction["filter"],
+            {"source_dataset": {"$in": ["mhd-rounded/output.bp"]}},
+        )
+
     def test_application_file_navigation_uses_file_nodes(self):
         application = SeuratApplication(self.db)
 
