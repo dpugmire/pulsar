@@ -13,7 +13,7 @@ from adios2 import FileReader
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from media_utils import png_bytes_to_data_uri
-from query_parser import and_filter
+from query_parser import and_filter, mongo_filter_matches
 from seurat.constants import SCALAR_FIELD_COLORMAP_OPTIONS
 
 
@@ -882,20 +882,201 @@ class CampaignDb:
 
     @staticmethod
     def _source_restriction_identity(doc: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-        producer = str(doc.get("producer", "") or "").strip()
-        if producer:
-            return ("producer", producer)
+        schema_file_group = str(doc.get("schema_file_group", "") or "").strip()
+        schema_mode = str(doc.get("schema_mode", "") or "").strip()
+        if schema_file_group and schema_mode == "file_per_timestep":
+            return ("schema_file_group", schema_file_group)
 
         source_dataset = str(doc.get("source_dataset", "") or "").strip()
         if source_dataset:
             return ("source_dataset", source_dataset)
 
+        producer = str(doc.get("producer", "") or "").strip()
         casename = str(doc.get("casename", "") or "").strip()
         file_name = str(doc.get("file", "") or "").strip()
-        if casename or file_name:
-            return ("case_file", f"{casename}\0{file_name}")
+        if producer or casename or file_name:
+            return ("legacy_source", f"{producer}\0{casename}\0{file_name}")
 
         return None
+
+    @staticmethod
+    def _source_restriction_filter_uses_extrema(filter_doc: Dict[str, Any]) -> bool:
+        for key, value in (filter_doc or {}).items():
+            if key in {"min", "max"}:
+                return True
+            if key in {"$and", "$or", "$nor"} and isinstance(value, (list, tuple)):
+                if any(
+                    isinstance(item, dict)
+                    and CampaignDb._source_restriction_filter_uses_extrema(item)
+                    for item in value
+                ):
+                    return True
+        return False
+
+    @staticmethod
+    def _source_restriction_filter_terms(value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [item for item in value if isinstance(item, dict)]
+
+    @classmethod
+    def _source_restriction_candidate_filter(
+        cls,
+        filter_doc: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Return a broad document query for source-level extrema evaluation."""
+
+        if not isinstance(filter_doc, dict):
+            return {}
+
+        result: Dict[str, Any] = {}
+        for key, value in filter_doc.items():
+            if key in {"min", "max"}:
+                continue
+            if key == "$and":
+                parts = [
+                    cls._source_restriction_candidate_filter(item)
+                    for item in cls._source_restriction_filter_terms(value)
+                ]
+                parts = [part for part in parts if part]
+                if parts:
+                    result[key] = parts
+                continue
+            if key in {"$or", "$nor"}:
+                if cls._source_restriction_filter_uses_extrema({key: value}):
+                    return {}
+                result[key] = cls._source_restriction_filter_terms(value)
+                continue
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _source_restriction_doc_extrema(
+        doc: Dict[str, Any],
+    ) -> Tuple[Optional[float], Optional[float]]:
+        fmin = to_float(doc.get("min", None))
+        fmax = to_float(doc.get("max", None))
+
+        if fmin is None or fmax is None:
+            metadata = doc.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            raw_min = metadata.get("Min", doc.get("Min", None))
+            raw_max = metadata.get("Max", doc.get("Max", None))
+            fmin = to_float(raw_min) if fmin is None else fmin
+            fmax = to_float(raw_max) if fmax is None else fmax
+
+        return valid_extrema(fmin, fmax)
+
+    @staticmethod
+    def _source_restriction_values_for_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+        variable_name = str(doc.get("variable_name", "") or "").strip()
+        variable_id = str(doc.get("variable_id", "") or variable_name)
+        if not variable_name and variable_id:
+            variable_name = variable_id.strip("/").rsplit("/", 1)[-1]
+        source_dataset = str(doc.get("source_dataset", "") or "")
+        return {
+            "variable_id": variable_id,
+            "variable_name": variable_name,
+            "variable_type": str(doc.get("variable_type", "") or ""),
+            "source_dataset": source_dataset,
+            "producer": str(doc.get("producer", "") or ""),
+            "casename": str(doc.get("casename", "") or ""),
+            "file": str(doc.get("file", "") or ""),
+            "visualization_name": str(doc.get("visualization_name", "") or ""),
+            "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+            "visualization_source_dataset": str(
+                doc.get("visualization_source_dataset", "") or source_dataset
+            ),
+            "association_source": str(doc.get("association_source", "") or ""),
+            "variable_path": str(doc.get("variable_path", "") or ""),
+            "campaign_path": str(doc.get("campaign_path", "") or ""),
+            "variable_location": str(doc.get("variable_location", "") or ""),
+            "frame_index": doc.get("frame_index", None),
+            "min": None,
+            "max": None,
+            "_has_variable_extrema": False,
+        }
+
+    @staticmethod
+    def _source_restriction_merge_doc_values(
+        values: Dict[str, Any],
+        doc: Dict[str, Any],
+    ) -> None:
+        for field in (
+            "variable_name",
+            "source_dataset",
+            "producer",
+            "casename",
+            "file",
+            "visualization_name",
+            "visualization_kind",
+            "visualization_source_dataset",
+            "association_source",
+            "variable_path",
+            "campaign_path",
+            "variable_location",
+        ):
+            if not values.get(field) and doc.get(field):
+                values[field] = str(doc.get(field, "") or "")
+
+        variable_type = str(doc.get("variable_type", "") or "")
+        if variable_type == "variable" or not values.get("variable_type"):
+            values["variable_type"] = variable_type
+
+        if values.get("frame_index", None) is None:
+            values["frame_index"] = doc.get("frame_index", None)
+
+        fmin, fmax = CampaignDb._source_restriction_doc_extrema(doc)
+        if fmin is None or fmax is None:
+            return
+
+        use_variable_extrema = variable_type == "variable"
+        if use_variable_extrema and not values.get("_has_variable_extrema"):
+            values["min"] = None
+            values["max"] = None
+            values["_has_variable_extrema"] = True
+        elif not use_variable_extrema and values.get("_has_variable_extrema"):
+            return
+
+        if fmin is not None:
+            current_min = values.get("min", None)
+            values["min"] = fmin if current_min is None else min(float(current_min), fmin)
+        if fmax is not None:
+            current_max = values.get("max", None)
+            values["max"] = fmax if current_max is None else max(float(current_max), fmax)
+
+    def _source_restriction_aggregate_identities(
+        self,
+        source_filter: Dict[str, Any],
+        projection: Dict[str, int],
+    ) -> Set[Tuple[str, str]]:
+        candidate_filter = self._source_restriction_candidate_filter(
+            source_filter or {}
+        )
+        groups: Dict[Tuple[Tuple[str, str], str], Dict[str, Any]] = {}
+
+        for doc in self.collection.find(candidate_filter, projection):
+            identity = self._source_restriction_identity(doc)
+            if identity is None:
+                continue
+
+            variable_id = str(
+                doc.get("variable_id", "") or doc.get("variable_name", "") or ""
+            )
+            key = (identity, variable_id)
+            values = groups.setdefault(
+                key,
+                self._source_restriction_values_for_doc(doc),
+            )
+            self._source_restriction_merge_doc_values(values, doc)
+
+        identities: Set[Tuple[str, str]] = set()
+        for key, values in groups.items():
+            if mongo_filter_matches(source_filter or {}, values):
+                identity, _variable_id = key
+                identities.add(identity)
+        return identities
 
     @staticmethod
     def _source_restriction_filter_from_identities(
@@ -904,21 +1085,36 @@ class CampaignDb:
         if not identities:
             return {"_id": {"$in": []}}
 
+        schema_file_groups = sorted(
+            value for kind, value in identities if kind == "schema_file_group"
+        )
         producers = sorted(value for kind, value in identities if kind == "producer")
         source_datasets = sorted(value for kind, value in identities if kind == "source_dataset")
-        case_files = sorted(value for kind, value in identities if kind == "case_file")
+        legacy_sources = sorted(value for kind, value in identities if kind == "legacy_source")
 
         parts: List[Dict[str, Any]] = []
+        if schema_file_groups:
+            parts.append(
+                {
+                    "schema_file_group": {"$in": schema_file_groups},
+                    "schema_mode": "file_per_timestep",
+                }
+            )
         if producers:
             parts.append({"producer": {"$in": producers}})
         if source_datasets:
             parts.append({"source_dataset": {"$in": source_datasets}})
-        for value in case_files:
-            casename, file_name = value.split("\0", 1)
-            item: Dict[str, Any] = {"casename": casename}
+        for value in legacy_sources:
+            producer, casename, file_name = value.split("\0", 2)
+            item: Dict[str, Any] = {}
+            if producer:
+                item["producer"] = producer
+            if casename:
+                item["casename"] = casename
             if file_name:
                 item["file"] = file_name
-            parts.append(item)
+            if item:
+                parts.append(item)
 
         if not parts:
             return {"_id": {"$in": []}}
@@ -937,20 +1133,46 @@ class CampaignDb:
 
         proj = {
             "_id": 0,
+            "variable_id": 1,
+            "variable_name": 1,
+            "variable_type": 1,
             "source_dataset": 1,
             "producer": 1,
             "casename": 1,
             "file": 1,
+            "visualization_name": 1,
+            "visualization_kind": 1,
+            "visualization_source_dataset": 1,
+            "association_source": 1,
+            "variable_path": 1,
+            "campaign_path": 1,
+            "variable_location": 1,
+            "frame_index": 1,
+            "Min": 1,
+            "Max": 1,
+            "min": 1,
+            "max": 1,
+            "metadata": 1,
+            "schema_file_group": 1,
+            "schema_mode": 1,
         }
 
         matched: Optional[Set[Tuple[str, str]]] = None
         try:
             for source_filter in source_filters:
-                identities: Set[Tuple[str, str]] = set()
-                for doc in self.collection.find(source_filter or {}, proj):
-                    identity = self._source_restriction_identity(doc)
-                    if identity is not None:
-                        identities.add(identity)
+                if self._source_restriction_filter_uses_extrema(
+                    source_filter or {}
+                ):
+                    identities = self._source_restriction_aggregate_identities(
+                        source_filter or {},
+                        proj,
+                    )
+                else:
+                    identities = set()
+                    for doc in self.collection.find(source_filter or {}, proj):
+                        identity = self._source_restriction_identity(doc)
+                        if identity is not None:
+                            identities.add(identity)
 
                 matched = identities if matched is None else matched.intersection(identities)
                 if not matched:
