@@ -48,6 +48,7 @@ NON_HISTORICAL_ACTIONS = {
     "save_workspace_state_as",
     "select_all_sources",
     "select_var",
+    "set_active_axis_selection",
     "set_canvas_fit_to_view",
     "set_canvas_nudge_others",
     "set_canvas_show_grid",
@@ -90,7 +91,7 @@ NON_HISTORICAL_TRIGGERS = {
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 117,
+            "ACTION_BINDINGS": 118,
             "TRIGGER_BINDINGS": 20,
             "STATE_CHANGE_BINDINGS": 4,
         }

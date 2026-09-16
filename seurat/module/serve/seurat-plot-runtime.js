@@ -726,7 +726,7 @@
     if (Math.abs(end - start) <= 1e-12) end = start + 1;
     return { start, end };
   }
-  function updatePlotCursors(rawTime, progress) {
+  function updatePlotCursors(rawTime, progress, activeAxisKey) {
     const plots = renderAllPlot1d();
     if (!plots.length) return;
     const t = Number.isFinite(Number(rawTime)) ? Number(rawTime) : 0;
@@ -740,6 +740,11 @@
     for (const el of plots) {
       const meta = el.__seuratPlotMeta;
       if (!meta || !meta.cursor) continue;
+      const plotAxisKey = String(el.getAttribute("data-plot-axis-key") || "");
+      if (activeAxisKey && plotAxisKey !== String(activeAxisKey)) {
+        meta.cursor.setAttribute("display", "none");
+        continue;
+      }
       const cursorValue = normalizedProgress === null
         ? t
         : meta.dataXMin + normalizedProgress * (meta.dataXMax - meta.dataXMin);

@@ -39,6 +39,12 @@ from seurat.models.source_selection import (
     source_fields_from_row,
     source_filter_from_row,
 )
+from seurat.models.timeline import (
+    selection_axis_descriptor,
+    selection_axis_index_for_value,
+    selection_axis_key,
+    selection_axis_values,
+)
 from seurat.plot_options_assistant import (
     PlotOptionsTranslationRequest,
     PlotOptionsTranslationResult,
@@ -53,6 +59,7 @@ from state_init import fmt
 
 class VisualizationControllerMixin:
     ACTION_BINDINGS = (
+        ("set_active_axis_selection", "set_active_axis_selection"),
         ("cancel_scalar_plot_generation", "cancel_scalar_plot_generation"),
         ("confirm_scalar_plot_generation", "confirm_scalar_plot_generation"),
         ("cancel_plot_settings", "cancel_plot_settings"),
@@ -125,6 +132,154 @@ class VisualizationControllerMixin:
             if name and name not in out:
                 out.append(name)
         return out
+
+    def active_selection_axis_cell_index(
+        self,
+        cells: List[Dict[str, Any]],
+    ) -> int:
+        try:
+            driver = int(self.state.timelineDriverCell)
+        except Exception:
+            driver = -1
+        if 0 <= driver < len(cells) and selection_axis_values(cells[driver]):
+            return driver
+        try:
+            active = int(self.state.activeGridCell)
+        except Exception:
+            active = -1
+        if 0 <= active < len(cells) and selection_axis_values(cells[active]):
+            return active
+        return next(
+            (
+                index
+                for index, cell in enumerate(cells)
+                if selection_axis_values(cell)
+            ),
+            -1,
+        )
+
+    def regenerate_axis_selected_plot(
+        self,
+        cell: Dict[str, Any],
+        selection_index: int,
+    ) -> Dict[str, Any]:
+        variable_id = str(
+            cell.get("variable_id", "") or cell.get("variable_name", "") or ""
+        ).strip()
+        source_fields_list = self.source_fields_list_from_cell(cell)
+        source_keys = self.source_keys_from_cell(cell)
+        if len(source_fields_list) > 1:
+            source_filters = [
+                self.source_fields_to_filter(variable_id, fields)
+                for fields in source_fields_list
+            ]
+            tile = self.db.get_generated_scalar_plot_tile_for_sources(
+                self.campaign_path,
+                variable_id,
+                source_filters=source_filters,
+                extra_filter=self.active_query_filter(),
+                selection_index=selection_index,
+            )
+        else:
+            source_fields = source_fields_list[0] if source_fields_list else {}
+            tile = self.db.get_or_create_generated_scalar_plot_tile(
+                self.campaign_path,
+                variable_id,
+                source_filter=self.source_fields_to_filter(
+                    variable_id,
+                    source_fields,
+                )
+                or None,
+                extra_filter=self.active_query_filter(),
+                selection_index=selection_index,
+            )
+        if not tile:
+            raise ValueError("Could not regenerate axis-selected plot")
+
+        if source_fields_list:
+            tile.update(
+                {
+                    key: value
+                    for key, value in source_fields_list[0].items()
+                    if value and key != "_source_key"
+                }
+            )
+        tile["_source_key"] = source_keys[0] if source_keys else ""
+        tile["_source_keys"] = source_keys
+        tile["_source_fields_list"] = source_fields_list
+        self.assign_plot_series_keys(tile, source_keys)
+        tile["plot_settings"] = self.normalize_plot_settings(
+            tile,
+            self.existing_plot_settings(cell, variable_id),
+        )
+        return preserve_grid_geometry(tile, cell)
+
+    def set_active_axis_selection(self, axis_index: int, **_):
+        try:
+            requested_index = int(axis_index)
+        except Exception:
+            return
+
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        driver_index = self.active_selection_axis_cell_index(cells)
+        if driver_index < 0:
+            return
+        driver = cells[driver_index]
+        driver_values = selection_axis_values(driver)
+        driver_key = selection_axis_key(driver)
+        if not driver_values or not driver_key:
+            return
+        requested_index = max(0, min(requested_index, len(driver_values) - 1))
+        selected_value = driver_values[requested_index]
+
+        updated: List[Dict[str, Any]] = []
+        for raw_cell in cells:
+            cell = dict(raw_cell or {})
+            cell_key = selection_axis_key(cell)
+            if not cell_key:
+                cell["axis_sync_status"] = "static"
+                updated.append(cell)
+                continue
+            if cell_key != driver_key:
+                cell["axis_sync_status"] = "incompatible"
+                updated.append(cell)
+                continue
+
+            target_index = selection_axis_index_for_value(cell, selected_value)
+            if target_index is None:
+                cell["axis_sync_status"] = "unavailable"
+                updated.append(cell)
+                continue
+
+            axis = selection_axis_descriptor(cell)
+            axis["index"] = target_index
+            axis["value"] = selected_value
+            cell["selection_axis"] = axis
+            cell["axis_sync_status"] = "synchronized"
+
+            is_axis_selected_generated_plot = (
+                str(cell.get("visualization_name", "") or "")
+                == GENERATED_SCALAR_PLOT_VIS
+                and str(cell.get("media_type", "") or "") == "plot1d"
+                and str(cell.get("plot_axis_key", "") or "") != driver_key
+            )
+            if is_axis_selected_generated_plot:
+                try:
+                    cell = self.regenerate_axis_selected_plot(cell, target_index)
+                    cell["axis_sync_status"] = "synchronized"
+                except Exception as e:
+                    cell["axis_sync_status"] = "error"
+                    cell["note"] = f"Axis synchronization failed: {type(e).__name__}: {e}"
+            elif (
+                is_plugin_visualization(
+                    str(cell.get("visualization_name", "") or "")
+                )
+                and str(cell.get("plot_axis_key", "") or "") != driver_key
+            ):
+                cell["axis_sync_status"] = "unsupported"
+            updated.append(cell)
+
+        self.state.gridCells = self.normalize_grid_cells(updated)
 
     def plugin_candidate(
         self,

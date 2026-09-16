@@ -3544,6 +3544,41 @@ def test_physical_timeline_uses_declared_time_values(page, seurat_server):
     assert slider_box["width"] == pytest.approx(slider_width, abs=1)
 
 
+def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(
+    page, seurat_server
+):
+    _open_app(page, seurat_server, mode="multi-axis")
+
+    label = page.locator("#seurat-vcr-time-value")
+    slider = page.locator("#seurat-vcr-step-slider")
+    waveform = page.locator('.seurat-dropcell[data-cell-index="1"]')
+    incompatible = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    label.wait_for(state="visible")
+    assert label.text_content() == "Shot number = 15"
+    assert slider.get_attribute("max") == "2"
+
+    page.get_by_title("Forward step").click()
+
+    page.wait_for_function(
+        "document.querySelector('#seurat-vcr-time-value').textContent === "
+        "'Shot number = 16'"
+    )
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"]')"
+        ".getAttribute('data-selection-axis').includes('\"value\":16')"
+    )
+    assert waveform.get_attribute("data-axis-sync-status") == "synchronized"
+    assert incompatible.get_attribute("data-axis-sync-status") == "incompatible"
+
+    incompatible.click()
+
+    page.wait_for_function(
+        "document.querySelector('#seurat-vcr-time-value').textContent === "
+        "'Time within shot = 0 s'"
+    )
+    assert slider.get_attribute("max") == "2"
+
+
 def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
     page, seurat_server
 ):

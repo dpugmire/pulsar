@@ -139,6 +139,109 @@ def _image_sequence_cell(mode):
     return cell
 
 
+def _multi_axis_cells():
+    shot_key = "lasernet:laser_runs:shot"
+    trace_time_key = "lasernet:laser_runs:trace_time"
+    shot_values = [15.0, 16.0, 17.0]
+
+    scalar = _plot_cell("physical")
+    scalar.update(
+        {
+            "variable_id": "laser_energy",
+            "variable_name": "laser_energy",
+            "display_title": "laser_energy",
+            "plot_axis_key": shot_key,
+            "selection_axis": {
+                "id": "shot",
+                "key": shot_key,
+                "kind": "shot",
+                "label": "Shot number",
+                "values": shot_values,
+                "index": 0,
+                "value": shot_values[0],
+            },
+        }
+    )
+    scalar["plot"].update(
+        {
+            "x_label": "Shot number",
+            "x_axis_key": shot_key,
+            "series": [
+                {
+                    "x": shot_values,
+                    "y": [2.5, 3.0, 3.75],
+                    "source_label": "fixture",
+                    "source_key": "fixture",
+                    "color": "#1565c0",
+                }
+            ],
+        }
+    )
+
+    waveform = _plot_cell("physical")
+    waveform.update(
+        {
+            "variable_id": "photodiode_signal",
+            "variable_name": "photodiode_signal",
+            "display_title": "photodiode_signal",
+            "visualization_name": "generated_timeseries",
+            "selected_visualization": "generated_timeseries",
+            "plot_axis_key": trace_time_key,
+            "selection_axis": {
+                "id": "shot",
+                "key": shot_key,
+                "kind": "shot",
+                "label": "Shot number",
+                "values": shot_values,
+                "index": 0,
+                "value": shot_values[0],
+            },
+        }
+    )
+    waveform["plot"].update(
+        {
+            "x_label": "Time within shot (s)",
+            "x_axis_key": trace_time_key,
+            "series": [
+                {
+                    "x": [0.0, 0.5, 1.0],
+                    "y": [10.0, 12.0, 11.0],
+                    "source_label": "fixture",
+                    "source_key": "fixture",
+                    "color": "#7b1fa2",
+                }
+            ],
+        }
+    )
+
+    incompatible = _plot_cell("physical")
+    incompatible.update(
+        {
+            "variable_id": "pulse_profile",
+            "variable_name": "pulse_profile",
+            "display_title": "pulse_profile",
+            "plot_axis_key": trace_time_key,
+            "selection_axis": {
+                "id": "trace_time",
+                "key": trace_time_key,
+                "kind": "within_shot_time",
+                "label": "Time within shot",
+                "unit": "s",
+                "values": [0.0, 0.5, 1.0],
+                "index": 0,
+                "value": 0.0,
+            },
+        }
+    )
+    incompatible["plot"].update(
+        {
+            "x_label": "Time within shot (s)",
+            "x_axis_key": trace_time_key,
+        }
+    )
+    return [scalar, waveform, incompatible]
+
+
 def _scalar_field_cell(background):
     is_white = background == "white"
     background_color = "#ffffff" if is_white else "#000000"
@@ -393,7 +496,9 @@ def build_fixture_server(mode):
         "minmax(180px, 1fr)" for _ in range(state.gridCols)
     )
     state.gridFitRowTemplate = "minmax(212px, 1fr)"
-    if mode in {"scalar", "scalar-settings"}:
+    if mode == "multi-axis":
+        state.gridCells = _multi_axis_cells()
+    elif mode in {"scalar", "scalar-settings"}:
         state.gridCells = [
             _scalar_field_cell("black"),
             _scalar_field_cell("white"),
@@ -680,6 +785,57 @@ def build_fixture_server(mode):
 
     def set_active_grid_cell(cell_index, _ignored=0, _extend_selection=0):
         state.activeGridCell = int(cell_index)
+
+    def set_active_axis_selection(axis_index):
+        cells = [dict(cell) for cell in state.gridCells]
+        driver_index = int(state.timelineDriverCell)
+        if not 0 <= driver_index < len(cells):
+            driver_index = int(state.activeGridCell)
+        if not 0 <= driver_index < len(cells):
+            driver_index = next(
+                (
+                    index
+                    for index, cell in enumerate(cells)
+                    if (cell.get("selection_axis", {}) or {}).get("values")
+                ),
+                -1,
+            )
+        if driver_index < 0:
+            return
+        driver_axis = dict(cells[driver_index].get("selection_axis", {}) or {})
+        driver_values = list(driver_axis.get("values", []) or [])
+        if not driver_values:
+            return
+        selected_index = max(0, min(int(axis_index), len(driver_values) - 1))
+        selected_value = driver_values[selected_index]
+        driver_key = str(driver_axis.get("key", "") or "")
+        for cell in cells:
+            axis = dict(cell.get("selection_axis", {}) or {})
+            if not axis:
+                cell["axis_sync_status"] = "static"
+                continue
+            if str(axis.get("key", "") or "") != driver_key:
+                cell["axis_sync_status"] = "incompatible"
+                continue
+            values = list(axis.get("values", []) or [])
+            if selected_value not in values:
+                cell["axis_sync_status"] = "unavailable"
+                continue
+            target_index = values.index(selected_value)
+            axis.update({"index": target_index, "value": selected_value})
+            cell["selection_axis"] = axis
+            cell["axis_sync_status"] = "synchronized"
+            if cell.get("variable_id") == "photodiode_signal":
+                plot = deepcopy(cell["plot"])
+                series = deepcopy(plot["series"])
+                series[0]["y"] = [
+                    10.0 + target_index,
+                    12.0 + target_index,
+                    11.0 + target_index,
+                ]
+                plot["series"] = series
+                cell["plot"] = plot
+        state.gridCells = cells
 
     def assign_var_to_grid_cell(variable_id, cell_index):
         index = int(cell_index)
@@ -1290,6 +1446,7 @@ def build_fixture_server(mode):
         history_edit("Move tab", move_workspace_tab)
     )
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
+    server.controller.add("set_active_axis_selection")(set_active_axis_selection)
     server.controller.add("set_grid_layout_mode")(
         history_edit("Change layout mode", set_grid_layout_mode)
     )
@@ -1397,6 +1554,7 @@ def main():
             "step",
             "physical",
             "mixed",
+            "multi-axis",
             "scalar",
             "scalar-settings",
             "freeform-column-seam",

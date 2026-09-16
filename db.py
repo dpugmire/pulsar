@@ -670,6 +670,35 @@ class CampaignDb:
         return len(parts)
 
     @staticmethod
+    def _metadata_shape(metadata: Any) -> List[int]:
+        if not isinstance(metadata, dict):
+            return []
+        raw_shape = metadata.get("Shape", metadata.get("shape", None))
+        if raw_shape is None:
+            return []
+        if isinstance(raw_shape, (list, tuple)):
+            parts = list(raw_shape)
+        else:
+            text = str(raw_shape).strip()
+            for char in "[](){}":
+                text = text.replace(char, "")
+            parts = [part.strip() for part in text.replace("x", ",").split(",")]
+            if len(parts) == 1 and " " in parts[0]:
+                parts = parts[0].split()
+        shape: List[int] = []
+        for part in parts:
+            if part in (None, ""):
+                continue
+            try:
+                value = int(float(str(part)))
+            except Exception:
+                return []
+            if value < 0:
+                return []
+            shape.append(value)
+        return shape
+
+    @staticmethod
     def _variable_filter(variable_id: str, variable_type: Optional[str] = None) -> Dict[str, Any]:
         query: Dict[str, Any] = {"variable_id": variable_id}
         if variable_type:
@@ -1657,6 +1686,11 @@ class CampaignDb:
             "schema_mode": 1,
             "time_source": 1,
             "time_values": 1,
+            "axes": 1,
+            "dimension_axes": 1,
+            "plot_x_axis": 1,
+            "selection_axis": 1,
+            "schema_default_axis": 1,
             "metadata": 1,
             "min": 1,
             "max": 1,
@@ -1674,7 +1708,18 @@ class CampaignDb:
 
         metadata = doc.get("metadata", {})
         ndims = self._metadata_ndims(metadata)
-        if ndims is None or ndims > 1:
+        axes = doc.get("axes", {})
+        if not isinstance(axes, dict):
+            axes = {}
+        plot_x_axis = str(doc.get("plot_x_axis", "") or "")
+        selection_axis = str(doc.get("selection_axis", "") or "")
+        is_axis_selected_waveform = (
+            ndims == 2
+            and plot_x_axis in axes
+            and selection_axis in axes
+            and plot_x_axis != selection_axis
+        )
+        if ndims is None or (ndims > 1 and not is_axis_selected_waveform):
             return {}
 
         read_path = self._adios_variable_read_path(doc)
@@ -1710,6 +1755,11 @@ class CampaignDb:
             "source_label": self._plot_source_label(doc),
             "time_source": str(doc.get("time_source", "") or ""),
             "time_values": doc.get("time_values", []),
+            "axes": axes,
+            "dimension_axes": list(doc.get("dimension_axes", []) or []),
+            "plot_x_axis": plot_x_axis,
+            "selection_axis": selection_axis,
+            "schema_default_axis": str(doc.get("schema_default_axis", "") or ""),
             "min": doc.get("min", None),
             "max": doc.get("max", None),
         }
@@ -1901,15 +1951,113 @@ class CampaignDb:
         return times, "time"
 
     @staticmethod
+    def _plot_axis_label(axis: Any, fallback: str = "x") -> str:
+        if not isinstance(axis, dict):
+            return str(fallback or "x")
+        label = str(axis.get("label", "") or fallback or "x")
+        unit = str(axis.get("unit", "") or "").strip()
+        return f"{label} ({unit})" if unit else label
+
+    @staticmethod
+    def _plot_axis_values(axis: Any) -> Optional[np.ndarray]:
+        if not isinstance(axis, dict):
+            return None
+        raw_values = axis.get("values", None)
+        if not isinstance(raw_values, (list, tuple, np.ndarray)):
+            return None
+        try:
+            values = np.asarray(raw_values, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        return values if np.all(np.isfinite(values)) else None
+
+    @staticmethod
+    def _read_selected_array_row(
+        fr: FileReader,
+        variable_path: str,
+        shape: List[int],
+        selection_index: int,
+    ) -> np.ndarray:
+        if len(shape) != 2 or min(shape) <= 0:
+            raise ValueError(
+                f"Axis-selected plots require a non-empty rank-2 array: {shape}"
+            )
+        index = max(0, min(int(selection_index), shape[0] - 1))
+        raw = np.asarray(
+            fr.read(
+                variable_path,
+                start=[index, 0],
+                count=[1, shape[1]],
+            ),
+            dtype=float,
+        )
+        if raw.ndim >= 2 and raw.shape[0] == shape[0] and shape[0] > 1:
+            raw = raw[index]
+        return raw.reshape(-1)
+
+    @staticmethod
+    def _read_plot_axis_values(
+        fr: FileReader,
+        axis: Dict[str, Any],
+        selection_index: int,
+    ) -> np.ndarray:
+        cached = CampaignDb._plot_axis_values(axis)
+        if cached is not None:
+            return cached
+        variable_path = str(axis.get("variable_path", "") or "")
+        if not variable_path:
+            raise ValueError("Plot axis has no coordinate variable path")
+        raw_shape = axis.get("shape", [])
+        shape = [int(value) for value in raw_shape] if isinstance(raw_shape, list) else []
+        if len(shape) == 1:
+            return np.asarray(fr.read(variable_path), dtype=float).reshape(-1)
+        if len(shape) == 2:
+            return CampaignDb._read_selected_array_row(
+                fr,
+                variable_path,
+                shape,
+                selection_index,
+            )
+        raise ValueError(
+            f"Plot axis coordinate must be rank 1 or 2, got shape {shape}"
+        )
+
+    @staticmethod
     def _read_plot_series(
         campaign_path: str,
         variable_path: str,
         metadata: Any,
         explicit_time_values: Any = None,
+        axes: Any = None,
+        plot_x_axis: str = "",
+        selection_axis: str = "",
+        selection_index: int = 0,
     ) -> Tuple[np.ndarray, np.ndarray, str]:
         steps_count = CampaignDb._metadata_steps_count(metadata)
         ndims = CampaignDb._metadata_ndims(metadata)
+        axis_descriptors = axes if isinstance(axes, dict) else {}
+        plot_axis = axis_descriptors.get(str(plot_x_axis or ""), {})
         with FileReader(campaign_path) as fr:
+            if ndims == 2 and plot_axis and selection_axis:
+                shape = CampaignDb._metadata_shape(metadata)
+                y = CampaignDb._read_selected_array_row(
+                    fr,
+                    variable_path,
+                    shape,
+                    selection_index,
+                )
+                x = CampaignDb._read_plot_axis_values(
+                    fr,
+                    dict(plot_axis),
+                    selection_index,
+                )
+                if x.size != y.size:
+                    raise ValueError(
+                        f"Plot axis has {x.size} values but selected data row has "
+                        f"{y.size} values"
+                    )
+                return x, y, CampaignDb._plot_axis_label(plot_axis)
+
             kwargs = {"step_selection": [0, steps_count]} if steps_count > 1 else {}
             y_raw = np.asarray(fr.read(variable_path, **kwargs), dtype=float)
 
@@ -1920,6 +2068,13 @@ class CampaignDb:
 
             if ndims == 1:
                 y = y_raw.reshape(-1)
+                axis_values = CampaignDb._plot_axis_values(plot_axis)
+                if axis_values is not None and axis_values.size == y.size:
+                    return (
+                        axis_values,
+                        y,
+                        CampaignDb._plot_axis_label(plot_axis),
+                    )
                 x, x_label = CampaignDb._plot_timeline_values(
                     y.size,
                     explicit_time_values,
@@ -1932,6 +2087,47 @@ class CampaignDb:
                 y = y_raw.reshape(-1)
             x = np.arange(y.size, dtype=float)
             return x, y, "index"
+
+    @staticmethod
+    def _axis_tile_fields(
+        candidate: Dict[str, Any],
+        selection_index: int,
+    ) -> Dict[str, Any]:
+        axes = candidate.get("axes", {})
+        if not isinstance(axes, dict) or not axes:
+            return {}
+        selection_axis_name = str(candidate.get("selection_axis", "") or "")
+        plot_axis_name = str(candidate.get("plot_x_axis", "") or "")
+        selection_axis = axes.get(selection_axis_name, {})
+        plot_axis = axes.get(plot_axis_name, {})
+        if not isinstance(selection_axis, dict):
+            selection_axis = {}
+        if not isinstance(plot_axis, dict):
+            plot_axis = {}
+
+        result: Dict[str, Any] = {
+            "axes": axes,
+            "dimension_axes": list(candidate.get("dimension_axes", []) or []),
+            "plot_x_axis": plot_axis_name,
+            "plot_axis_key": str(plot_axis.get("key", "") or ""),
+            "schema_default_axis": str(
+                candidate.get("schema_default_axis", "") or ""
+            ),
+        }
+        if selection_axis:
+            descriptor = dict(selection_axis)
+            descriptor["default"] = bool(
+                selection_axis_name
+                and selection_axis_name
+                == str(candidate.get("schema_default_axis", "") or "")
+            )
+            values = descriptor.get("values", [])
+            if isinstance(values, list) and values:
+                index = max(0, min(int(selection_index), len(values) - 1))
+                descriptor["index"] = index
+                descriptor["value"] = values[index]
+            result["selection_axis"] = descriptor
+        return result
 
     @staticmethod
     def _clean_plot_series(x_values: Any, y_values: Any) -> Tuple[np.ndarray, np.ndarray]:
@@ -2024,6 +2220,7 @@ class CampaignDb:
         variable_id: str,
         source_filter: Optional[Dict[str, Any]] = None,
         extra_filter: Optional[Dict[str, Any]] = None,
+        selection_index: int = 0,
     ) -> Dict[str, Any]:
         candidate = self.scalar_plot_candidate(variable_id, source_filter=source_filter, extra_filter=extra_filter)
         if not candidate:
@@ -2035,6 +2232,10 @@ class CampaignDb:
             str(candidate.get("variable_path", "") or ""),
             candidate.get("metadata", {}),
             candidate.get("time_values", []),
+            candidate.get("axes", {}),
+            str(candidate.get("plot_x_axis", "") or ""),
+            str(candidate.get("selection_axis", "") or ""),
+            selection_index,
         )
         variable_name = str(candidate.get("variable_name", "") or variable_id)
         plot = self._plot1d_payload(
@@ -2048,8 +2249,17 @@ class CampaignDb:
             x_label,
             variable_name,
         )
+        plot_axis = dict(
+            (candidate.get("axes", {}) or {}).get(
+                str(candidate.get("plot_x_axis", "") or ""),
+                {},
+            )
+            or {}
+        )
+        if plot_axis:
+            plot["x_axis_key"] = str(plot_axis.get("key", "") or "")
 
-        return {
+        tile = {
             "variable_name": variable_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
@@ -2066,6 +2276,8 @@ class CampaignDb:
             "note": "generated scalar plot",
             "source_count": 1,
         }
+        tile.update(self._axis_tile_fields(candidate, selection_index))
+        return tile
 
     def get_generated_scalar_plot_tile_for_sources(
         self,
@@ -2073,6 +2285,7 @@ class CampaignDb:
         variable_id: str,
         source_filters: List[Dict[str, Any]],
         extra_filter: Optional[Dict[str, Any]] = None,
+        selection_index: int = 0,
     ) -> Dict[str, Any]:
         if not source_filters:
             return {}
@@ -2109,6 +2322,10 @@ class CampaignDb:
                     str(candidate.get("variable_path", "") or ""),
                     candidate.get("metadata", {}),
                     candidate.get("time_values", []),
+                    candidate.get("axes", {}),
+                    str(candidate.get("plot_x_axis", "") or ""),
+                    str(candidate.get("selection_axis", "") or ""),
+                    selection_index,
                 )
             except Exception:
                 continue
@@ -2126,6 +2343,35 @@ class CampaignDb:
         if not candidates or not series:
             return {}
 
+        selection_axis_keys = {
+            str(
+                ((candidate.get("axes", {}) or {}).get(
+                    str(candidate.get("selection_axis", "") or ""),
+                    {},
+                ) or {}).get("key", "")
+                or ""
+            )
+            for candidate in candidates
+        }
+        selection_axis_keys.discard("")
+        if len(selection_axis_keys) > 1:
+            raise ValueError(
+                "Cannot combine sources with incompatible selection axes"
+            )
+        plot_axis_keys = {
+            str(
+                ((candidate.get("axes", {}) or {}).get(
+                    str(candidate.get("plot_x_axis", "") or ""),
+                    {},
+                ) or {}).get("key", "")
+                or ""
+            )
+            for candidate in candidates
+        }
+        plot_axis_keys.discard("")
+        if len(plot_axis_keys) > 1:
+            raise ValueError("Cannot combine sources with incompatible plot axes")
+
         x_label_values = {label for label in x_labels if label}
         x_label = x_labels[0] if len(x_label_values) <= 1 else "x"
         first = candidates[0]
@@ -2136,8 +2382,17 @@ class CampaignDb:
             x_label,
             variable_name,
         )
+        first_plot_axis = dict(
+            (first.get("axes", {}) or {}).get(
+                str(first.get("plot_x_axis", "") or ""),
+                {},
+            )
+            or {}
+        )
+        if first_plot_axis:
+            plot["x_axis_key"] = str(first_plot_axis.get("key", "") or "")
 
-        return {
+        tile = {
             "variable_name": variable_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
@@ -2154,6 +2409,8 @@ class CampaignDb:
             "note": f"generated scalar plot ({len(series)} source{'s' if len(series) != 1 else ''})",
             "source_count": len(series),
         }
+        tile.update(self._axis_tile_fields(first, selection_index))
+        return tile
 
     @staticmethod
     def _representation_shape(metadata: Any) -> str:
@@ -2544,6 +2801,8 @@ class CampaignDb:
             "frame_index": 1,
             "time_index": 1,
             "physical_time": 1,
+            "axes": 1,
+            "selection_axis": 1,
             "scalar_field_metadata": 1,
             "visualization_item_uuid": 1,
         }
@@ -2555,6 +2814,17 @@ class CampaignDb:
                 .sort([("frame_index", 1), ("_id", 1)])
             )
             docs = list(cursor)
+
+            selection_axis_values: List[Any] = []
+            if docs:
+                first_axes = docs[0].get("axes", {})
+                selection_axis_name = str(docs[0].get("selection_axis", "") or "")
+                if isinstance(first_axes, dict):
+                    first_axis = first_axes.get(selection_axis_name, {})
+                    if isinstance(first_axis, dict) and isinstance(
+                        first_axis.get("values", []), list
+                    ):
+                        selection_axis_values = list(first_axis.get("values", []))
 
             frames: List[bytes] = []
             frame_indices: List[int] = []
@@ -2644,6 +2914,10 @@ class CampaignDb:
                     except Exception:
                         continue
 
+            if selection_axis_values and len(selection_axis_values) >= len(frames):
+                time_values = selection_axis_values[: len(frames)]
+                has_physical_time = True
+
             return (
                 frames,
                 len(frames) if frames else total,
@@ -2700,6 +2974,11 @@ class CampaignDb:
             "visualization_item_metadata": 1,
             "min": 1,
             "max": 1,
+            "axes": 1,
+            "dimension_axes": 1,
+            "plot_x_axis": 1,
+            "selection_axis": 1,
+            "schema_default_axis": 1,
         }
 
         try:
@@ -2763,8 +3042,7 @@ class CampaignDb:
                     media_type = "image_sequence"
                     note = f"{len(frames)} of {total} frames" if total > len(frames) else f"{len(frames)} frames"
 
-                tiles.append(
-                    {
+                tile = {
                         "variable_name": str(doc.get("variable_name", "") or variable_id),
                         "variable_id": variable_id,
                         "visualization_name": vis,
@@ -2808,7 +3086,8 @@ class CampaignDb:
                         "time_mode": time_mode,
                         "frame_sources": frame_sources,
                     }
-                )
+                tile.update(self._axis_tile_fields(doc, 0))
+                tiles.append(tile)
 
                 if len(tiles) >= int(limit):
                     break

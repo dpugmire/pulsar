@@ -170,9 +170,46 @@
     return result;
   }
 
+  function selectionAxisForGridCell(cell) {
+    if (!cell || !cell.getAttribute) return null;
+    const raw = String(cell.getAttribute("data-selection-axis") || "");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      const values = Array.isArray(parsed.values)
+        ? parsed.values.map(Number).filter(Number.isFinite)
+        : [];
+      if (!values.length) return null;
+      return {
+        id: String(parsed.id || ""),
+        key: String(parsed.key || parsed.id || ""),
+        kind: String(parsed.kind || ""),
+        label: String(parsed.label || parsed.id || "Axis"),
+        unit: String(parsed.unit || ""),
+        isDefault: !!parsed.default,
+        index: Number.isFinite(Number(parsed.index)) ? Number(parsed.index) : 0,
+        values,
+        explicit: true,
+      };
+    } catch (_err) {
+      return null;
+    }
+  }
+
   function timelineForGridCell(cell) {
     if (!cell || !isVisibleGridCell(cell)) {
       return { values: [], hasPlot: false, hasSequence: false };
+    }
+
+    const selectionAxis = selectionAxisForGridCell(cell);
+    if (selectionAxis) {
+      return {
+        values: selectionAxis.values,
+        hasPlot: !!(cell.querySelector && cell.querySelector(".seurat-plot1d")),
+        hasSequence: !!(cell.querySelector && cell.querySelector('img[data-grid-image-sequence="1"]')),
+        axis: selectionAxis,
+      };
     }
 
     const plots = Array.from(cell.querySelectorAll ? cell.querySelectorAll(".seurat-plot1d") : []);
@@ -191,15 +228,30 @@
       }
     }
 
+    const timelineValues = uniqueSortedTimelineValues(values);
     return {
-      values: uniqueSortedTimelineValues(values),
+      values: timelineValues,
       hasPlot: plotValues.length > 0,
       hasSequence: sequenceValueCount > 0,
+      axis: timelineValues.length ? {
+        id: "legacy-time",
+        key: "legacy:time",
+        kind: "time",
+        label: "Time",
+        unit: "",
+        values: timelineValues,
+        explicit: false,
+      } : null,
     };
   }
 
   function selectedTimelineDriverCell() {
     const cell = gridRuntimeQuery('.seurat-dropcell[data-timeline-driver="1"]');
+    return cell && isVisibleGridCell(cell) ? cell : null;
+  }
+
+  function activeTimelineCell() {
+    const cell = gridRuntimeQuery('.seurat-dropcell[data-cell-active="1"]');
     return cell && isVisibleGridCell(cell) ? cell : null;
   }
 
@@ -216,17 +268,25 @@
         values: timeline.values,
         hasPlot: timeline.hasPlot,
         index,
+        axis: timeline.axis,
+        isDefault: !!(timeline.axis && timeline.axis.isDefault),
       };
       if (
         !best
-        || candidate.values.length > best.values.length
+        || (candidate.isDefault && !best.isDefault)
         || (
-          candidate.values.length === best.values.length
+          candidate.isDefault === best.isDefault
+          && candidate.values.length > best.values.length
+        )
+        || (
+          candidate.isDefault === best.isDefault
+          && candidate.values.length === best.values.length
           && candidate.hasPlot
           && !best.hasPlot
         )
         || (
-          candidate.values.length === best.values.length
+          candidate.isDefault === best.isDefault
+          && candidate.values.length === best.values.length
           && candidate.hasPlot === best.hasPlot
           && candidate.index < best.index
         )
@@ -234,22 +294,47 @@
         best = candidate;
       }
     }
-    return best || { values: [] };
+    return best || { values: [], axis: null };
   }
 
-  function getPhysicalTimeline(sequences, plots) {
+  function getActiveSelectionAxis(sequences, plots) {
     sequences = sequences || getGridImageSequencesSafe();
     plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
-    if (sequences.length && !imageSequencesHavePhysicalTime(sequences)) return [];
+    const hasIndexOnlySequence = sequences.length
+      && !imageSequencesHavePhysicalTime(sequences);
 
     const selected = selectedTimelineDriverCell();
     if (selected) {
       const selectedTimeline = timelineForGridCell(selected);
-      if (selectedTimeline.values.length) return selectedTimeline.values;
+      if (selectedTimeline.values.length) {
+        if (selectedTimeline.axis && selectedTimeline.axis.explicit) {
+          return selectedTimeline.axis;
+        }
+        if (hasIndexOnlySequence) return null;
+        return selectedTimeline.axis;
+      }
+    }
+
+    const active = activeTimelineCell();
+    if (active) {
+      const activeTimeline = timelineForGridCell(active);
+      if (activeTimeline.values.length) {
+        if (activeTimeline.axis && activeTimeline.axis.explicit) {
+          return activeTimeline.axis;
+        }
+        if (hasIndexOnlySequence) return null;
+        return activeTimeline.axis;
+      }
     }
 
     const auto = autoTimelineDriver();
-    if (auto.values.length) return auto.values;
+    if (auto.values.length) {
+      if (auto.axis && auto.axis.explicit) return auto.axis;
+      if (hasIndexOnlySequence) return null;
+      return auto.axis;
+    }
+
+    if (hasIndexOnlySequence) return null;
 
     const values = [];
     for (const el of (sequences || [])) {
@@ -257,7 +342,50 @@
       values.push.apply(values, parseImageSequenceTimeValues(el));
     }
     values.push.apply(values, collectPlotTimeValues(plots));
-    return uniqueSortedTimelineValues(values);
+    const timelineValues = uniqueSortedTimelineValues(values);
+    return timelineValues.length ? {
+      id: "legacy-time",
+      key: "legacy:time",
+      kind: "time",
+      label: "Time",
+      unit: "",
+      values: timelineValues,
+      explicit: false,
+    } : null;
+  }
+
+  function getPhysicalTimeline(sequences, plots) {
+    const axis = getActiveSelectionAxis(sequences, plots);
+    return axis && Array.isArray(axis.values) ? axis.values : [];
+  }
+
+  function elementSelectionAxis(el) {
+    const cell = el && el.closest ? el.closest(".seurat-dropcell") : null;
+    return selectionAxisForGridCell(cell);
+  }
+
+  function elementMatchesActiveAxis(el, activeAxis) {
+    if (!activeAxis || !activeAxis.explicit) return true;
+    const axis = elementSelectionAxis(el);
+    return !!(axis && axis.key && axis.key === activeAxis.key);
+  }
+
+  function updateAxisCompatibility(activeAxis) {
+    for (const cell of Array.from(gridRuntimeQueryAll(".seurat-dropcell"))) {
+      const axis = selectionAxisForGridCell(cell);
+      const currentStatus = String(cell.getAttribute("data-axis-sync-status") || "");
+      if (!activeAxis || !activeAxis.explicit || !axis) {
+        if (currentStatus === "incompatible" || currentStatus === "synchronized") {
+          cell.setAttribute("data-axis-sync-status", "");
+        }
+        continue;
+      }
+      if (axis.key !== activeAxis.key) {
+        cell.setAttribute("data-axis-sync-status", "incompatible");
+      } else if (["", "incompatible", "synchronized"].includes(currentStatus)) {
+        cell.setAttribute("data-axis-sync-status", "synchronized");
+      }
+    }
   }
 
   function timelineIndexAtOrBefore(rawTime, timeline) {
@@ -373,7 +501,9 @@
 
   function setImageSequenceFrame(rawOrdinal, sequences) {
     const ordinal = clampImageSequenceFrame(rawOrdinal, sequences);
+    const activeAxis = getActiveSelectionAxis(sequences, getGridPlots());
     for (const el of (sequences || [])) {
+      if (!elementMatchesActiveAxis(el, activeAxis)) continue;
       const sources = parseImageSequenceSources(el);
       if (!sources.length) continue;
       const idx = Math.max(0, Math.min(ordinal, sources.length - 1));
@@ -387,7 +517,9 @@
 
   function setImageSequencesForTime(rawTime, sequences) {
     const t = Number(rawTime);
+    const activeAxis = getActiveSelectionAxis(sequences, getGridPlots());
     for (const el of (sequences || [])) {
+      if (!elementMatchesActiveAxis(el, activeAxis)) continue;
       const sources = parseImageSequenceSources(el);
       if (!sources.length) continue;
       const idx = imageSequenceFrameForTime(el, t);
@@ -462,14 +594,32 @@
       ? getMediaTimelineBounds(videos, plots)
       : { start: 0, end: 0, usesVideos: !!(videos && videos.length) };
     const label = gridRuntimeElementById("seurat-vcr-time-value");
-    const seconds = Number(rawSeconds);
+    const activeAxis = getActiveSelectionAxis(sequences, plots);
+    const axisKey = String(activeAxis && activeAxis.key || "");
+    const axisChanged = !!axisKey && axisKey !== gridVcrState.axisKey;
+    const initialAxisIndex = activeAxis && Array.isArray(activeAxis.values)
+      ? Math.max(0, Math.min(Math.round(Number(activeAxis.index) || 0), activeAxis.values.length - 1))
+      : 0;
+    if (axisChanged) {
+      gridVcrState.timelinePosition = initialAxisIndex;
+      gridVcrState.lastNotifiedAxisIndex = initialAxisIndex;
+    }
+    const seconds = axisChanged && activeAxis && activeAxis.values.length
+      ? Number(activeAxis.values[initialAxisIndex])
+      : Number(rawSeconds);
     const safeSeconds = (typeof clampTimeForMedia === "function")
       ? clampTimeForMedia(seconds, videos, plots)
       : (Number.isFinite(seconds) && seconds >= 0 ? seconds : 0);
     const fps = inferFpsForVideos(videos);
     const timeline = getPhysicalTimeline(sequences, plots);
+    gridVcrState.axisKey = axisKey;
+    updateAxisCompatibility(activeAxis);
     if (label) {
-      if (timeline.length) {
+      if (activeAxis && activeAxis.explicit && timeline.length) {
+        label.textContent = String(activeAxis.label || "Axis") + " = "
+          + formatTimelineValue(safeSeconds)
+          + (activeAxis.unit ? " " + activeAxis.unit : "");
+      } else if (timeline.length) {
         label.textContent = "Time = " + formatTimelineValue(safeSeconds);
       } else if (sequences.length) {
         const ordinal = clampImageSequenceFrame(safeSeconds, sequences);
@@ -489,6 +639,15 @@
     }
     gridVcrState.syncTime = safeSeconds;
     if (!slider) return;
+
+    if (activeAxis && activeAxis.explicit) {
+      const axisLabel = String(activeAxis.label || "Axis");
+      slider.setAttribute("aria-label", axisLabel);
+      slider.setAttribute("title", axisLabel + " selection");
+    } else {
+      slider.setAttribute("aria-label", timeline.length ? "Time" : "Timestep");
+      slider.setAttribute("title", timeline.length ? "Time selection" : "Timestep (frame index)");
+    }
 
     if (timeline.length) {
       const maxFrames = Math.max(0, timeline.length - 1);
@@ -544,7 +703,26 @@
     timelinePosition: 0,
     syncTimer: null,
     lastTickMs: 0,
+    axisKey: "",
+    lastNotifiedAxisIndex: -1,
   };
+  let notifyingAxisSelection = false;
+
+  function notifyAxisSelectionChanged() {
+    const axis = getActiveSelectionAxis(
+      getGridImageSequencesSafe(),
+      typeof getGridPlots === "function" ? getGridPlots() : []
+    );
+    if (!axis || !axis.explicit) return;
+    const slider = gridRuntimeElementById("seurat-vcr-step-slider");
+    const index = Math.round(Number(slider && slider.value) || 0);
+    if (index === gridVcrState.lastNotifiedAxisIndex) return;
+    gridVcrState.lastNotifiedAxisIndex = index;
+    if (!slider) return;
+    notifyingAxisSelection = true;
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    notifyingAxisSelection = false;
+  }
 
   function updateGridVcrToggleButton() {
     const button = gridRuntimeQuery('[data-vcr-action="toggle"]');
@@ -629,6 +807,7 @@
     const plots = plot.getPlots();
     if (!plots.length) return;
     const sequences = getGridImageSequencesSafe();
+    const activeAxis = getActiveSelectionAxis(sequences, plots);
     const bounds = getMediaTimelineBounds(videos || [], plots);
     const t = clampTimeForMedia(rawTime, videos || [], plots);
     const cursorValue = sequences.length && !getPhysicalTimeline(sequences, plots).length
@@ -642,7 +821,11 @@
     const progress = bounds.usesVideos
       ? ((t - bounds.start) / denom)
       : null;
-    plot.updateCursors(cursorValue, progress);
+    plot.updateCursors(
+      cursorValue,
+      progress,
+      activeAxis && activeAxis.explicit ? activeAxis.key : ""
+    );
   }
 
 
@@ -819,8 +1002,8 @@
         setImageSequencesForTime(nextTime, sequences);
         gridVcrState.timelinePosition = nextPosition;
         gridVcrState.syncTime = nextTime;
-        gridVcrState.syncTime = nextTime;
         updateVcrTimeLabelFromSeconds(nextTime, videos, plots);
+        notifyAxisSelectionChanged();
         if (nextPosition >= Math.max(0, timeline.length - 1)) {
           setGridVcrPlaying(false);
           stopSyncTimer();
@@ -860,6 +1043,37 @@
         return;
       }
 
+      const activeAxis = getActiveSelectionAxis([], plots);
+      const timeline = getPhysicalTimeline([], plots);
+      if (activeAxis && activeAxis.explicit && timeline.length) {
+        const now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+        const last = Number(gridVcrState.lastTickMs);
+        const dt = Number.isFinite(last) && last > 0 ? Math.max(0, (now - last) / 1000.0) : 0.16;
+        gridVcrState.lastTickMs = now;
+        let position = Number(gridVcrState.timelinePosition);
+        if (!Number.isFinite(position)) {
+          position = timelineIndexNearest(gridVcrState.syncTime, timeline);
+        }
+        const nextPosition = Math.min(
+          Math.max(0, timeline.length - 1),
+          position + dt * inferFpsForImageSequences([])
+        );
+        const nextIndex = Math.max(
+          0,
+          Math.min(Math.floor(nextPosition + 1e-9), timeline.length - 1)
+        );
+        const nextValue = timeline[nextIndex];
+        gridVcrState.timelinePosition = nextPosition;
+        gridVcrState.syncTime = nextValue;
+        updateVcrTimeLabelFromSeconds(nextValue, [], plots);
+        notifyAxisSelectionChanged();
+        if (nextPosition >= Math.max(0, timeline.length - 1)) {
+          setGridVcrPlaying(false);
+          stopSyncTimer();
+        }
+        return;
+      }
+
       const now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
       const last = Number(gridVcrState.lastTickMs);
       const dt = Number.isFinite(last) && last > 0 ? Math.max(0, (now - last) / 1000.0) : 0.16;
@@ -869,6 +1083,7 @@
       const next = clampTimeForMedia(gridVcrState.syncTime + dt * rate, [], plots);
       gridVcrState.syncTime = next;
       updateVcrTimeLabelFromSeconds(next, [], plots);
+      notifyAxisSelectionChanged();
       if (next >= (bounds.end - 1e-9)) {
         setGridVcrPlaying(false);
         stopSyncTimer();
@@ -1353,6 +1568,8 @@
   function onGridRuntimeSlider(e) {
     const target = e && e.target;
     if (target && target.id === "seurat-vcr-step-slider") {
+      if (notifyingAxisSelection) return;
+      gridVcrState.lastNotifiedAxisIndex = Math.round(Number(target.value) || 0);
       runGridVcrAction("slider");
     }
   }
@@ -1363,6 +1580,7 @@
     if (!button || !runtimeRoot || !runtimeRoot.contains(button)) return;
     e.preventDefault();
     runGridVcrAction(button.getAttribute("data-vcr-action") || "");
+    notifyAxisSelectionChanged();
   }
 
   function onGridVideoLoadedMetadata(e) {
@@ -1453,7 +1671,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-timeline-driver"],
+      attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-plot-axis-key", "data-selection-axis", "data-cell-active", "data-timeline-driver"],
     });
     scheduleGridMediaSyncToCurrentVcrTime();
   }

@@ -120,6 +120,26 @@
   user-select: none;
 }
 .seurat-dropcell { transition: background 0.15s, outline-color 0.15s; }
+.seurat-dropcell[data-axis-sync-status="incompatible"]::after,
+.seurat-dropcell[data-axis-sync-status="unavailable"]::after,
+.seurat-dropcell[data-axis-sync-status="unsupported"]::after,
+.seurat-dropcell[data-axis-sync-status="error"]::after {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 8;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(123, 45, 18, 0.9);
+  color: #fff;
+  content: "Unsynchronized";
+  font-size: 10px;
+  line-height: 14px;
+  pointer-events: none;
+}
+.seurat-dropcell[data-axis-sync-status="error"]::after {
+  content: "Axis error";
+}
 .seurat-provenance-strip {
   display: flex;
   align-items: center;

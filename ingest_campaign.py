@@ -308,23 +308,60 @@ def _schema_file_group_reference(
 def _interpret_schema_axes(
     raw_axes: Any,
     file_groups: Dict[str, Dict[str, Any]],
-) -> Dict[str, Dict[str, str]]:
-    axes: Dict[str, Dict[str, str]] = {}
+) -> Dict[str, Dict[str, Any]]:
+    axes: Dict[str, Dict[str, Any]] = {}
     for raw_name, raw_axis in _schema_optional_mapping(raw_axes, "axes").items():
         name = _schema_nonempty_string(raw_name, "axes name")
         axis = _schema_mapping(raw_axis, f"axes.{name}")
-        axes[name] = {
+        has_variable = "variable" in axis
+        has_template = "variable_template" in axis
+        if has_variable == has_template:
+            raise ValueError(
+                f"axes.{name} requires exactly one of variable or variable_template"
+            )
+
+        normalized: Dict[str, Any] = {
             "file": _schema_file_group_reference(
                 axis.get("file"),
                 f"axes.{name}.file",
                 file_groups,
             ),
-            "variable": _schema_nonempty_string(
-                axis.get("variable"),
-                f"axes.{name}.variable",
-            ),
             "kind": _schema_nonempty_string(axis.get("kind"), f"axes.{name}.kind"),
         }
+        variable_key = "variable" if has_variable else "variable_template"
+        normalized[variable_key] = _schema_nonempty_string(
+            axis.get(variable_key),
+            f"axes.{name}.{variable_key}",
+        )
+
+        for key in ("label", "unit"):
+            if key in axis:
+                normalized[key] = _schema_nonempty_string(
+                    axis.get(key),
+                    f"axes.{name}.{key}",
+                )
+
+        if "dimension" in axis:
+            dimension = axis.get("dimension")
+            if isinstance(dimension, bool):
+                raise ValueError(f"axes.{name}.dimension must be a non-negative integer")
+            try:
+                dimension = int(dimension)
+            except Exception as e:
+                raise ValueError(
+                    f"axes.{name}.dimension must be a non-negative integer"
+                ) from e
+            if dimension < 0:
+                raise ValueError(f"axes.{name}.dimension must be a non-negative integer")
+            normalized["dimension"] = dimension
+
+        layout = str(axis.get("layout", "shared") or "shared").strip().lower()
+        if layout not in {"shared", "per_selection"}:
+            raise ValueError(
+                f"axes.{name}.layout must be 'shared' or 'per_selection'"
+            )
+        normalized["layout"] = layout
+        axes[name] = normalized
     return axes
 
 
@@ -439,7 +476,7 @@ def _schema_axis_reference(
     value: Any,
     field_name: str,
     group_file: str,
-    axes: Dict[str, Dict[str, str]],
+    axes: Dict[str, Dict[str, Any]],
 ) -> str:
     name = _schema_named_reference(value, field_name, axes)
     if axes[name]["file"] != group_file:
@@ -452,7 +489,7 @@ def _schema_axis_reference(
 def _interpret_schema_variable_groups(
     raw_groups: Any,
     file_groups: Dict[str, Dict[str, Any]],
-    axes: Dict[str, Dict[str, str]],
+    axes: Dict[str, Dict[str, Any]],
     meshes: Dict[str, Dict[str, Any]],
     basis: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
@@ -515,12 +552,57 @@ def _interpret_schema_variable_groups(
                     axes,
                 )
 
+        if "dimension_axes" in group:
+            dimension_axes = _schema_string_list(
+                group.get("dimension_axes"),
+                f"variable_groups.{name}.dimension_axes",
+            )
+            if len(set(dimension_axes)) != len(dimension_axes):
+                raise ValueError(
+                    f"variable_groups.{name}.dimension_axes must not contain duplicates"
+                )
+            normalized["dimension_axes"] = [
+                _schema_axis_reference(
+                    axis_name,
+                    f"variable_groups.{name}.dimension_axes",
+                    file_group,
+                    axes,
+                )
+                for axis_name in dimension_axes
+            ]
+
+        for key in ("plot_x_axis", "selection_axis"):
+            if key in group:
+                normalized[key] = _schema_axis_reference(
+                    group.get(key),
+                    f"variable_groups.{name}.{key}",
+                    file_group,
+                    axes,
+                )
+
+        declared_dimensions = set(normalized.get("dimension_axes", []))
+        if declared_dimensions:
+            for key in ("plot_x_axis", "selection_axis"):
+                axis_name = normalized.get(key)
+                if axis_name and axis_name not in declared_dimensions:
+                    raise ValueError(
+                        f"variable_groups.{name}.{key} must appear in dimension_axes"
+                    )
+
         if "static" in group:
             if not isinstance(group.get("static"), bool):
                 raise ValueError(f"variable_groups.{name}.static must be a boolean")
             normalized["static"] = bool(group.get("static"))
         if normalized.get("static") and any(
-            key in normalized for key in ("time_axis", "x_axis", "timestep_axis")
+            key in normalized
+            for key in (
+                "time_axis",
+                "x_axis",
+                "timestep_axis",
+                "plot_x_axis",
+                "selection_axis",
+                "dimension_axes",
+            )
         ):
             raise ValueError(
                 f"variable_groups.{name} is static and cannot reference an axis"
@@ -531,11 +613,15 @@ def _interpret_schema_variable_groups(
 
 
 def _schema_declared_exact_variables(
-    axes: Dict[str, Dict[str, str]],
+    axes: Dict[str, Dict[str, Any]],
     meshes: Dict[str, Dict[str, Any]],
     basis: Dict[str, Dict[str, Any]],
 ) -> set[str]:
-    variables = {axis["variable"] for axis in axes.values()}
+    variables = {
+        str(axis["variable"])
+        for axis in axes.values()
+        if "variable" in axis
+    }
     variables.update(mesh["variable"] for mesh in meshes.values())
     for spec in basis.values():
         variables.update(str(variable) for variable in spec["variables"].values())
@@ -635,6 +721,17 @@ def _interpret_schema_optional_metadata(
     axes = _interpret_schema_axes(schema.get("axes"), file_groups)
     if "axes" in schema:
         result["axes"] = axes
+
+    if "timeline" in schema:
+        timeline = _schema_mapping(schema.get("timeline"), "timeline")
+        normalized_timeline: Dict[str, Any] = {}
+        if "default_axis" in timeline:
+            normalized_timeline["default_axis"] = _schema_named_reference(
+                timeline.get("default_axis"),
+                "timeline.default_axis",
+                axes,
+            )
+        result["timeline"] = normalized_timeline
 
     meshes = _interpret_schema_meshes(schema.get("meshes"), file_groups)
     if "meshes" in schema:
@@ -977,6 +1074,117 @@ def _read_numeric_array(fr: FileReader, varpath: str, varinfo: Optional[Dict[str
     return values
 
 
+def _schema_variable_shape(varinfo: Any) -> List[int]:
+    if not isinstance(varinfo, dict):
+        return []
+    raw_shape = varinfo.get("Shape", varinfo.get("shape", ""))
+    if isinstance(raw_shape, (list, tuple)):
+        parts = list(raw_shape)
+    else:
+        text = str(raw_shape or "").strip().strip("[](){}")
+        parts = [part.strip() for part in text.replace("x", ",").split(",")]
+    shape: List[int] = []
+    for part in parts:
+        if part in (None, ""):
+            continue
+        try:
+            value = int(part)
+        except Exception:
+            return []
+        if value < 0:
+            return []
+        shape.append(value)
+    return shape
+
+
+def _schema_axis_variable_for_data(axis: Dict[str, Any], data_variable: str) -> str:
+    if "variable" in axis:
+        return str(axis.get("variable", "") or "").strip("/")
+
+    variable = str(data_variable or "").strip("/")
+    parent, _, name = variable.rpartition("/")
+    template = str(axis.get("variable_template", "") or "")
+    try:
+        resolved = template.format(
+            variable=variable,
+            variable_parent=parent,
+            variable_name=name,
+        )
+    except (KeyError, ValueError) as e:
+        raise ValueError(
+            f"Invalid axis variable_template {template!r}: {e}"
+        ) from e
+    return _schema_nonempty_string(resolved, "axis variable_template result").strip("/")
+
+
+def _schema_axis_label(axis_name: str, axis: Dict[str, Any]) -> str:
+    label = str(axis.get("label", "") or "").strip()
+    if label:
+        return label
+    kind = str(axis.get("kind", "") or "").strip().lower()
+    if kind == "time":
+        return "Time"
+    if kind == "timestep_index":
+        return "Timestep"
+    return str(axis_name or "axis").replace("_", " ").strip().title()
+
+
+def _schema_axis_descriptor(
+    context: Dict[str, Any],
+    fr: FileReader,
+    vars_dict: Dict[str, Any],
+    dataset: str,
+    data_variable: str,
+    axis_name: str,
+    include_values: bool = False,
+) -> Dict[str, Any]:
+    axis = dict(context["axes"][axis_name])
+    coordinate_variable = _schema_axis_variable_for_data(axis, data_variable)
+    path = _schema_required_variable_path(
+        vars_dict,
+        dataset,
+        coordinate_variable,
+        f"axes.{axis_name}",
+    )
+    shape = _schema_variable_shape(vars_dict.get(path))
+    descriptor: Dict[str, Any] = {
+        "id": str(axis_name),
+        "key": ":".join(
+            part
+            for part in (
+                str(context.get("schema_name", "") or ""),
+                str(axis.get("file", "") or ""),
+                str(axis_name),
+            )
+            if part
+        ),
+        "kind": str(axis.get("kind", "") or ""),
+        "label": _schema_axis_label(axis_name, axis),
+        "unit": str(axis.get("unit", "") or ""),
+        "layout": str(axis.get("layout", "shared") or "shared"),
+        "variable": coordinate_variable,
+        "variable_path": path,
+        "shape": shape,
+    }
+    if "dimension" in axis:
+        descriptor["dimension"] = int(axis["dimension"])
+    if include_values:
+        if len(shape) > 1:
+            raise ValueError(
+                f"Selection axis {axis_name!r} must be one-dimensional; "
+                f"coordinate {path!r} has shape {shape}"
+            )
+        descriptor["values"] = _schema_axis_values(
+            context,
+            fr,
+            vars_dict,
+            dataset,
+            axis_name,
+            data_variable=data_variable,
+        )
+    return descriptor
+
+
 def _schema_dataset_variables(
     vars_dict: Dict[str, Any],
     dataset: str,
@@ -1012,14 +1220,15 @@ def _schema_axis_values(
     vars_dict: Dict[str, Any],
     dataset: str,
     axis_name: str,
+    data_variable: str = "",
 ) -> List[float]:
-    cache_key = f"{dataset}\0{axis_name}"
+    axis = context["axes"][axis_name]
+    variable = _schema_axis_variable_for_data(axis, data_variable)
+    cache_key = f"{dataset}\0{axis_name}\0{variable}"
     cached = context["axis_values"].get(cache_key)
     if isinstance(cached, list):
         return list(cached)
 
-    axis = context["axes"][axis_name]
-    variable = str(axis.get("variable", "") or "")
     path = _schema_required_variable_path(
         vars_dict,
         dataset,
@@ -1043,6 +1252,8 @@ def _validate_schema_resource_variables(
 ) -> None:
     resources: List[tuple[str, str, List[str]]] = []
     for name, axis in context["axes"].items():
+        if "variable" not in axis:
+            continue
         resources.append(
             (
                 f"axes.{name}",
@@ -1139,9 +1350,81 @@ def _build_schema_variable_context(
                     "time_axis",
                     "x_axis",
                     "timestep_axis",
+                    "dimension_axes",
+                    "plot_x_axis",
+                    "selection_axis",
                 ):
                     if key in group:
                         metadata[key] = group[key]
+
+                variable_path = f"{dataset}/{variable}"
+                variable_shape = _schema_variable_shape(vars_dict.get(variable_path))
+                dimension_axes = list(group.get("dimension_axes", []) or [])
+                if variable_shape and dimension_axes and len(variable_shape) != len(
+                    dimension_axes
+                ):
+                    raise ValueError(
+                        f"variable_groups.{group_name}.dimension_axes has "
+                        f"{len(dimension_axes)} entries but {variable_path!r} has "
+                        f"shape {variable_shape}"
+                    )
+                for dimension, axis_name in enumerate(dimension_axes):
+                    axis_dimension = context["axes"][axis_name].get("dimension")
+                    if axis_dimension is not None and int(axis_dimension) != dimension:
+                        raise ValueError(
+                            f"axes.{axis_name}.dimension={axis_dimension} does not "
+                            f"match its position {dimension} in "
+                            f"variable_groups.{group_name}.dimension_axes"
+                        )
+
+                plot_axis_name = str(
+                    group.get("plot_x_axis", group.get("x_axis", "")) or ""
+                )
+                selection_axis_name = str(
+                    group.get(
+                        "selection_axis",
+                        group.get("time_axis", plot_axis_name),
+                    )
+                    or ""
+                )
+                referenced_axes: List[str] = []
+                for axis_name in (
+                    *dimension_axes,
+                    plot_axis_name,
+                    selection_axis_name,
+                ):
+                    if axis_name and axis_name not in referenced_axes:
+                        referenced_axes.append(axis_name)
+
+                axis_descriptors: Dict[str, Dict[str, Any]] = {}
+                for axis_name in referenced_axes:
+                    axis = context["axes"][axis_name]
+                    include_axis_values = axis_name == selection_axis_name or (
+                        axis_name == plot_axis_name
+                        and str(axis.get("layout", "shared") or "shared") == "shared"
+                    )
+                    axis_descriptors[axis_name] = _schema_axis_descriptor(
+                        context,
+                        fr,
+                        vars_dict,
+                        dataset,
+                        variable,
+                        axis_name,
+                        include_values=include_axis_values,
+                    )
+                if axis_descriptors:
+                    metadata["axes"] = axis_descriptors
+                if dimension_axes:
+                    metadata["dimension_axes"] = dimension_axes
+                if plot_axis_name:
+                    metadata["plot_x_axis"] = plot_axis_name
+                if selection_axis_name:
+                    metadata["selection_axis"] = selection_axis_name
+                default_axis = str(
+                    context.get("timeline", {}).get("default_axis", "") or ""
+                )
+                if default_axis:
+                    metadata["schema_default_axis"] = default_axis
 
                 time_axis_name = str(
                     group.get("time_axis", group.get("x_axis", "")) or ""
@@ -1238,6 +1521,7 @@ def _build_schema_time_context(
         "group_frame_metadata": {},
         "file_groups": schema_layout.get("file_groups", {}) or {},
         "axes": schema_layout.get("axes", {}) or {},
+        "timeline": schema_layout.get("timeline", {}) or {},
         "meshes": schema_layout.get("meshes", {}) or {},
         "basis": schema_layout.get("basis", {}) or {},
         "variable_groups": schema_layout.get("variable_groups", {}) or {},

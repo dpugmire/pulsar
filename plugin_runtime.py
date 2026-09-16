@@ -403,6 +403,13 @@ def build_plugin_meta(candidate: Dict[str, Any]) -> Dict[str, Any]:
         "ndims": metadata_ndims(metadata),
         "steps_count": metadata_steps_count(metadata),
         "shape": metadata_shape(metadata),
+        "axes": dict(candidate.get("axes", {}) or {}),
+        "dimension_axes": list(candidate.get("dimension_axes", []) or []),
+        "plot_x_axis": str(candidate.get("plot_x_axis", "") or ""),
+        "selection_axis": str(candidate.get("selection_axis", "") or ""),
+        "schema_default_axis": str(
+            candidate.get("schema_default_axis", "") or ""
+        ),
         "min": candidate.get("min", None),
         "max": candidate.get("max", None),
     }
@@ -455,15 +462,63 @@ class PluginHelpers:
         self.campaign_path = str(campaign_path or "")
         self.source_dataset = str(source_dataset or "").strip("/")
 
-    def read_variable(self, variable_path: str, step_selection: Optional[Tuple[int, int]] = None):
+    def read_variable(
+        self,
+        variable_path: str,
+        step_selection: Optional[Tuple[int, int]] = None,
+        start: Optional[Sequence[int]] = None,
+        count: Optional[Sequence[int]] = None,
+    ):
         kwargs = {"step_selection": list(step_selection)} if step_selection else {}
+        if start is not None:
+            kwargs["start"] = list(start)
+        if count is not None:
+            kwargs["count"] = list(count)
         with FileReader(self.campaign_path) as fr:
             return fr.read(str(variable_path or "").strip("/"), **kwargs)
 
-    def read_source_variable(self, name: str, step_selection: Optional[Tuple[int, int]] = None):
+    def read_source_variable(
+        self,
+        name: str,
+        step_selection: Optional[Tuple[int, int]] = None,
+        start: Optional[Sequence[int]] = None,
+        count: Optional[Sequence[int]] = None,
+    ):
         key = str(name or "").strip("/")
         variable_path = f"{self.source_dataset}/{key}" if self.source_dataset and not key.startswith(self.source_dataset + "/") else key
-        return self.read_variable(variable_path, step_selection=step_selection)
+        return self.read_variable(
+            variable_path,
+            step_selection=step_selection,
+            start=start,
+            count=count,
+        )
+
+    def read_axis_values(
+        self,
+        axis: Dict[str, Any],
+        selection_index: Optional[int] = None,
+    ):
+        descriptor = dict(axis or {})
+        values = descriptor.get("values", None)
+        if values is not None and selection_index is None:
+            return np.asarray(values, dtype=float)
+        variable_path = str(descriptor.get("variable_path", "") or "")
+        if not variable_path:
+            raise ValueError("Axis descriptor has no variable_path")
+        shape = [int(value) for value in descriptor.get("shape", []) or []]
+        if selection_index is None or len(shape) <= 1:
+            return np.asarray(self.read_variable(variable_path), dtype=float).reshape(-1)
+        if len(shape) != 2:
+            raise ValueError(
+                f"Selected axis reads require rank 2 coordinates, got {shape}"
+            )
+        index = max(0, min(int(selection_index), shape[0] - 1))
+        values = self.read_variable(
+            variable_path,
+            start=[index, 0],
+            count=[1, shape[1]],
+        )
+        return np.asarray(values, dtype=float).reshape(-1)
 
     def plot1d_payload(self, series_values: List[Dict[str, Any]], x_label: str, y_label: str) -> Dict[str, Any]:
         return plot1d_payload(series_values, x_label, y_label)
@@ -507,6 +562,32 @@ def render_plugin_tile(
     tile["visualization_name"] = plugin_visualization_name(plugin_id)
     tile["selected_visualization"] = plugin_visualization_name(plugin_id)
     tile["visualization_options"] = [plugin_visualization_name(plugin_id)]
+    axes = dict(meta.get("axes", {}) or {})
+    if axes:
+        plot_axis_name = str(meta.get("plot_x_axis", "") or "")
+        selection_axis_name = str(meta.get("selection_axis", "") or "")
+        tile.setdefault("axes", axes)
+        tile.setdefault("dimension_axes", list(meta.get("dimension_axes", []) or []))
+        tile.setdefault("plot_x_axis", plot_axis_name)
+        tile.setdefault(
+            "plot_axis_key",
+            str((axes.get(plot_axis_name, {}) or {}).get("key", "") or ""),
+        )
+        selection_axis = dict(axes.get(selection_axis_name, {}) or {})
+        if selection_axis:
+            selection_axis["default"] = bool(
+                selection_axis_name
+                and selection_axis_name
+                == str(meta.get("schema_default_axis", "") or "")
+            )
+            values = selection_axis.get("values", [])
+            if isinstance(values, list) and values:
+                selection_axis.setdefault("index", 0)
+                selection_axis.setdefault("value", values[0])
+            tile.setdefault("selection_axis", selection_axis)
+        tile.setdefault(
+            "schema_default_axis", str(meta.get("schema_default_axis", "") or "")
+        )
     return tile
 
 

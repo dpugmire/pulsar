@@ -354,6 +354,78 @@ This permits one M3D-C1 BP dataset, for example, to use
 `pellet/*`, and no timeline for static `equilibrium/fields/*`. The canonical
 M3D-C1 example is `data/schema_examples/code_m3dc1.yaml` in hpc-campaign.
 
+### Multiple coordinate axes
+
+An axis-aware variable group may declare the coordinate associated with each
+array dimension separately from the coordinate shown on a plot and the
+coordinate controlled by the workspace slider. This is useful for acquisition
+data in which an ADIOS dataset contains one step but its arrays contain many
+shots:
+
+```yaml
+schema_version: 1
+name: lasernet
+
+files:
+  laser_runs:
+    role: static
+    pattern: "data/*.bp5"
+
+axes:
+  shot:
+    file: laser_runs
+    variable: data/meshes/shots/shot_number/value
+    kind: shot
+    label: Shot number
+    dimension: 0
+
+  trace_time:
+    file: laser_runs
+    variable_template: "{variable_parent}/time"
+    kind: within_shot_time
+    label: Time within shot
+    unit: s
+    dimension: 1
+    layout: per_selection
+
+timeline:
+  default_axis: shot
+
+variable_groups:
+  shot_scalars:
+    file: laser_runs
+    pattern: data/meshes/scalars/*/value
+    role: scalar_trace
+    dimension_axes: [shot]
+    plot_x_axis: shot
+    selection_axis: shot
+
+  waveforms:
+    file: laser_runs
+    pattern: data/meshes/traces/*_Trace/signal
+    role: waveform
+    dimension_axes: [shot, trace_time]
+    plot_x_axis: trace_time
+    selection_axis: shot
+```
+
+`dimension_axes` must have one entry per data-array dimension. An axis-level
+`dimension`, when present, must agree with that position. `plot_x_axis` controls
+the plot coordinates; `selection_axis` controls the slider. Selection-axis
+coordinates must be one-dimensional numeric values. Plot coordinates may be a
+shared one-dimensional vector or, with `layout: per_selection`, a rank-two
+array whose matching row is loaded with the selected data row.
+
+`variable_template` supports `{variable}`, `{variable_parent}`, and
+`{variable_name}` placeholders. It allows each matched waveform to resolve a
+sibling coordinate such as `time` without listing every trace explicitly.
+
+Axis identity is based on the schema name, file group, and axis name. Tiles
+with the same selection-axis identity synchronize by coordinate value. Tiles
+with a different axis, or without the selected coordinate value, remain static
+and are marked as incompatible or unavailable. Schemas using the existing
+`x_axis`, `time_axis`, and `time_values` fields retain their previous behavior.
+
 Visualization association notes:
 
 - Unified hpc-campaign image and scalar-field representations are associated
