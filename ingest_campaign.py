@@ -48,6 +48,7 @@ def _load_image_association_schema_text(schema_path: Optional[str]) -> tuple[Opt
 _IMAGE_ASSOC_MODES = {"first_match_wins", "all_matches"}
 _IMAGE_ASSOC_UNMATCHED = {"warn", "error", "ignore"}
 _IMAGE_SIZE_SEGMENT_RE = re.compile(r"^\d+x\d+$")
+_ADIOS_DATASET_SEGMENT_RE = re.compile(r"\.bp\d*$", re.IGNORECASE)
 # hpc-campaign writes the visualization API into the ACA SQLite database.
 # All four tables are needed to map an image item back to its source variables.
 _VISUALIZATION_API_TABLES = {
@@ -2983,7 +2984,10 @@ def extract_file_var(input: str) -> tuple[str, str, str, str, str]:
     filename = parts[-2]
     varpath = "/".join(parts[0:-1])
 
-    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    bp_idx = next(
+        (i for i, part in enumerate(parts) if _ADIOS_DATASET_SEGMENT_RE.search(part)),
+        -1,
+    )
     if bp_idx >= 0:
         filename = parts[bp_idx]
         if bp_idx - 1 >= 0:
@@ -3013,10 +3017,10 @@ def get_visualization_name(input: str) -> str:
 
 def _parse_image_path_components(parts: list[str]) -> tuple[str, str, str, str, str]:
     """
-    Parse campaign image logical paths by anchoring on the .bp segment.
+    Parse campaign image logical paths by anchoring on the .bp/.bpN segment.
 
     Expected robust layout:
-      <producer>/<optional-casename>/.../<file.bp>/<var>/images/<vis>/<image>.png[/<size>]
+      <producer>/<optional-casename>/.../<file.bpN>/<var>/images/<vis>/<image>.png[/<size>]
     """
     producer = parts[0] if parts else ""
     casename = parts[1] if len(parts) > 1 else ""
@@ -3024,7 +3028,10 @@ def _parse_image_path_components(parts: list[str]) -> tuple[str, str, str, str, 
     varname = parts[3] if len(parts) > 3 else ""
     visualization_name = ""
 
-    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    bp_idx = next(
+        (i for i, part in enumerate(parts) if _ADIOS_DATASET_SEGMENT_RE.search(part)),
+        -1,
+    )
     if bp_idx >= 0:
         filename = parts[bp_idx]
         if bp_idx - 1 >= 0:
@@ -3056,7 +3063,10 @@ def _source_dataset_from_path(varpath: str) -> str:
     if not parts or parts == [""]:
         return ""
 
-    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    bp_idx = next(
+        (i for i, part in enumerate(parts) if _ADIOS_DATASET_SEGMENT_RE.search(part)),
+        -1,
+    )
     if bp_idx >= 0:
         return "/".join(parts[: bp_idx + 1])
 

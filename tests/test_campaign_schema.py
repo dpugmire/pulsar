@@ -23,6 +23,9 @@ from ingest_campaign import (
     _read_campaign_schema_text,
     _schema_metadata_for_file,
     _schema_metadata_for_variable,
+    _source_dataset_from_path,
+    extract_file_var,
+    extract_file_var_img,
 )
 
 
@@ -50,6 +53,46 @@ class CampaignSchemaTests(unittest.TestCase):
             self.analysis_b,
             "schema.yaml",
         ]
+
+    def test_bp5_paths_preserve_dataset_and_full_variable_identity(self):
+        variable_path = (
+            "data/png-14387-2026-06-07.bp5/"
+            "data/meshes/scalars/PNG_digitizer_Ch2_Energy/value"
+        )
+
+        variable, file_name, source_dataset, producer, casename = (
+            extract_file_var(variable_path)
+        )
+
+        self.assertEqual(
+            variable,
+            "data/meshes/scalars/PNG_digitizer_Ch2_Energy/value",
+        )
+        self.assertEqual(file_name, "png-14387-2026-06-07.bp5")
+        self.assertEqual(source_dataset, "data/png-14387-2026-06-07.bp5")
+        self.assertEqual(producer, "data")
+        self.assertEqual(casename, "data")
+        self.assertEqual(
+            _source_dataset_from_path(variable_path),
+            "data/png-14387-2026-06-07.bp5",
+        )
+
+    def test_bp5_image_paths_use_the_dataset_segment(self):
+        image_path = (
+            "run/case/output.bp5/density/images/pseudocolor/"
+            "image.000001.png/640x480"
+        )
+
+        variable, file_name, varpath, producer, casename = (
+            extract_file_var_img(image_path)
+        )
+
+        self.assertEqual(variable, "density")
+        self.assertEqual(file_name, "output.bp5")
+        self.assertEqual(varpath, image_path)
+        self.assertEqual(producer, "run")
+        self.assertEqual(casename, "case")
+        self.assertEqual(_source_dataset_from_path(varpath), "run/case/output.bp5")
 
     def test_append_patterns_match_multiple_datasets(self):
         schema = {
