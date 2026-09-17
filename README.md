@@ -418,9 +418,38 @@ coordinates must be one-dimensional numeric values. Plot coordinates may be a
 shared one-dimensional vector or, with `layout: per_selection`, a rank-two
 array whose matching row is loaded with the selected data row.
 
-Seurat keeps the campaign reader open while serving axis-selected plots. Range
-slider drags update their label locally and load the selected row when the drag
-is committed; step buttons and keyboard changes remain immediate.
+#### Axis-selected waveform performance
+
+An axis-selected waveform reads one signal row and, for a per-selection plot
+axis, one coordinate row for the selected shot. Seurat reuses one synchronized
+ACA reader instead of reopening the archive for every selection. The reader is
+closed before campaign re-ingestion and when the application exits.
+
+Range-slider `input` events update the displayed shot value locally while the
+user drags. The server reads and renders the selected waveform on the committed
+`change` event when the drag ends. Step buttons, keyboard changes, and playback
+remain immediate. The first waveform access still pays the archive-open cost;
+in a local Lasernet measurement, subsequent warm row updates improved from
+about 459 ms to about 0.38 ms. These values are illustrative and depend on the
+archive and storage system.
+
+Possible future improvements, if live drag previews or larger traces require
+them, include:
+
+- Apply a 150–250 ms trailing debounce so a paused drag previews its current
+  shot before release.
+- Use time-based throttling with a guaranteed trailing update. Updating every
+  nth event is not preferred because event rates vary by input device and the
+  final position can otherwise be skipped.
+- Coalesce outstanding requests so only the latest selection is rendered when
+  a newer selection arrives.
+- Add a bounded LRU row cache or prefetch neighboring shots when access is
+  predictably sequential.
+- Transfer a selected variable's waveform matrix in a compact binary format and
+  switch rows in the browser. This offers the fastest scrubbing but increases
+  memory use, initial transfer cost, and client-side complexity.
+- Downsample before transfer or rendering when traces become substantially
+  longer than the current 1024-sample Lasernet waveforms.
 
 `variable_template` supports `{variable}`, `{variable_parent}`, and
 `{variable_name}` placeholders. It allows each matched waveform to resolve a
