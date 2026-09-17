@@ -2652,6 +2652,9 @@ class CampaignDb:
             coordinates: List[float] = []
             labels: List[str] = []
             axis_label = str(selection_axis.get("label", "") or "Selection")
+            total_length = sum(
+                int(member.get("length", 0) or 0) for member in members
+            )
             for member in members:
                 source_dataset = str(member.get("source_dataset", "") or "").strip("/")
                 expected_length = int(member.get("length", 0) or 0)
@@ -2677,6 +2680,7 @@ class CampaignDb:
                         else f"{coordinate:g}"
                     )
                     labels.append(
+                        f"{len(coordinates)} / {total_length} · "
                         f"{partition_label} · {axis_label} {value_label}"
                     )
 

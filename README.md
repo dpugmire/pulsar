@@ -507,10 +507,12 @@ without copying or rewriting their arrays. Each collection selects a subset of
 one file group, orders its members by the first value of a schema-declared
 variable, and concatenates them along a named axis. The viewer uses a unique
 collection position internally while retaining the partition label and local
-axis coordinate for display. This is useful when shot numbers or other local
-coordinates restart in every member file. Collection members remain lazy:
-selecting a waveform row opens the member dataset that owns that position and
-reads only its local row.
+axis coordinate for display. Timeline labels show both the one-based collection
+position and the original identity, for example
+`710 / 768 · Run 14378 · Shot number 15`. This is useful when shot numbers or
+other local coordinates restart in every member file. Collection members remain
+lazy: selecting a waveform row opens the member dataset that owns that position
+and reads only its local row.
 
 Visualization association notes:
 

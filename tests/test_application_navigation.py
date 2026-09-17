@@ -640,9 +640,9 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             tile["selection_axis"]["labels"],
             [
-                "Run 10 · Shot number 15",
-                "Run 10 · Shot number 16",
-                "Run 11 · Shot number 15",
+                "1 / 3 · Run 10 · Shot number 15",
+                "2 / 3 · Run 10 · Shot number 16",
+                "3 / 3 · Run 11 · Shot number 15",
             ],
         )
         self.assertEqual(tile["selection_axis"]["index"], 2)
