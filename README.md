@@ -395,6 +395,7 @@ variable_groups:
   shot_scalars:
     file: laser_runs
     pattern: data/meshes/scalars/*/value
+    display_name_template: "{variable_parent_name}"
     role: scalar_trace
     dimension_axes: [shot]
     plot_x_axis: shot
@@ -416,6 +417,10 @@ the plot coordinates; `selection_axis` controls the slider. Selection-axis
 coordinates must be one-dimensional numeric values. Plot coordinates may be a
 shared one-dimensional vector or, with `layout: per_selection`, a rank-two
 array whose matching row is loaded with the selected data row.
+
+Seurat keeps the campaign reader open while serving axis-selected plots. Range
+slider drags update their label locally and load the selected row when the drag
+is committed; step buttons and keyboard changes remain immediate.
 
 `variable_template` supports `{variable}`, `{variable_parent}`, and
 `{variable_name}` placeholders. It allows each matched waveform to resolve a

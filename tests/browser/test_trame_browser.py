@@ -3568,6 +3568,12 @@ def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(
         ".getAttribute('data-selection-axis').includes('\"value\":16')"
     )
     assert waveform.get_attribute("data-axis-sync-status") == "synchronized"
+
+    slider.press("ArrowRight")
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"]')"
+        ".getAttribute('data-selection-axis').includes('\"value\":17')"
+    )
     assert incompatible.get_attribute("data-axis-sync-status") == "incompatible"
 
     incompatible.click()
@@ -3577,6 +3583,36 @@ def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(
         "'Time within shot = 0 s'"
     )
     assert slider.get_attribute("max") == "2"
+
+
+def test_multi_axis_slider_defers_server_update_until_change(page, seurat_server):
+    _open_app(page, seurat_server, mode="multi-axis")
+
+    label = page.locator("#seurat-vcr-time-value")
+    slider = page.locator("#seurat-vcr-step-slider")
+    waveform = page.locator('.seurat-dropcell[data-cell-index="1"]')
+    label.wait_for(state="visible")
+
+    slider.evaluate(
+        """element => {
+            element.value = "1";
+            element.dispatchEvent(new Event("input", { bubbles: true }));
+        }"""
+    )
+    page.wait_for_function(
+        "document.querySelector('#seurat-vcr-time-value').textContent === "
+        "'Shot number = 16'"
+    )
+    assert '"value":15' in waveform.get_attribute("data-selection-axis")
+
+    slider.evaluate(
+        "element => element.dispatchEvent(new Event('change', { bubbles: true }))"
+    )
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"]')"
+        ".getAttribute('data-selection-axis').includes('\"value\":16')"
+    )
+    assert waveform.get_attribute("data-axis-sync-status") == "synchronized"
 
 
 def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(

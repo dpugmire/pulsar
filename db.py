@@ -3,6 +3,7 @@ import json
 import math
 import sqlite3
 import statistics
+import threading
 import zlib
 from contextlib import ExitStack
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -619,12 +620,27 @@ class CampaignDb:
         self.collection = collection
         self.ok = True
         self.last_error = ""
+        self._campaign_readers: Dict[str, Any] = {}
+        self._campaign_reader_lock = threading.RLock()
 
         try:
             _ = self.collection.database.client.admin.command("ping")
         except Exception as e:
             self.ok = False
             self.last_error = f"{type(e).__name__}: {e}"
+
+    def close(self) -> None:
+        with self._campaign_reader_lock:
+            readers = list(self._campaign_readers.values())
+            self._campaign_readers.clear()
+        for reader in readers:
+            close = getattr(reader, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception:
+                pass
 
     @staticmethod
     def _metadata_ndims(metadata: Any) -> Optional[int]:
@@ -1693,6 +1709,7 @@ class CampaignDb:
             "file": 1,
             "variable_id": 1,
             "variable_name": 1,
+            "display_name": 1,
             "variable_name_physical": 1,
             "variable_path": 1,
             "source_dataset": 1,
@@ -1764,6 +1781,7 @@ class CampaignDb:
         return {
             "variable_id": variable_id,
             "variable_name": str(doc.get("variable_name", "") or variable_id),
+            "display_name": str(doc.get("display_name", "") or ""),
             "variable_path": read_path,
             "metadata": metadata,
             "source_fields": source_fields,
@@ -2049,60 +2067,113 @@ class CampaignDb:
         selection_axis: str = "",
         selection_index: int = 0,
     ) -> Tuple[np.ndarray, np.ndarray, str]:
+        with FileReader(campaign_path) as fr:
+            return CampaignDb._read_plot_series_from_reader(
+                fr,
+                variable_path,
+                metadata,
+                explicit_time_values,
+                axes,
+                plot_x_axis,
+                selection_axis,
+                selection_index,
+            )
+
+    @staticmethod
+    def _read_plot_series_from_reader(
+        fr: FileReader,
+        variable_path: str,
+        metadata: Any,
+        explicit_time_values: Any = None,
+        axes: Any = None,
+        plot_x_axis: str = "",
+        selection_axis: str = "",
+        selection_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray, str]:
         steps_count = CampaignDb._metadata_steps_count(metadata)
         ndims = CampaignDb._metadata_ndims(metadata)
         axis_descriptors = axes if isinstance(axes, dict) else {}
         plot_axis = axis_descriptors.get(str(plot_x_axis or ""), {})
-        with FileReader(campaign_path) as fr:
-            if ndims == 2 and plot_axis and selection_axis:
-                shape = CampaignDb._metadata_shape(metadata)
-                y = CampaignDb._read_selected_array_row(
-                    fr,
-                    variable_path,
-                    shape,
-                    selection_index,
+        if ndims == 2 and plot_axis and selection_axis:
+            shape = CampaignDb._metadata_shape(metadata)
+            y = CampaignDb._read_selected_array_row(
+                fr,
+                variable_path,
+                shape,
+                selection_index,
+            )
+            x = CampaignDb._read_plot_axis_values(
+                fr,
+                dict(plot_axis),
+                selection_index,
+            )
+            if x.size != y.size:
+                raise ValueError(
+                    f"Plot axis has {x.size} values but selected data row has "
+                    f"{y.size} values"
                 )
-                x = CampaignDb._read_plot_axis_values(
-                    fr,
-                    dict(plot_axis),
-                    selection_index,
+            return x, y, CampaignDb._plot_axis_label(plot_axis)
+
+        kwargs = {"step_selection": [0, steps_count]} if steps_count > 1 else {}
+        y_raw = np.asarray(fr.read(variable_path, **kwargs), dtype=float)
+
+        if ndims == 0:
+            y = y_raw.reshape(-1)
+            x, x_label = CampaignDb._plot_timeline_values(
+                y.size,
+                explicit_time_values,
+            )
+            return x, y, x_label
+
+        if ndims == 1:
+            y = y_raw.reshape(-1)
+            axis_values = CampaignDb._plot_axis_values(plot_axis)
+            if axis_values is not None and axis_values.size == y.size:
+                return (
+                    axis_values,
+                    y,
+                    CampaignDb._plot_axis_label(plot_axis),
                 )
-                if x.size != y.size:
-                    raise ValueError(
-                        f"Plot axis has {x.size} values but selected data row has "
-                        f"{y.size} values"
-                    )
-                return x, y, CampaignDb._plot_axis_label(plot_axis)
+            x, x_label = CampaignDb._plot_timeline_values(
+                y.size,
+                explicit_time_values,
+            )
+            return x, y, x_label
 
-            kwargs = {"step_selection": [0, steps_count]} if steps_count > 1 else {}
-            y_raw = np.asarray(fr.read(variable_path, **kwargs), dtype=float)
+        if y_raw.ndim >= 2:
+            y = np.asarray(y_raw[-1], dtype=float).reshape(-1)
+        else:
+            y = y_raw.reshape(-1)
+        x = np.arange(y.size, dtype=float)
+        return x, y, "index"
 
-            if ndims == 0:
-                y = y_raw.reshape(-1)
-                x, x_label = CampaignDb._plot_timeline_values(y.size, explicit_time_values)
-                return x, y, x_label
-
-            if ndims == 1:
-                y = y_raw.reshape(-1)
-                axis_values = CampaignDb._plot_axis_values(plot_axis)
-                if axis_values is not None and axis_values.size == y.size:
-                    return (
-                        axis_values,
-                        y,
-                        CampaignDb._plot_axis_label(plot_axis),
-                    )
-                x, x_label = CampaignDb._plot_timeline_values(
-                    y.size,
-                    explicit_time_values,
-                )
-                return x, y, x_label
-
-            if y_raw.ndim >= 2:
-                y = np.asarray(y_raw[-1], dtype=float).reshape(-1)
-            else:
-                y = y_raw.reshape(-1)
-            x = np.arange(y.size, dtype=float)
-            return x, y, "index"
+    def _read_plot_series_cached(
+        self,
+        campaign_path: str,
+        variable_path: str,
+        metadata: Any,
+        explicit_time_values: Any = None,
+        axes: Any = None,
+        plot_x_axis: str = "",
+        selection_axis: str = "",
+        selection_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray, str]:
+        path = str(campaign_path or "")
+        with self._campaign_reader_lock:
+            reader = self._campaign_readers.get(path)
+            if reader is None:
+                reader = FileReader(path)
+                self._campaign_readers[path] = reader
+            return self._read_plot_series_from_reader(
+                reader,
+                variable_path,
+                metadata,
+                explicit_time_values,
+                axes,
+                plot_x_axis,
+                selection_axis,
+                selection_index,
+            )
 
     @staticmethod
     def _axis_tile_fields(
@@ -2243,7 +2314,7 @@ class CampaignDb:
             return {}
 
         source_fields = dict(candidate.get("source_fields", {}) or {})
-        x, y, x_label = self._read_plot_series(
+        x, y, x_label = self._read_plot_series_cached(
             campaign_path,
             str(candidate.get("variable_path", "") or ""),
             candidate.get("metadata", {}),
@@ -2254,6 +2325,7 @@ class CampaignDb:
             selection_index,
         )
         variable_name = str(candidate.get("variable_name", "") or variable_id)
+        display_name = str(candidate.get("display_name", "") or variable_name)
         plot = self._plot1d_payload(
             [
                 {
@@ -2263,7 +2335,7 @@ class CampaignDb:
                 }
             ],
             x_label,
-            variable_name,
+            display_name,
         )
         plot_axis = dict(
             (candidate.get("axes", {}) or {}).get(
@@ -2276,7 +2348,8 @@ class CampaignDb:
             plot["x_axis_key"] = str(plot_axis.get("key", "") or "")
 
         tile = {
-            "variable_name": variable_name,
+            "variable_name": display_name,
+            "display_title": display_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
             "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
@@ -2333,7 +2406,7 @@ class CampaignDb:
             seen.add(key)
 
             try:
-                x, y, x_label = self._read_plot_series(
+                x, y, x_label = self._read_plot_series_cached(
                     campaign_path,
                     str(candidate.get("variable_path", "") or ""),
                     candidate.get("metadata", {}),
@@ -2393,10 +2466,11 @@ class CampaignDb:
         first = candidates[0]
         first_source_fields = dict(first.get("source_fields", {}) or {})
         variable_name = str(first.get("variable_name", "") or variable_id)
+        display_name = str(first.get("display_name", "") or variable_name)
         plot = self._plot1d_payload(
             series,
             x_label,
-            variable_name,
+            display_name,
         )
         first_plot_axis = dict(
             (first.get("axes", {}) or {}).get(
@@ -2409,7 +2483,8 @@ class CampaignDb:
             plot["x_axis_key"] = str(first_plot_axis.get("key", "") or "")
 
         tile = {
-            "variable_name": variable_name,
+            "variable_name": display_name,
+            "display_title": display_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
             "selected_visualization": GENERATED_SCALAR_PLOT_VIS,

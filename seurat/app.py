@@ -78,6 +78,9 @@ class SeuratApp(TrameApp):
         print(f"Seurat sidecar DB: {self.collection.path}")
 
         self.db = db or CampaignDb(self.collection)
+        close_db = getattr(self.db, "close", None)
+        if callable(close_db):
+            atexit.register(close_db)
         self.backend = LocalCampaignBackend(self.db)
         self.interaction_log = (
             interaction_log

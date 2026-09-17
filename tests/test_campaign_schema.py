@@ -585,6 +585,7 @@ files:
         self.assertEqual(scalar["dimension_axes"], ["shot"])
         self.assertEqual(scalar["plot_x_axis"], "shot")
         self.assertEqual(scalar["selection_axis"], "shot")
+        self.assertEqual(scalar["display_name"], "PNG_digitizer_Ch2_Energy")
         self.assertEqual(scalar["axes"]["shot"]["values"], [15.0, 16.0, 17.0])
         self.assertEqual(scalar["axes"]["shot"]["label"], "Shot number")
         self.assertEqual(trace["dimension_axes"], ["shot", "trace_time"])

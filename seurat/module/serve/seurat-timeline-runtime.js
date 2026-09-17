@@ -720,7 +720,7 @@
     gridVcrState.lastNotifiedAxisIndex = index;
     if (!slider) return;
     notifyingAxisSelection = true;
-    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
     notifyingAxisSelection = false;
   }
 

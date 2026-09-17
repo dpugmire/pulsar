@@ -786,7 +786,7 @@ class GridWorkspace(TrameComponent):
                                 type="range",
                                 id="seurat-vcr-step-slider",
                                 classes="seurat-vcr-slider",
-                                input=(
+                                change=(
                                     ctrl.set_active_axis_selection,
                                     "[$event.target.value]",
                                 ),

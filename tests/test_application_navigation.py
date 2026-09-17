@@ -230,6 +230,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             self.collection.insert_one(document)
 
         self.db = CampaignDb(self.collection)
+        self.addCleanup(self.db.close)
 
     def test_scalar_plot_uses_steps_without_explicit_time_values(self):
         class PlotReader:
@@ -423,6 +424,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         class PlotReader:
             def __init__(self):
                 self.calls = []
+                self.close_calls = 0
                 self.values = {
                     "run.bp/trace/signal": np.asarray(
                         [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
@@ -438,6 +440,9 @@ class CampaignDbNavigationTests(unittest.TestCase):
             def __exit__(self, *_args):
                 return False
 
+            def close(self):
+                self.close_calls += 1
+
             def read(self, path, **kwargs):
                 self.calls.append((path, kwargs))
                 values = self.values[path]
@@ -451,6 +456,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "campaign_path": "/campaign/example.aca",
                 "variable_id": "trace/signal",
                 "variable_name": "trace/signal",
+                "display_name": "Trace",
                 "variable_type": "variable",
                 "source_dataset": "run.bp",
                 "variable_path": "run.bp/trace/signal",
@@ -482,13 +488,22 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         reader = PlotReader()
 
-        with patch("db.FileReader", return_value=reader):
+        with patch("db.FileReader", return_value=reader) as reader_factory:
             tile = self.db.get_or_create_generated_scalar_plot_tile(
                 "/campaign/example.aca",
                 "trace/signal",
                 selection_index=1,
             )
+            first_tile = self.db.get_or_create_generated_scalar_plot_tile(
+                "/campaign/example.aca",
+                "trace/signal",
+                selection_index=0,
+            )
 
+        reader_factory.assert_called_once_with("/campaign/example.aca")
+        self.assertEqual(tile["variable_name"], "Trace")
+        self.assertEqual(tile["display_title"], "Trace")
+        self.assertEqual(tile["plot"]["y_label"], "Trace")
         self.assertEqual(tile["selection_axis"]["index"], 1)
         self.assertEqual(tile["selection_axis"]["value"], 16.0)
         self.assertEqual(tile["selection_axis"]["key"], shot_key)
@@ -498,13 +513,18 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(tile["plot"]["x_label"], "Time within shot (s)")
         self.assertEqual(tile["plot"]["series"][0]["x"], [0.1, 0.6, 1.1])
         self.assertEqual(tile["plot"]["series"][0]["y"], [4.0, 5.0, 6.0])
+        self.assertEqual(first_tile["plot"]["series"][0]["y"], [1.0, 2.0, 3.0])
         self.assertEqual(
             reader.calls,
             [
                 ("run.bp/trace/signal", {"start": [1, 0], "count": [1, 3]}),
                 ("run.bp/trace/time", {"start": [1, 0], "count": [1, 3]}),
+                ("run.bp/trace/signal", {"start": [0, 0], "count": [1, 3]}),
+                ("run.bp/trace/time", {"start": [0, 0], "count": [1, 3]}),
             ],
         )
+        self.db.close()
+        self.assertEqual(reader.close_calls, 1)
 
     def test_scalar_plot_candidate_preserves_declared_time_values(self):
         self.collection.insert_one(

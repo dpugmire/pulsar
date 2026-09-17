@@ -30,6 +30,7 @@ variable_groups:
   shot_scalars:
     file: laser_runs
     pattern: data/meshes/scalars/*/value
+    display_name_template: "{variable_parent_name}"
     role: scalar_trace
     dimension_axes: [shot]
     plot_x_axis: shot
