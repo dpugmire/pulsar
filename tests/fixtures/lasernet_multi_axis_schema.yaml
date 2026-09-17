@@ -38,6 +38,7 @@ variable_groups:
   waveforms:
     file: laser_runs
     pattern: data/meshes/traces/*_Trace/signal
+    display_name_template: "{variable_parent_name}"
     role: waveform
     dimension_axes: [shot, trace_time]
     plot_x_axis: trace_time

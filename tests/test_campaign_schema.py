@@ -590,6 +590,7 @@ files:
         self.assertEqual(trace["dimension_axes"], ["shot", "trace_time"])
         self.assertEqual(trace["plot_x_axis"], "trace_time")
         self.assertEqual(trace["selection_axis"], "shot")
+        self.assertEqual(trace["display_name"], "Siglent_Ch1_Trace")
         self.assertEqual(trace["schema_default_axis"], "shot")
         self.assertEqual(trace["axes"]["trace_time"]["shape"], [3, 4])
         self.assertEqual(
@@ -598,6 +599,28 @@ files:
         )
         self.assertNotIn("values", trace["axes"]["trace_time"])
         self.assertEqual(reader.reads, [(shot_path, None)])
+
+    def test_variable_group_rejects_unknown_display_name_placeholder(self):
+        schema = {
+            "schema_version": 1,
+            "files": {
+                "output": {"role": "static", "path": "run.bp"},
+            },
+            "variable_groups": {
+                "traces": {
+                    "file": "output",
+                    "pattern": "traces/*/signal",
+                    "display_name_template": "{unknown}",
+                    "role": "waveform",
+                }
+            },
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "variable_groups.traces.display_name_template",
+        ):
+            _interpret_campaign_schema(schema, ["run.bp"], {})
 
     def test_multi_axis_group_rejects_axis_outside_dimension_axes(self):
         schema = {

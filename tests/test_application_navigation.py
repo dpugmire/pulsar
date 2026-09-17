@@ -1673,6 +1673,60 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "scalars/toroidal_current",
         )
 
+    def test_schema_display_name_is_used_without_changing_variable_identity(self):
+        variable_id = "data/meshes/traces/PNG_digitizer_Ch2_Trace/signal"
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": variable_id,
+                "variable_name": variable_id,
+                "display_name": "PNG_digitizer_Ch2_Trace",
+                "variable_type": "variable",
+                "source_dataset": "run-a/laser.bp5",
+                "variable_path": f"run-a/laser.bp5/{variable_id}",
+                "variable_group": "waveforms",
+                "variable_group_order": 0,
+                "role": "waveform",
+                "metadata": {"Shape": "3,4", "AvailableStepsCount": "1"},
+            }
+        )
+
+        variable_group = next(
+            group
+            for group in self.db.grouped_variable_names()
+            if group["name"] == "waveforms"
+        )
+        variable = variable_group["variables"][0]
+        self.assertEqual(variable["id"], variable_id)
+        self.assertEqual(variable["name"], variable_id)
+        self.assertEqual(variable["label"], "PNG_digitizer_Ch2_Trace")
+
+        file_group = next(
+            group
+            for group in self.db.grouped_variables_by_source_dataset()
+            if group["name"] == "run-a/laser.bp5"
+        )
+        self.assertEqual(
+            file_group["variables"][0]["label"],
+            "PNG_digitizer_Ch2_Trace",
+        )
+
+        navigation = SeuratApplication(self.db).get_navigation(
+            {
+                "view": "variables",
+                "query": {"variable_id": variable_id},
+                "only_visualized": False,
+            }
+        )
+        self.assertEqual(
+            navigation[0]["children"][0]["label"],
+            "PNG_digitizer_Ch2_Trace",
+        )
+        self.assertEqual(
+            navigation[0]["children"][0]["resource"]["variable_id"],
+            variable_id,
+        )
+
     def test_only_visualized_preserves_current_catalog_behavior(self):
         groups = self.db.grouped_variable_names(only_visualized=True)
 

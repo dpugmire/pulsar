@@ -403,6 +403,7 @@ variable_groups:
   waveforms:
     file: laser_runs
     pattern: data/meshes/traces/*_Trace/signal
+    display_name_template: "{variable_parent_name}"
     role: waveform
     dimension_axes: [shot, trace_time]
     plot_x_axis: trace_time
@@ -420,6 +421,13 @@ array whose matching row is loaded with the selected data row.
 `{variable_name}` placeholders. It allows each matched waveform to resolve a
 sibling coordinate such as `time` without listing every trace explicitly.
 
+An optional variable-group `display_name_template` controls the viewer label
+without changing the raw variable name or stable variable identity. It supports
+the same placeholders plus `{variable_parent_name}`, the final component of the
+variable's parent path. For example, a variable named
+`data/meshes/traces/PNG_digitizer_Trace/signal` can be displayed as
+`PNG_digitizer_Trace` with `display_name_template: "{variable_parent_name}"`.
+
 Axis identity is based on the schema name, file group, and axis name. Tiles
 with the same selection-axis identity synchronize by coordinate value. Tiles
 with a different axis, or without the selected coordinate value, remain static
@@ -435,7 +443,7 @@ Visualization association notes:
 - Seurat treats `variable_id` as a source-independent variable identity. Different source datasets for that same variable remain separate through the `source_dataset` field.
 - For visualization API images, `variable_id` comes from `visualization_variable.variable_name`.
 - Legacy image path parsing is still used as a fallback for older campaigns.
-- Longer term, the viewer should use an explicit display/grouping schema that separates the raw source variable name, the viewer display label, the variable grouping id, and the source dataset. Until that exists, the campaign variable name is used directly for both grouping and display.
+- A campaign schema may assign a display-only label through a variable group's `display_name_template`; the raw variable name, variable identity, and source dataset remain unchanged.
 
 Schema notes (`image_variable_map.yaml`):
 

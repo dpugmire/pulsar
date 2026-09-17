@@ -1272,6 +1272,7 @@ class CampaignDb:
                 "variable_group": 1,
                 "variable_group_order": 1,
                 "role": 1,
+                "display_name": 1,
                 "metadata": 1,
             }
 
@@ -1291,12 +1292,15 @@ class CampaignDb:
                     if not name:
                         physical = str(doc.get("variable_name_physical", "") or "").strip("/")
                         name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
+                    label = (
+                        str(doc.get("display_name", "") or "").strip() or name
+                    )
 
                     display_path = self._variable_display_path({**doc, "variable_id": variable_id})
                     item: Dict[str, Any] = {
                         "id": variable_id,
                         "name": name,
-                        "label": name,
+                        "label": label,
                         "path": display_path,
                         "source_dataset": str(doc.get("source_dataset", "") or ""),
                     }
@@ -1311,16 +1315,23 @@ class CampaignDb:
 
             counts: Dict[str, int] = {}
             for item in by_id.values():
-                counts[item["name"]] = counts.get(item["name"], 0) + 1
+                counts[item["label"]] = counts.get(item["label"], 0) + 1
 
             variables = list(by_id.values())
             for item in variables:
-                if counts.get(item["name"], 0) <= 1:
+                if counts.get(item["label"], 0) <= 1:
                     continue
                 parent = self._variable_parent_path(item.get("path", ""))
-                item["label"] = f"{item['name']} [{parent}]" if parent else item["name"]
+                if parent:
+                    item["label"] = f"{item['label']} [{parent}]"
 
-            variables.sort(key=lambda item: (item["name"].lower(), item["label"].lower(), item["id"]))
+            variables.sort(
+                key=lambda item: (
+                    item["label"].lower(),
+                    item["name"].lower(),
+                    item["id"],
+                )
+            )
             return variables
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
@@ -1433,6 +1444,7 @@ class CampaignDb:
                 "schema_pattern": 1,
                 "schema_num_timesteps": 1,
                 "variable_type": 1,
+                "display_name": 1,
                 "metadata": 1,
             }
 
@@ -1506,12 +1518,15 @@ class CampaignDb:
                     if not name:
                         physical = str(doc.get("variable_name_physical", "") or "").strip("/")
                         name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
+                    label = (
+                        str(doc.get("display_name", "") or "").strip() or name
+                    )
 
                     group["variables"].append(
                         {
                             "id": variable_id,
                             "name": name,
-                            "label": name,
+                            "label": label,
                             "path": self._variable_display_path({**doc, "variable_id": variable_id}),
                             "source_dataset": source_dataset,
                         }
@@ -1527,18 +1542,19 @@ class CampaignDb:
                 variables = list(group.get("variables", []) or [])
                 counts: Dict[str, int] = {}
                 for item in variables:
-                    name = str(item.get("name", "") or "")
-                    counts[name] = counts.get(name, 0) + 1
+                    label = str(item.get("label", "") or "")
+                    counts[label] = counts.get(label, 0) + 1
                 for item in variables:
-                    name = str(item.get("name", "") or "")
-                    if counts.get(name, 0) <= 1:
+                    label = str(item.get("label", "") or "")
+                    if counts.get(label, 0) <= 1:
                         continue
                     parent = self._variable_parent_path(str(item.get("path", "") or ""))
-                    item["label"] = f"{name} [{parent}]" if parent else name
+                    if parent:
+                        item["label"] = f"{label} [{parent}]"
                 variables.sort(
                     key=lambda item: (
-                        str(item.get("name", "")).lower(),
                         str(item.get("label", "")).lower(),
+                        str(item.get("name", "")).lower(),
                         str(item.get("id", "")),
                     )
                 )

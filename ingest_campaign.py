@@ -529,6 +529,19 @@ def _interpret_schema_variable_groups(
                 f"variable_groups.{name}.data_model",
             )
 
+        if "display_name_template" in group:
+            field_name = f"variable_groups.{name}.display_name_template"
+            display_name_template = _schema_nonempty_string(
+                group.get("display_name_template"),
+                field_name,
+            )
+            _schema_display_name_for_variable(
+                display_name_template,
+                "example/variable",
+                field_name,
+            )
+            normalized["display_name_template"] = display_name_template
+
         for key, targets in (("mesh", meshes), ("basis", basis)):
             if key not in group:
                 continue
@@ -1118,6 +1131,26 @@ def _schema_axis_variable_for_data(axis: Dict[str, Any], data_variable: str) -> 
     return _schema_nonempty_string(resolved, "axis variable_template result").strip("/")
 
 
+def _schema_display_name_for_variable(
+    template: str,
+    data_variable: str,
+    field_name: str = "display_name_template",
+) -> str:
+    variable = str(data_variable or "").strip("/")
+    parent, _, name = variable.rpartition("/")
+    parent_name = parent.rsplit("/", 1)[-1] if parent else ""
+    try:
+        resolved = template.format(
+            variable=variable,
+            variable_parent=parent,
+            variable_parent_name=parent_name,
+            variable_name=name,
+        )
+    except (KeyError, ValueError) as e:
+        raise ValueError(f"Invalid {field_name} {template!r}: {e}") from e
+    return _schema_nonempty_string(resolved, f"{field_name} result")
+
+
 def _schema_axis_label(axis_name: str, axis: Dict[str, Any]) -> str:
     label = str(axis.get("label", "") or "").strip()
     if label:
@@ -1344,6 +1377,15 @@ def _build_schema_variable_context(
                     "role": str(group.get("role", "") or ""),
                     "static": bool(group.get("static", False)),
                 }
+                display_name_template = str(
+                    group.get("display_name_template", "") or ""
+                )
+                if display_name_template:
+                    metadata["display_name"] = _schema_display_name_for_variable(
+                        display_name_template,
+                        variable,
+                        f"variable_groups.{group_name}.display_name_template",
+                    )
                 for key in (
                     "data_model",
                     "mesh",
