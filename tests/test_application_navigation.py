@@ -656,6 +656,33 @@ class CampaignDbNavigationTests(unittest.TestCase):
             ["run-a.bp", "run-b.bp"],
         )
 
+        state, controller = self.make_controller()
+        owner = controller.actions["toggle_sources"].__self__
+        state.variableLabelsById["trace/signal"] = "trace"
+        owner.update_selected_var_panels("trace/signal")
+        png_row = next(
+            row
+            for row in state.sourceRowsAll
+            if row.get("source_collection_id") == "png"
+        )
+        with patch("db.FileReader", return_value=reader):
+            cell = owner.generated_scalar_plot_cell_for_source_rows(
+                "trace/signal",
+                [png_row],
+                {},
+                allow_multi_sources=False,
+            )
+            regenerated = owner.regenerate_axis_selected_plot(cell, 2)
+
+        self.assertEqual(cell["source_collection_id"], "png")
+        self.assertEqual(len(cell["selection_axis"]["values"]), 3)
+        self.assertEqual(
+            cell["selection_axis"]["labels"][-1],
+            "3 / 3 · Run 11 · Shot number 15",
+        )
+        self.assertEqual(regenerated["source_collection_id"], "png")
+        self.assertEqual(regenerated["plot"]["series"][0]["y"], [7.0, 8.0, 9.0])
+
     def test_scalar_plot_candidate_preserves_declared_time_values(self):
         self.collection.insert_one(
             {

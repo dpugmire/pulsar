@@ -198,6 +198,9 @@ class SourcesControllerMixin:
             if row:
                 return row
 
+        source_collection_id = str(
+            cell.get("source_collection_id", "") or ""
+        )
         source_dataset = str(cell.get("source_dataset", "") or "")
         schema_file_group = str(cell.get("schema_file_group", "") or "")
         schema_mode = str(cell.get("schema_mode", "") or "")
@@ -205,6 +208,12 @@ class SourcesControllerMixin:
         casename = str(cell.get("casename", "") or "")
         file_name = str(cell.get("file", "") or "")
         for row in self.all_source_rows():
+            if (
+                source_collection_id
+                and str(row.get("source_collection_id", "") or "")
+                == source_collection_id
+            ):
+                return row
             if (
                 schema_file_group
                 and schema_mode

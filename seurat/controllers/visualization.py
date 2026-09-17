@@ -1528,6 +1528,9 @@ class VisualizationControllerMixin:
             source_fields = {
                 "_source_key": str(existing_cell.get("_source_key", "") or ""),
                 "source_dataset": str(existing_cell.get("source_dataset", "") or ""),
+                "source_collection_id": str(
+                    existing_cell.get("source_collection_id", "") or ""
+                ),
                 "schema_file_group": str(
                     existing_cell.get("schema_file_group", "") or ""
                 ),
