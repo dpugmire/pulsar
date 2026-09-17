@@ -366,6 +366,132 @@ def _interpret_schema_axes(
     return axes
 
 
+def _interpret_schema_source_collections(
+    raw_collections: Any,
+    file_groups: Dict[str, Dict[str, Any]],
+    axes: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    collections: Dict[str, Dict[str, Any]] = {}
+    claimed_datasets: Dict[tuple[str, str], str] = {}
+    for raw_name, raw_collection in _schema_optional_mapping(
+        raw_collections,
+        "source_collections",
+    ).items():
+        name = _schema_nonempty_string(raw_name, "source_collections name")
+        field_name = f"source_collections.{name}"
+        collection = _schema_mapping(raw_collection, field_name)
+        file_group = _schema_file_group_reference(
+            collection.get("file"),
+            f"{field_name}.file",
+            file_groups,
+        )
+        pattern = _schema_nonempty_string(
+            collection.get("pattern"),
+            f"{field_name}.pattern",
+        )
+        combine = _schema_mapping(
+            collection.get("combine"),
+            f"{field_name}.combine",
+        )
+        mode = _schema_nonempty_string(
+            combine.get("mode"),
+            f"{field_name}.combine.mode",
+        ).lower()
+        if mode != "concatenate":
+            raise ValueError(
+                f"{field_name}.combine.mode must be 'concatenate'"
+            )
+        axis_name = _schema_axis_reference(
+            combine.get("axis"),
+            f"{field_name}.combine.axis",
+            file_group,
+            axes,
+        )
+        if "variable" not in axes[axis_name]:
+            raise ValueError(
+                f"{field_name}.combine.axis must reference an axis with a "
+                "fixed variable"
+            )
+
+        order_by = _schema_mapping(
+            combine.get("order_by"),
+            f"{field_name}.combine.order_by",
+        )
+        order_variable = _schema_nonempty_string(
+            order_by.get("variable"),
+            f"{field_name}.combine.order_by.variable",
+        ).strip("/")
+        order_reduce = str(order_by.get("reduce", "first") or "first").strip().lower()
+        if order_reduce != "first":
+            raise ValueError(
+                f"{field_name}.combine.order_by.reduce must be 'first'"
+            )
+
+        partition_label: Dict[str, str] = {}
+        if "partition_label" in combine:
+            label_spec = _schema_mapping(
+                combine.get("partition_label"),
+                f"{field_name}.combine.partition_label",
+            )
+            label_variable = _schema_nonempty_string(
+                label_spec.get("variable"),
+                f"{field_name}.combine.partition_label.variable",
+            ).strip("/")
+            label_template = _schema_nonempty_string(
+                label_spec.get("template"),
+                f"{field_name}.combine.partition_label.template",
+            )
+            try:
+                label_template.format(value="example")
+            except (KeyError, ValueError) as e:
+                raise ValueError(
+                    f"Invalid {field_name}.combine.partition_label.template "
+                    f"{label_template!r}: {e}"
+                ) from e
+            partition_label = {
+                "variable": label_variable,
+                "template": label_template,
+            }
+
+        group_datasets = [
+            str(dataset)
+            for dataset in (file_groups[file_group].get("datasets", []) or [])
+        ]
+        datasets = sorted(
+            dataset for dataset in group_datasets if fnmatch.fnmatch(dataset, pattern)
+        )
+        for dataset in datasets:
+            claim_key = (file_group, dataset)
+            previous = claimed_datasets.get(claim_key)
+            if previous is not None:
+                raise ValueError(
+                    f"{field_name}.pattern overlaps source collection "
+                    f"{previous!r} for dataset {dataset!r}"
+                )
+            claimed_datasets[claim_key] = name
+
+        collections[name] = {
+            "label": str(collection.get("label", "") or name).strip() or name,
+            "file": file_group,
+            "pattern": pattern,
+            "datasets": datasets,
+            "combine": {
+                "mode": mode,
+                "axis": axis_name,
+                "order_by": {
+                    "variable": order_variable,
+                    "reduce": order_reduce,
+                },
+                **(
+                    {"partition_label": partition_label}
+                    if partition_label
+                    else {}
+                ),
+            },
+        }
+    return collections
+
+
 def _schema_string_list(value: Any, field_name: str) -> List[str]:
     if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field_name} must be a list")
@@ -736,6 +862,14 @@ def _interpret_schema_optional_metadata(
     if "axes" in schema:
         result["axes"] = axes
 
+    source_collections = _interpret_schema_source_collections(
+        schema.get("source_collections"),
+        file_groups,
+        axes,
+    )
+    if "source_collections" in schema:
+        result["source_collections"] = source_collections
+
     if "timeline" in schema:
         timeline = _schema_mapping(schema.get("timeline"), "timeline")
         normalized_timeline: Dict[str, Any] = {}
@@ -879,6 +1013,18 @@ def _prefix_schema_layout_datasets(prefix: str, layout: Dict[str, Any]) -> Dict[
         ]
         file_groups[str(group_name)] = prefixed_group
     prefixed["file_groups"] = file_groups
+    source_collections: Dict[str, Dict[str, Any]] = {}
+    for collection_name, collection in (
+        layout.get("source_collections", {}) or {}
+    ).items():
+        prefixed_collection = dict(collection)
+        prefixed_collection["datasets"] = [
+            f"{prefix}/{dataset}"
+            for dataset in collection.get("datasets", []) or []
+        ]
+        source_collections[str(collection_name)] = prefixed_collection
+    if source_collections:
+        prefixed["source_collections"] = source_collections
     return prefixed
 
 
@@ -911,6 +1057,18 @@ def _merge_scoped_schema_layouts(
         "file_groups": file_groups,
     }
     layout.update(_interpret_schema_optional_metadata(schema, file_groups))
+    merged_collections = layout.get("source_collections", {}) or {}
+    for collection_name, collection in merged_collections.items():
+        collection["datasets"] = [
+            dataset
+            for scoped_layout in layouts
+            for dataset in (
+                (scoped_layout.get("source_collections", {}) or {})
+                .get(collection_name, {})
+                .get("datasets", [])
+                or []
+            )
+        ]
     return layout
 
 
@@ -1163,6 +1321,13 @@ def _schema_axis_label(axis_name: str, axis: Dict[str, Any]) -> str:
     return str(axis_name or "axis").replace("_", " ").strip().title()
 
 
+def _schema_scalar_label(value: float) -> str:
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}"
+
+
 def _schema_axis_descriptor(
     context: Dict[str, Any],
     fr: FileReader,
@@ -1181,13 +1346,19 @@ def _schema_axis_descriptor(
         f"axes.{axis_name}",
     )
     shape = _schema_variable_shape(vars_dict.get(path))
+    collection = dict(
+        context.get("dataset_collections", {}).get(dataset, {}) or {}
+    )
+    axis_key_group = str(axis.get("file", "") or "")
+    if collection and str(collection.get("source_collection_axis", "") or "") == axis_name:
+        axis_key_group = str(collection.get("source_collection_id", "") or axis_key_group)
     descriptor: Dict[str, Any] = {
         "id": str(axis_name),
         "key": ":".join(
             part
             for part in (
                 str(context.get("schema_name", "") or ""),
-                str(axis.get("file", "") or ""),
+                axis_key_group,
                 str(axis_name),
             )
             if part
@@ -1202,6 +1373,23 @@ def _schema_axis_descriptor(
     }
     if "dimension" in axis:
         descriptor["dimension"] = int(axis["dimension"])
+    if collection and str(collection.get("source_collection_axis", "") or "") == axis_name:
+        descriptor.update(
+            {
+                "source_collection_id": str(
+                    collection.get("source_collection_id", "") or ""
+                ),
+                "collection_offset": int(
+                    collection.get("source_collection_offset", 0) or 0
+                ),
+                "collection_length": int(
+                    collection.get("source_collection_length", 0) or 0
+                ),
+                "collection_total_length": int(
+                    collection.get("source_collection_total_length", 0) or 0
+                ),
+            }
+        )
     if include_values:
         if len(shape) > 1:
             raise ValueError(
@@ -1563,6 +1751,9 @@ def _build_schema_time_context(
         "group_step_metadata": {},
         "group_frame_metadata": {},
         "file_groups": schema_layout.get("file_groups", {}) or {},
+        "source_collections": schema_layout.get("source_collections", {}) or {},
+        "dataset_collections": {},
+        "source_collection_members": {},
         "axes": schema_layout.get("axes", {}) or {},
         "timeline": schema_layout.get("timeline", {}) or {},
         "meshes": schema_layout.get("meshes", {}) or {},
@@ -1695,6 +1886,134 @@ def _build_schema_time_context(
             context["group_frame_metadata"].setdefault(str(group_name), {})[index] = metadata
             if isinstance(step_index, int):
                 context["group_step_metadata"].setdefault(str(group_name), {})[step_index] = metadata
+
+    for collection_name, collection in context["source_collections"].items():
+        combine = dict(collection.get("combine", {}) or {})
+        axis_name = str(combine.get("axis", "") or "")
+        order_by = dict(combine.get("order_by", {}) or {})
+        order_variable = str(order_by.get("variable", "") or "").strip("/")
+        partition_spec = dict(combine.get("partition_label", {}) or {})
+        partition_variable = str(
+            partition_spec.get("variable", "") or ""
+        ).strip("/")
+        partition_template = str(
+            partition_spec.get("template", "{value}") or "{value}"
+        )
+        members: List[Dict[str, Any]] = []
+
+        for dataset in collection.get("datasets", []) or []:
+            dataset_name = str(dataset)
+            axis_values = _schema_axis_values(
+                context,
+                fr,
+                vars_dict or {},
+                dataset_name,
+                axis_name,
+            )
+            if not axis_values:
+                raise ValueError(
+                    f"source_collections.{collection_name} axis could not be read "
+                    f"for dataset {dataset_name!r}"
+                )
+
+            order_path = _schema_required_variable_path(
+                vars_dict or {},
+                dataset_name,
+                order_variable,
+                f"source_collections.{collection_name}.combine.order_by.variable",
+            )
+            order_values = _read_numeric_array(
+                fr,
+                order_path,
+                (vars_dict or {}).get(order_path),
+            )
+            if not order_values:
+                raise ValueError(
+                    f"source_collections.{collection_name} ordering variable "
+                    f"could not be read for dataset {dataset_name!r}"
+                )
+            order_value = float(order_values[0])
+
+            partition_value = order_value
+            if partition_variable:
+                if partition_variable == order_variable:
+                    partition_values = order_values
+                else:
+                    partition_path = _schema_required_variable_path(
+                        vars_dict or {},
+                        dataset_name,
+                        partition_variable,
+                        f"source_collections.{collection_name}.combine.partition_label.variable",
+                    )
+                    partition_values = _read_numeric_array(
+                        fr,
+                        partition_path,
+                        (vars_dict or {}).get(partition_path),
+                    )
+                if not partition_values:
+                    raise ValueError(
+                        f"source_collections.{collection_name} partition label "
+                        f"variable could not be read for dataset {dataset_name!r}"
+                    )
+                partition_value = float(partition_values[0])
+
+            members.append(
+                {
+                    "source_dataset": dataset_name,
+                    "length": len(axis_values),
+                    "order_value": order_value,
+                    "partition_value": partition_value,
+                    "partition_label": partition_template.format(
+                        value=_schema_scalar_label(partition_value)
+                    ),
+                }
+            )
+
+        members.sort(
+            key=lambda item: (
+                float(item.get("order_value", 0.0) or 0.0),
+                str(item.get("source_dataset", "") or ""),
+            )
+        )
+        offset = 0
+        for member_index, member in enumerate(members):
+            member["member_index"] = member_index
+            member["offset"] = offset
+            offset += int(member.get("length", 0) or 0)
+
+        total_length = offset
+        member_count = len(members)
+        public_members = [dict(member) for member in members]
+        context["source_collection_members"][str(collection_name)] = public_members
+        for member in members:
+            dataset_name = str(member.get("source_dataset", "") or "")
+            collection_metadata = {
+                "source_collection_id": str(collection_name),
+                "source_collection_label": str(
+                    collection.get("label", "") or collection_name
+                ),
+                "source_collection_mode": str(
+                    combine.get("mode", "") or ""
+                ),
+                "source_collection_axis": axis_name,
+                "source_collection_member_index": int(
+                    member.get("member_index", 0) or 0
+                ),
+                "source_collection_member_count": member_count,
+                "source_collection_offset": int(member.get("offset", 0) or 0),
+                "source_collection_length": int(member.get("length", 0) or 0),
+                "source_collection_total_length": total_length,
+                "source_collection_partition_value": float(
+                    member.get("partition_value", 0.0) or 0.0
+                ),
+                "source_collection_partition_label": str(
+                    member.get("partition_label", "") or ""
+                ),
+            }
+            context["dataset_collections"][dataset_name] = collection_metadata
+            context["dataset_metadata"].setdefault(dataset_name, {}).update(
+                collection_metadata
+            )
 
     if vars_dict:
         _build_schema_variable_context(

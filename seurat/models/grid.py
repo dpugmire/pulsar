@@ -44,6 +44,8 @@ def empty_grid_cell() -> GridCell:
         "_source_keys": [],
         "_source_fields_list": [],
         "source_dataset": "",
+        "source_collection_id": "",
+        "source_collection_label": "",
         "producer": "",
         "casename": "",
         "file": "",

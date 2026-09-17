@@ -190,6 +190,7 @@
         isDefault: !!parsed.default,
         index: Number.isFinite(Number(parsed.index)) ? Number(parsed.index) : 0,
         values,
+        labels: Array.isArray(parsed.labels) ? parsed.labels.map(String) : [],
         explicit: true,
       };
     } catch (_err) {
@@ -616,9 +617,15 @@
     updateAxisCompatibility(activeAxis);
     if (label) {
       if (activeAxis && activeAxis.explicit && timeline.length) {
-        label.textContent = String(activeAxis.label || "Axis") + " = "
+        const selectedIndex = timelineIndexNearest(safeSeconds, timeline);
+        const selectedLabel = Array.isArray(activeAxis.labels)
+          ? String(activeAxis.labels[selectedIndex] || "")
+          : "";
+        label.textContent = selectedLabel || (
+          String(activeAxis.label || "Axis") + " = "
           + formatTimelineValue(safeSeconds)
-          + (activeAxis.unit ? " " + activeAxis.unit : "");
+          + (activeAxis.unit ? " " + activeAxis.unit : "")
+        );
       } else if (timeline.length) {
         label.textContent = "Time = " + formatTimelineValue(safeSeconds);
       } else if (sequences.length) {

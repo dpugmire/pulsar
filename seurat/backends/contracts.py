@@ -49,6 +49,12 @@ class SourceDescriptor(TypedDict, total=False):
     variable_path: str
     source_dataset: str
     source_datasets: List[str]
+    source_collection_id: str
+    source_collection_label: str
+    source_collection_mode: str
+    source_collection_axis: str
+    source_collection_member_count: int
+    source_collection_total_length: int
     files: List[str]
     producer: str
     casename: str

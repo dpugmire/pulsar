@@ -171,6 +171,10 @@ python app.py --demo 12
 # Optional: supply a campaign schema when schema.yaml is not embedded
 python app.py campaign.aca --campaign-schema schema.yaml
 
+# Lasernet currently needs its checked-in external schema
+python app.py /path/to/lasernet.aca \
+  --campaign-schema examples/lasernet-schema.yaml
+
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
@@ -371,6 +375,35 @@ files:
     role: static
     pattern: "data/*.bp5"
 
+source_collections:
+  alignment:
+    label: Alignment
+    file: laser_runs
+    pattern: "data/alignment-*.bp5"
+    combine:
+      mode: concatenate
+      axis: shot
+      order_by:
+        variable: data/meshes/shots/run_number/value
+        reduce: first
+      partition_label:
+        variable: data/meshes/shots/run_number/value
+        template: "Run {value}"
+
+  png:
+    label: PNG
+    file: laser_runs
+    pattern: "data/png-*.bp5"
+    combine:
+      mode: concatenate
+      axis: shot
+      order_by:
+        variable: data/meshes/shots/run_number/value
+        reduce: first
+      partition_label:
+        variable: data/meshes/shots/run_number/value
+        template: "Run {value}"
+
 axes:
   shot:
     file: laser_runs
@@ -462,11 +495,22 @@ variable's parent path. For example, a variable named
 `data/meshes/traces/PNG_digitizer_Trace/signal` can be displayed as
 `PNG_digitizer_Trace` with `display_name_template: "{variable_parent_name}"`.
 
-Axis identity is based on the schema name, file group, and axis name. Tiles
-with the same selection-axis identity synchronize by coordinate value. Tiles
-with a different axis, or without the selected coordinate value, remain static
-and are marked as incompatible or unavailable. Schemas using the existing
-`x_axis`, `time_axis`, and `time_values` fields retain their previous behavior.
+Axis identity is based on the schema name, axis name, and either its file group
+or source collection. Tiles with the same selection-axis identity synchronize
+by coordinate value. Tiles with a different axis, or without the selected
+coordinate value, remain static and are marked as incompatible or unavailable.
+Schemas using the existing `x_axis`, `time_axis`, and `time_values` fields
+retain their previous behavior.
+
+`source_collections` can expose several physical datasets as one logical source
+without copying or rewriting their arrays. Each collection selects a subset of
+one file group, orders its members by the first value of a schema-declared
+variable, and concatenates them along a named axis. The viewer uses a unique
+collection position internally while retaining the partition label and local
+axis coordinate for display. This is useful when shot numbers or other local
+coordinates restart in every member file. Collection members remain lazy:
+selecting a waveform row opens the member dataset that owns that position and
+reads only its local row.
 
 Visualization association notes:
 

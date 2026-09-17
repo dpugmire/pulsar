@@ -547,14 +547,19 @@ files:
     def test_lasernet_variable_groups_preserve_multiple_dimension_axes(self):
         dataset = "data/png-14387-2026-06-07.bp5"
         shot_path = f"{dataset}/data/meshes/shots/shot_number/value"
+        run_path = f"{dataset}/data/meshes/shots/run_number/value"
         scalar_path = (
             f"{dataset}/data/meshes/scalars/PNG_digitizer_Ch2_Energy/value"
         )
         signal_path = f"{dataset}/data/meshes/traces/Siglent_Ch1_Trace/signal"
         trace_time_path = f"{dataset}/data/meshes/traces/Siglent_Ch1_Trace/time"
-        values = {shot_path: [15.0, 16.0, 17.0]}
+        values = {
+            shot_path: [15.0, 16.0, 17.0],
+            run_path: [14387.0, 14387.0, 14387.0],
+        }
         variables = {
             shot_path: {"Shape": "3", "AvailableStepsCount": "1"},
+            run_path: {"Shape": "3", "AvailableStepsCount": "1"},
             scalar_path: {"Shape": "3", "AvailableStepsCount": "1"},
             signal_path: {"Shape": "3, 4", "AvailableStepsCount": "1"},
             trace_time_path: {"Shape": "3, 4", "AvailableStepsCount": "1"},
@@ -599,7 +604,86 @@ files:
             trace_time_path,
         )
         self.assertNotIn("values", trace["axes"]["trace_time"])
-        self.assertEqual(reader.reads, [(shot_path, None)])
+        self.assertEqual(
+            reader.reads,
+            [(shot_path, None), (run_path, None)],
+        )
+
+    def test_source_collections_order_members_and_build_offsets(self):
+        alignment = "data/alignment-14378-2026-06-07.bp5"
+        png_a = "data/png-14380-2026-06-07.bp5"
+        png_b = "data/png-14379-2026-06-07.bp5"
+        datasets = [png_a, alignment, png_b]
+        values = {}
+        variables = {}
+        lengths = {alignment: 2, png_a: 3, png_b: 1}
+        runs = {alignment: 14378.0, png_a: 14380.0, png_b: 14379.0}
+
+        for dataset in datasets:
+            length = lengths[dataset]
+            shot_path = f"{dataset}/data/meshes/shots/shot_number/value"
+            run_path = f"{dataset}/data/meshes/shots/run_number/value"
+            scalar_path = f"{dataset}/data/meshes/scalars/energy/value"
+            signal_path = f"{dataset}/data/meshes/traces/Scope_Trace/signal"
+            time_path = f"{dataset}/data/meshes/traces/Scope_Trace/time"
+            values[shot_path] = list(range(15, 15 + length))
+            values[run_path] = [runs[dataset]] * length
+            variables.update(
+                {
+                    shot_path: {"Shape": str(length)},
+                    run_path: {"Shape": str(length)},
+                    scalar_path: {"Shape": str(length)},
+                    signal_path: {"Shape": f"{length}, 4"},
+                    time_path: {"Shape": f"{length}, 4"},
+                }
+            )
+
+        layout = _load_campaign_schema(
+            "/campaign/lasernet.aca",
+            datasets,
+            {},
+            campaign_schema_path=str(
+                Path(__file__).with_name("fixtures")
+                / "lasernet_multi_axis_schema.yaml"
+            ),
+        )
+        context = _build_schema_time_context(
+            layout,
+            FakeReader(values),
+            variables,
+        )
+
+        png_members = context["source_collection_members"]["png"]
+        self.assertEqual(
+            [member["source_dataset"] for member in png_members],
+            [png_b, png_a],
+        )
+        self.assertEqual(
+            [(member["offset"], member["length"]) for member in png_members],
+            [(0, 1), (1, 3)],
+        )
+        metadata = _schema_metadata_for_variable(
+            context,
+            png_a,
+            "data/meshes/traces/Scope_Trace/signal",
+        )
+        self.assertEqual(metadata["source_collection_id"], "png")
+        self.assertEqual(metadata["source_collection_label"], "PNG")
+        self.assertEqual(metadata["source_collection_offset"], 1)
+        self.assertEqual(metadata["source_collection_total_length"], 4)
+        self.assertEqual(metadata["source_collection_partition_label"], "Run 14380")
+        self.assertEqual(metadata["axes"]["shot"]["key"], "lasernet:png:shot")
+
+        alignment_metadata = _schema_metadata_for_variable(
+            context,
+            alignment,
+            "data/meshes/scalars/energy/value",
+        )
+        self.assertEqual(alignment_metadata["source_collection_id"], "alignment")
+        self.assertEqual(
+            alignment_metadata["axes"]["shot"]["key"],
+            "lasernet:alignment:shot",
+        )
 
     def test_variable_group_rejects_unknown_display_name_placeholder(self):
         schema = {

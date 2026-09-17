@@ -86,6 +86,11 @@ def source_filter_from_row(row: Dict[str, Any]) -> Dict[str, str]:
     if variable_id:
         filt["variable_id"] = variable_id
 
+    source_collection_id = str(row.get("source_collection_id", "") or "")
+    if source_collection_id:
+        filt["source_collection_id"] = source_collection_id
+        return filt
+
     schema_file_group = str(row.get("schema_file_group", "") or "")
     schema_mode = str(row.get("schema_mode", "") or "")
     if schema_file_group and schema_mode == "file_per_timestep":
@@ -122,6 +127,9 @@ def source_fields_from_row(row: Dict[str, Any]) -> Dict[str, str]:
         "source_id": source_id,
         "_source_key": source_id,
         "source_dataset": str(row.get("source_dataset", "") or ""),
+        "source_collection_id": str(
+            row.get("source_collection_id", "") or ""
+        ),
         "schema_file_group": str(row.get("schema_file_group", "") or ""),
         "schema_mode": str(row.get("schema_mode", "") or ""),
         "producer": str(row.get("producer", "") or ""),
@@ -131,6 +139,9 @@ def source_fields_from_row(row: Dict[str, Any]) -> Dict[str, str]:
 
 
 def source_key_for_fields(row: Dict[str, Any]) -> str:
+    source_collection_id = str(row.get("source_collection_id", "") or "")
+    if source_collection_id:
+        return f"collection|{row.get('variable_id', '')}|{source_collection_id}"
     schema_file_group = str(row.get("schema_file_group", "") or "")
     schema_mode = str(row.get("schema_mode", "") or "")
     if schema_file_group and schema_mode == "file_per_timestep":
