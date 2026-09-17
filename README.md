@@ -512,7 +512,9 @@ position and the original identity, for example
 `710 / 768 · Run 14378 · Shot number 15`. This is useful when shot numbers or
 other local coordinates restart in every member file. Collection members remain
 lazy: selecting a waveform row opens the member dataset that owns that position
-and reads only its local row.
+and reads only its local row. Concatenated scalar variables render as one
+logical series with gaps at member boundaries; hover details retain the member
+label without adding one legend entry per physical file.
 
 Visualization association notes:
 

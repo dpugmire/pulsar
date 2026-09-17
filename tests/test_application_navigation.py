@@ -598,6 +598,44 @@ class CampaignDbNavigationTests(unittest.TestCase):
                     "source_collection_partition_value": member["partition_value"],
                 }
             )
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "delay",
+                    "variable_name": "delay",
+                    "display_name": "Delay",
+                    "variable_type": "variable",
+                    "source_dataset": dataset,
+                    "variable_path": f"{dataset}/delay",
+                    "metadata": {"Shape": str(length)},
+                    "axes": {
+                        "shot": {
+                            "id": "shot",
+                            "key": "demo:png:shot",
+                            "kind": "shot",
+                            "label": "Shot number",
+                            "variable": "shots/value",
+                            "variable_path": f"{dataset}/shots/value",
+                            "values": list(range(15, 15 + length)),
+                        },
+                    },
+                    "dimension_axes": ["shot"],
+                    "plot_x_axis": "shot",
+                    "selection_axis": "shot",
+                    "schema_default_axis": "shot",
+                    "source_collection_id": "png",
+                    "source_collection_label": "PNG",
+                    "source_collection_mode": "concatenate",
+                    "source_collection_axis": "shot",
+                    "source_collection_member_index": member["member_index"],
+                    "source_collection_member_count": 2,
+                    "source_collection_offset": member["offset"],
+                    "source_collection_length": length,
+                    "source_collection_total_length": 3,
+                    "source_collection_partition_label": member["partition_label"],
+                    "source_collection_partition_value": member["partition_value"],
+                }
+            )
 
         class PlotReader:
             def __init__(self):
@@ -612,6 +650,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
                         [[0.0, 0.5, 1.0], [0.0, 0.5, 1.0]]
                     ),
                     "run-b.bp/trace/time": np.asarray([[0.0, 0.5, 1.0]]),
+                    "run-a.bp/delay": np.asarray([100.0, 101.0]),
+                    "run-b.bp/delay": np.asarray([200.0]),
                 }
 
             def read(self, path, **kwargs):
@@ -632,6 +672,11 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 source_filter={"source_collection_id": "png"},
                 selection_index=2,
             )
+            scalar_tile = self.db.get_or_create_generated_scalar_plot_tile(
+                "/campaign/example.aca",
+                "delay",
+                source_filter={"source_collection_id": "png"},
+            )
 
         self.assertEqual(tile["source_collection_id"], "png")
         self.assertEqual(tile["plot"]["series"][0]["y"], [7.0, 8.0, 9.0])
@@ -646,6 +691,21 @@ class CampaignDbNavigationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(tile["selection_axis"]["index"], 2)
+        self.assertEqual(len(scalar_tile["plot"]["series"]), 1)
+        self.assertEqual(scalar_tile["plot"]["series"][0]["x"], [0.0, 1.0, 2.0])
+        self.assertEqual(
+            scalar_tile["plot"]["series"][0]["y"],
+            [100.0, 101.0, 200.0],
+        )
+        self.assertEqual(scalar_tile["plot"]["series"][0]["source_label"], "PNG")
+        self.assertEqual(scalar_tile["plot"]["series"][0]["breaks"], [2])
+        self.assertEqual(
+            scalar_tile["plot"]["series"][0]["point_label_ranges"],
+            [
+                {"start": 0, "end": 2, "label": "Run 10"},
+                {"start": 2, "end": 3, "label": "Run 11"},
+            ],
+        )
 
         summary = self.db.variable_min_max_summary("trace/signal")
         self.assertEqual(summary["num_sources"], 1)

@@ -2437,6 +2437,28 @@ class CampaignDb:
                     "source_label": str(item.get("source_label", "") or ""),
                     "source_key": str(item.get("source_key", "") or ""),
                     "color": colors[(len(series)) % len(colors)],
+                    **(
+                        {
+                            "breaks": [
+                                int(value)
+                                for value in item.get("breaks", []) or []
+                                if 0 < int(value) < int(x.size)
+                            ]
+                        }
+                        if item.get("breaks")
+                        else {}
+                    ),
+                    **(
+                        {
+                            "point_label_ranges": [
+                                dict(value)
+                                for value in item.get("point_label_ranges", []) or []
+                                if isinstance(value, dict)
+                            ]
+                        }
+                        if item.get("point_label_ranges")
+                        else {}
+                    ),
                 }
             )
 
@@ -2769,6 +2791,10 @@ class CampaignDb:
         selected = first
         series_values: List[Dict[str, Any]] = []
         x_label = "Collection position"
+        collection_id = str(first.get("source_collection_id", "") or "")
+        collection_label = str(
+            first.get("source_collection_label", "") or collection_id
+        )
         selection_axis_name = str(first.get("selection_axis", "") or "")
         plot_axis_name = str(first.get("plot_x_axis", "") or "")
         ndims = self._metadata_ndims(first.get("metadata", {}))
@@ -2808,6 +2834,10 @@ class CampaignDb:
             )
             axis_label = str(selection_axis.get("label", "") or "Selection")
             x_label = f"{axis_label} sequence"
+            collection_x: List[float] = []
+            collection_y: List[float] = []
+            collection_point_label_ranges: List[Dict[str, Any]] = []
+            collection_breaks: List[int] = []
             for member in members:
                 source_dataset = str(member.get("source_dataset", "") or "")
                 candidate = by_dataset.get(source_dataset)
@@ -2826,13 +2856,35 @@ class CampaignDb:
                 values = np.asarray(y, dtype=float).reshape(-1)
                 length = min(int(member.get("length", 0) or 0), int(values.size))
                 offset = int(member.get("offset", 0) or 0)
+                segment_x, segment_y = self._clean_plot_series(
+                    np.arange(offset, offset + length, dtype=float),
+                    values[:length],
+                )
+                if not segment_x.size:
+                    continue
+                if collection_x:
+                    collection_breaks.append(len(collection_x))
+                partition_label = str(
+                    member.get("partition_label", "") or source_dataset
+                )
+                label_start = len(collection_x)
+                collection_x.extend(float(value) for value in segment_x)
+                collection_y.extend(float(value) for value in segment_y)
+                collection_point_label_ranges.append(
+                    {
+                        "start": label_start,
+                        "end": len(collection_x),
+                        "label": partition_label,
+                    }
+                )
+            if collection_x:
                 series_values.append(
                     {
-                        "x": np.arange(offset, offset + length, dtype=float),
-                        "y": values[:length],
-                        "source_label": str(
-                            member.get("partition_label", "") or source_dataset
-                        ),
+                        "x": collection_x,
+                        "y": collection_y,
+                        "source_label": collection_label,
+                        "breaks": collection_breaks,
+                        "point_label_ranges": collection_point_label_ranges,
                     }
                 )
 
@@ -2849,10 +2901,6 @@ class CampaignDb:
         if plot_axis:
             plot["x_axis_key"] = str(plot_axis.get("key", "") or "")
 
-        collection_id = str(first.get("source_collection_id", "") or "")
-        collection_label = str(
-            first.get("source_collection_label", "") or collection_id
-        )
         tile = {
             "variable_name": display_name,
             "display_title": display_name,
