@@ -363,6 +363,57 @@ def _visualization_operation(tile: Dict[str, Any], row: Dict[str, Any]) -> str:
     return ""
 
 
+def _visualization_artifact_labels(
+    tile: Dict[str, Any],
+    row: Dict[str, Any],
+    visualization_name: str,
+) -> tuple[str, str]:
+    technical_name = _text(visualization_name)
+    if not technical_name.startswith("plugin:"):
+        return technical_name, ""
+    media_type = _first_text(tile, "media_type") or _first_text(row, "media_type")
+    artifact_labels = {
+        "plot1d": "1D plot",
+        "image": "Image",
+        "video": "Movie",
+    }
+    artifact_label = artifact_labels.get(media_type.casefold(), "Visualization")
+    title = _first_text(tile, "display_title") or _first_text(
+        row,
+        "display_title",
+    )
+    return artifact_label, title or technical_name
+
+
+def _visualization_artifact_node(
+    tile: Dict[str, Any],
+    row: Dict[str, Any],
+    visualization_name: str,
+    visualization_operation: str,
+) -> Dict[str, Any]:
+    artifact_label, artifact_title = _visualization_artifact_labels(
+        tile,
+        row,
+        visualization_name,
+    )
+    node = _provenance_node(
+        "visualization",
+        "visualization",
+        visualization_name,
+        "box",
+        details=_detail_rows(
+            ("Visualization", visualization_name),
+            ("Artifact", artifact_label),
+            ("Title", artifact_title),
+            ("Operation", visualization_operation),
+        ),
+    )
+    if artifact_label and artifact_label != visualization_name:
+        node["display_label"] = artifact_label
+        node["secondary_label"] = artifact_title or visualization_name
+    return node
+
+
 def _chain(*parts: Any) -> str:
     return " --> ".join(_text(part) for part in parts if _text(part))
 
@@ -716,12 +767,44 @@ def _visualization_details(
     )
     details.extend(_input_table_detail(input_items))
     metadata = _activity_metadata(dict(activity_provenance or {}))
+    plugin = _dict_value(metadata.get("plugin", {}))
+    execution = _dict_value(metadata.get("execution", {}))
+    scientific_context = _dict_value(metadata.get("scientific_context", {}))
+    additional_scientific_context = {
+        key: value
+        for key, value in scientific_context.items()
+        if key
+        not in {"intent", "hypothesis", "observations", "conclusion", "outcome"}
+    }
     details.extend(
         _detail_rows(
+            ("Plugin", plugin.get("id", "")),
+            ("Plugin module", plugin.get("module", "")),
+            ("Plugin version", plugin.get("version", "")),
             ("Steps", _provenance_detail_value(metadata.get("steps", ""))),
             (
                 "Rendering",
                 _provenance_detail_value(metadata.get("rendering_parameters", "")),
+            ),
+            (
+                "Execution",
+                _provenance_detail_value(execution) if execution else "",
+            ),
+            ("Intent", scientific_context.get("intent", "")),
+            ("Hypothesis", scientific_context.get("hypothesis", "")),
+            (
+                "Observations",
+                _provenance_detail_value(
+                    scientific_context.get("observations", "")
+                ),
+            ),
+            ("Conclusion", scientific_context.get("conclusion", "")),
+            ("Outcome", scientific_context.get("outcome", "")),
+            (
+                "Scientific context",
+                _provenance_detail_value(additional_scientific_context)
+                if additional_scientific_context
+                else "",
             ),
         )
     )
@@ -1311,6 +1394,14 @@ def _details_provenance_summary(
 
     if visualization_name:
         visualization_operation = _visualization_operation(tile, row)
+        visualization_artifact, visualization_title = (
+            _visualization_artifact_labels(
+                tile,
+                row,
+                visualization_name,
+            )
+        )
+        visualization_output = visualization_title or visualization_artifact
         visualization_activity_provenance = _dict_value(
             tile.get("visualization_activity_provenance")
             or row.get("visualization_activity_provenance")
@@ -1355,7 +1446,7 @@ def _details_provenance_summary(
                 activity_provenance.get("activity_operation", "") or ""
             )
             chain = _chain(
-                visualization_name,
+                visualization_artifact,
                 activity,
                 input_label,
                 derived_activity,
@@ -1363,21 +1454,17 @@ def _details_provenance_summary(
                 derived_source_label,
             )
             nodes = [
-                _provenance_node(
-                    "visualization",
-                    "visualization",
+                _visualization_artifact_node(
+                    tile,
+                    row,
                     visualization_name,
-                    "box",
-                    details=_detail_rows(
-                        ("Visualization", visualization_name),
-                        ("Kind", visualization_operation),
-                    ),
+                    visualization_operation,
                 ),
                 _activity_provenance_node(
                     activity,
                     "visualization-activity",
                     details=_visualization_details(
-                        visualization_name,
+                        visualization_output,
                         visualization_operation,
                         input_items,
                         visualization_input_source_label,
@@ -1460,7 +1547,7 @@ def _details_provenance_summary(
                 "kind": "visualization",
                 "chain": chain,
                 "compact": _compact_visualization_breadcrumb(
-                    visualization_name,
+                    visualization_artifact,
                     visualization_operation,
                     input_label,
                     input_items,
@@ -1476,22 +1563,23 @@ def _details_provenance_summary(
                 ),
             }
         input_label = " + ".join(inputs) if inputs else variable_name
-        chain = _chain(visualization_name, activity, input_label, source_label)
+        chain = _chain(
+            visualization_artifact,
+            activity,
+            input_label,
+            source_label,
+        )
         nodes = [
-            _provenance_node(
-                "visualization",
-                "visualization",
+            _visualization_artifact_node(
+                tile,
+                row,
                 visualization_name,
-                "box",
-                details=_detail_rows(
-                    ("Visualization", visualization_name),
-                    ("Kind", visualization_operation),
-                ),
+                visualization_operation,
             ),
             _activity_provenance_node(
                 activity,
                 details=_visualization_details(
-                    visualization_name,
+                    visualization_output,
                     visualization_operation,
                     input_items,
                     source_label,
@@ -1512,7 +1600,7 @@ def _details_provenance_summary(
             "kind": "visualization",
             "chain": chain,
             "compact": _compact_visualization_breadcrumb(
-                visualization_name,
+                visualization_artifact,
                 visualization_operation,
                 input_label,
                 input_items,
@@ -1827,6 +1915,7 @@ Notes:
         preferred_source_keys: Optional[List[str]] = None,
         include_visualization_provenance: bool = False,
         preferred_visualization: str = "",
+        provenance_tile: Optional[Dict[str, Any]] = None,
     ):
         var_id = str(variable_id or "").strip()
         if not var_id:
@@ -1842,6 +1931,27 @@ Notes:
         )
         qf = self.active_query_filter()
         preferred_vis = str(preferred_visualization or "").strip()
+        selected_provenance_tile = dict(provenance_tile or {})
+        if include_visualization_provenance and not selected_provenance_tile:
+            try:
+                active_cell = int(self.state.activeGridCell)
+            except Exception:
+                active_cell = -1
+            grid_cells = list(self.state.gridCells or [])
+            if 0 <= active_cell < len(grid_cells):
+                candidate_tile = dict(grid_cells[active_cell] or {})
+                candidate_variable = _first_text(
+                    candidate_tile,
+                    "variable_id",
+                    "variable_name",
+                )
+                candidate_visualization = _first_text(
+                    candidate_tile,
+                    "selected_visualization",
+                    "visualization_name",
+                )
+                if candidate_variable == var_id and candidate_visualization:
+                    selected_provenance_tile = candidate_tile
         summary = self.application.get_source_summary(
             {"variable_id": var_id, "query": qf or {}}
         )
@@ -1921,8 +2031,17 @@ Notes:
                 self.state.movieStatus = "No sources selected"
                 self.update_details_provenance(
                     label,
-                    selected_rows,
-                    [],
+                    selected_rows
+                    or (
+                        [selected_provenance_tile]
+                        if selected_provenance_tile
+                        else []
+                    ),
+                    (
+                        [selected_provenance_tile]
+                        if selected_provenance_tile
+                        else []
+                    ),
                     include_visualization=include_visualization_provenance,
                 )
                 return
@@ -2008,7 +2127,12 @@ Notes:
             self.update_details_provenance(
                 label,
                 selected_rows,
-                tiles,
+                (
+                    [selected_provenance_tile]
+                    if include_visualization_provenance
+                    and selected_provenance_tile
+                    else tiles
+                ),
                 include_visualization=include_visualization_provenance,
             )
         except Exception as e:
@@ -2020,8 +2144,18 @@ Notes:
             )
             self.update_details_provenance(
                 label,
-                selected_rows,
-                [],
+                selected_rows
+                or (
+                    [selected_provenance_tile]
+                    if selected_provenance_tile
+                    else []
+                ),
+                (
+                    [selected_provenance_tile]
+                    if include_visualization_provenance
+                    and selected_provenance_tile
+                    else []
+                ),
                 include_visualization=include_visualization_provenance,
             )
 

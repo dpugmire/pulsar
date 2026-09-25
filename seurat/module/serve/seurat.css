@@ -237,7 +237,7 @@
 .seurat-provenance-plan-group-header {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 6px 10px;
   border-bottom: 1px solid #d7c2eb;
@@ -263,11 +263,18 @@
   color: #442064;
   text-align: left;
 }
+.seurat-provenance-graph.is-expandable .seurat-provenance-plan-group-header .seurat-provenance-node.is-plan.is-expanded {
+  align-items: stretch;
+  flex-direction: column;
+}
 .seurat-provenance-graph.is-expandable .seurat-provenance-plan-group-header .seurat-provenance-node-label {
   align-self: center;
   font-size: 14px;
   white-space: nowrap;
   overflow-wrap: normal;
+}
+.seurat-provenance-graph.is-expandable .seurat-provenance-plan-group-header .seurat-provenance-node.is-plan.is-expanded .seurat-provenance-node-label {
+  align-self: flex-start;
 }
 .seurat-provenance-graph.is-expandable .seurat-provenance-plan-group-header .seurat-provenance-node-details {
   padding: 8px;

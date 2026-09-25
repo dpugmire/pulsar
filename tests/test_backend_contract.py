@@ -791,6 +791,70 @@ class BackendInjectionTests(unittest.TestCase):
             "[0, 1]",
         )
 
+        plugin_tile = {
+            "variable_id": "energy",
+            "variable_name": "Energy",
+            "visualization_name": "plugin:profile_timeseries",
+            "selected_visualization": "plugin:profile_timeseries",
+            "display_title": "Energy profile time series",
+            "media_type": "plot1d",
+            "source_dataset": "run/output.bp",
+            "status": "ok",
+            "visualization_variables": [
+                {
+                    "name": "Energy",
+                    "variable_id": "energy",
+                    "source_dataset": "run/output.bp",
+                    "roles": ["source"],
+                }
+            ],
+            "visualization_activity_provenance": {
+                "activity_kind": "visualization",
+                "activity_operation": "profile_timeseries",
+                "workflow_plan": {
+                    "label": "Scalar/profile time series workflow"
+                },
+                "activity_agent": {
+                    "label": "Scalar/profile time series",
+                    "type": "SoftwareAgent",
+                    "version": "1.0",
+                },
+            },
+        }
+        state.gridCells = [plugin_tile]
+        state.activeGridCell = 0
+        owner.update_selected_var_panels(
+            "energy",
+            include_visualization_provenance=True,
+            preferred_visualization="plugin:profile_timeseries",
+        )
+
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "1D plot --> visualization: profile_timeseries --> Energy --> run/output",
+        )
+        self.assertEqual(
+            state.detailsProvenanceCompact,
+            "1D plot = profile_timeseries(Energy) : run/output.bp",
+        )
+        output_node = state.detailsProvenanceNodes[0]
+        self.assertEqual(output_node["label"], "plugin:profile_timeseries")
+        self.assertEqual(output_node["display_label"], "1D plot")
+        self.assertEqual(
+            output_node["secondary_label"],
+            "Energy profile time series",
+        )
+        plugin_plan = state.detailsProvenanceGraph[2]
+        self.assertEqual(plugin_plan["type"], "plan_group")
+        self.assertEqual(
+            plugin_plan["plan"]["label"],
+            "Scalar/profile time series workflow",
+        )
+        self.assertEqual(
+            plugin_plan["selected_action"]["agent"]["label"],
+            "Scalar/profile time series",
+        )
+
     def test_controller_details_show_streamline_activity_inputs(self):
         backend = FakeCatalogBackend(source_summary=source_summary_with_one_source())
         state = RecordingState()

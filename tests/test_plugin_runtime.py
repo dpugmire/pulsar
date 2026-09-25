@@ -190,6 +190,123 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
 
 
 class AxisPluginRuntimeTests(unittest.TestCase):
+    def test_plugin_render_adds_execution_and_scientific_provenance(self):
+        candidate = {
+            "variable_id": "rho",
+            "variable_name": "Density",
+            "variable_path": "run.bp/rho",
+            "metadata": {"Shape": "4,4"},
+            "source_fields": {"source_dataset": "run/output.bp"},
+        }
+        plugin = types.SimpleNamespace(
+            __name__="example_plugins.density",
+            PLUGIN_ID="density-heatmap",
+            LABEL="Density heatmap",
+            PLUGIN_VERSION="2.1",
+            options_schema=lambda _meta: [
+                {
+                    "key": "colormap",
+                    "type": "select",
+                    "label": "Colormap",
+                    "choices": ["viridis", "plasma"],
+                    "default": "viridis",
+                }
+            ],
+            render=lambda _ctx: {
+                "media_type": "image",
+                "status": "ok",
+                "visualization_activity_provenance": {
+                    "workflow_plan": {"label": "Custom density workflow"}
+                },
+            },
+            provenance=lambda _ctx, _tile: {
+                "intent": "Inspect density structure.",
+                "hypothesis": "A sharp interface is present.",
+                "observations": ["The interface is displaced."],
+                "conclusion": "The interface moved.",
+                "outcome": "supported",
+            },
+        )
+
+        with patch("plugin_runtime.load_plugin", return_value=plugin):
+            tile = plugin_runtime.render_plugin_tile(
+                "/campaign/example.aca",
+                "density-heatmap",
+                candidate,
+                options={"colormap": "plasma"},
+            )
+
+        execution = tile["plugin_execution_provenance"]
+        provenance = tile["visualization_activity_provenance"]
+        self.assertEqual(execution["plugin_id"], "density-heatmap")
+        self.assertEqual(execution["plugin_module"], "example_plugins.density")
+        self.assertEqual(execution["plugin_version"], "2.1")
+        self.assertEqual(execution["normalized_options"], {"colormap": "plasma"})
+        self.assertEqual(execution["input_variables"], ["rho"])
+        self.assertEqual(execution["source_datasets"], ["run/output.bp"])
+        self.assertEqual(execution["status"], "success")
+        self.assertEqual(
+            execution["scientific_context"]["outcome"],
+            "supported",
+        )
+        self.assertEqual(
+            provenance["workflow_plan"]["label"],
+            "Custom density workflow",
+        )
+        self.assertEqual(
+            provenance["activity_agent"],
+            {
+                "label": "Density heatmap",
+                "type": "SoftwareAgent",
+                "version": "2.1",
+            },
+        )
+        self.assertEqual(
+            provenance["activity_metadata"]["scientific_context"]["conclusion"],
+            "The interface moved.",
+        )
+        self.assertEqual(
+            tile["visualization_variables"],
+            [
+                {
+                    "name": "Density",
+                    "roles": ["source"],
+                    "source_dataset": "run/output.bp",
+                    "variable_id": "rho",
+                }
+            ],
+        )
+
+    def test_plugin_provenance_hook_failure_does_not_discard_plot(self):
+        candidate = {
+            "variable_id": "rho",
+            "variable_name": "Density",
+            "source_fields": {"source_dataset": "run/output.bp"},
+        }
+
+        def fail_provenance(_ctx, _tile):
+            raise RuntimeError("annotation failed")
+
+        plugin = types.SimpleNamespace(
+            PLUGIN_ID="density-test",
+            LABEL="Density test",
+            render=lambda _ctx: {"media_type": "plot1d", "status": "ok"},
+            provenance=fail_provenance,
+        )
+
+        with patch("plugin_runtime.load_plugin", return_value=plugin):
+            tile = plugin_runtime.render_plugin_tile(
+                "/campaign/example.aca",
+                "density-test",
+                candidate,
+            )
+
+        self.assertEqual(tile["status"], "ok")
+        self.assertEqual(
+            tile["plugin_execution_provenance"]["annotation_error_type"],
+            "RuntimeError",
+        )
+
     def test_plugin_meta_and_tile_preserve_axis_semantics(self):
         shot_key = "lasernet:laser_runs:shot"
         axes = {

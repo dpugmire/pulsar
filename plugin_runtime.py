@@ -9,10 +9,12 @@ import json
 import math
 import os
 import sys
+import time
 import types
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from adios2 import FileReader
@@ -266,6 +268,235 @@ def _load_module_from_path(module_name: str, path: Path):
 def plugin_scope(plugin_id: str) -> str:
     info = plugin_info(plugin_id)
     return info.scope if info is not None else ""
+
+
+def _utc_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _plugin_version(mod: Any) -> str:
+    for name in ("PLUGIN_VERSION", "VERSION", "__version__"):
+        value = str(getattr(mod, name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _provenance_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _provenance_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_provenance_value(item) for item in value]
+    return str(value)
+
+
+def _merge_provenance(
+    defaults: Dict[str, Any],
+    supplied: Any,
+) -> Dict[str, Any]:
+    merged = dict(defaults)
+    if not isinstance(supplied, Mapping):
+        return merged
+    for key, value in supplied.items():
+        name = str(key)
+        if isinstance(value, Mapping) and isinstance(merged.get(name), Mapping):
+            merged[name] = _merge_provenance(
+                dict(merged[name]),
+                value,
+            )
+        else:
+            merged[name] = _provenance_value(value)
+    return merged
+
+
+def _plugin_input_items(
+    meta: Dict[str, Any],
+    tile: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    source_dataset = str(meta.get("source_dataset", "") or "")
+    supplied: List[Dict[str, Any]] = []
+    for raw_item in list(tile.get("visualization_variables", []) or []):
+        if isinstance(raw_item, str):
+            raw_item = {"name": raw_item}
+        if not isinstance(raw_item, Mapping):
+            continue
+        item = dict(_provenance_value(raw_item))
+        name = str(
+            item.get("name", "")
+            or item.get("variable_name", "")
+            or item.get("variable_id", "")
+            or item.get("definition", "")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        item.setdefault("name", name)
+        item.setdefault("roles", ["source"])
+        if source_dataset:
+            item.setdefault("source_dataset", source_dataset)
+        supplied.append(item)
+    if supplied:
+        return supplied
+
+    name = str(
+        meta.get("variable_name", "")
+        or meta.get("variable_id", "")
+        or meta.get("variable_path", "")
+        or ""
+    ).strip()
+    if not name:
+        return []
+    item: Dict[str, Any] = {"name": name, "roles": ["source"]}
+    if source_dataset:
+        item["source_dataset"] = source_dataset
+    variable_id = str(meta.get("variable_id", "") or "").strip()
+    if variable_id:
+        item["variable_id"] = variable_id
+    return [item]
+
+
+def _plugin_scientific_context(
+    mod: Any,
+    ctx: Dict[str, Any],
+    tile: Dict[str, Any],
+) -> tuple[Dict[str, Any], str]:
+    hook = getattr(mod, "provenance", None)
+    if not callable(hook):
+        return {}, ""
+    try:
+        value = hook(ctx, tile)
+    except Exception as error:
+        return {}, type(error).__name__
+    if value is None:
+        return {}, ""
+    if not isinstance(value, Mapping):
+        return {}, "TypeError"
+    return dict(_provenance_value(value)), ""
+
+
+def _attach_plugin_provenance(
+    tile: Dict[str, Any],
+    *,
+    mod: Any,
+    plugin_id: str,
+    scope: str,
+    meta: Dict[str, Any],
+    options: Dict[str, Any],
+    ctx: Dict[str, Any],
+    started_at_utc: str,
+    started_monotonic: float,
+) -> None:
+    ended_at_utc = _utc_timestamp()
+    duration_ms = max(0, int((time.monotonic() - started_monotonic) * 1000))
+    label = str(getattr(mod, "LABEL", "") or plugin_id)
+    module_name = str(getattr(mod, "__name__", "") or plugin_id)
+    version = _plugin_version(mod)
+    inputs = _plugin_input_items(meta, tile)
+    source_datasets = sorted(
+        {
+            str(item.get("source_dataset", "") or "")
+            for item in inputs
+            if str(item.get("source_dataset", "") or "")
+        }
+    )
+    scientific_context, annotation_error = _plugin_scientific_context(
+        mod,
+        ctx,
+        tile,
+    )
+    output = {
+        "media_type": str(tile.get("media_type", "") or ""),
+        "status": str(tile.get("status", "") or "ok"),
+    }
+    execution = {
+        "plugin_id": plugin_id,
+        "plugin_label": label,
+        "plugin_module": module_name,
+        "plugin_version": version,
+        "plugin_scope": scope,
+        "started_at_utc": started_at_utc,
+        "ended_at_utc": ended_at_utc,
+        "duration_ms": duration_ms,
+        "status": "success",
+        "normalized_options": _provenance_value(options),
+        "input_variables": [
+            str(item.get("variable_id", "") or item.get("name", "") or "")
+            for item in inputs
+        ],
+        "source_datasets": source_datasets,
+        "output": output,
+    }
+    if scientific_context:
+        execution["scientific_context"] = scientific_context
+    if annotation_error:
+        execution["annotation_error_type"] = annotation_error
+
+    selection = {
+        "variables": execution["input_variables"],
+        "source_datasets": source_datasets,
+    }
+    activity_metadata: Dict[str, Any] = {
+        "plugin": {
+            "id": plugin_id,
+            "label": label,
+            "module": module_name,
+            "version": version,
+            "scope": scope,
+        },
+        "execution": {
+            "started_at_utc": started_at_utc,
+            "ended_at_utc": ended_at_utc,
+            "duration_ms": duration_ms,
+            "status": "success",
+            "output": output,
+        },
+        "rendering_parameters": _provenance_value(options),
+    }
+    if scientific_context:
+        activity_metadata["scientific_context"] = scientific_context
+    if annotation_error:
+        activity_metadata["annotation_error_type"] = annotation_error
+
+    automatic = {
+        "activity_kind": "visualization",
+        "activity_operation": plugin_id,
+        "activity_metadata": activity_metadata,
+        "inputs": inputs,
+        "workflow_plan": {
+            "label": f"{label} workflow",
+            "location": module_name,
+            "details": {
+                "workflow": plugin_id,
+                "implementation_dataset": module_name,
+                "selection": selection,
+                "parameters": _provenance_value(options),
+                "output_policy": output,
+            },
+        },
+        "activity_agent": {
+            "label": label,
+            "type": "SoftwareAgent",
+            "version": version,
+        },
+    }
+    tile["visualization_activity_provenance"] = _merge_provenance(
+        automatic,
+        tile.get("visualization_activity_provenance"),
+    )
+    tile["plugin_execution_provenance"] = execution
+    if inputs and not tile.get("visualization_variables"):
+        tile["visualization_variables"] = inputs
 
 
 def normalize_options_schema(raw: Any) -> List[Dict[str, Any]]:
@@ -551,6 +782,8 @@ def render_plugin_tile(
     if not callable(render):
         raise ValueError(f"Plugin {plugin_id} has no render(ctx)")
 
+    started_at_utc = _utc_timestamp()
+    started_monotonic = time.monotonic()
     tile = render(ctx)
     if not isinstance(tile, dict):
         raise ValueError(f"Plugin {plugin_id} returned {type(tile).__name__}, expected dict")
@@ -562,6 +795,17 @@ def render_plugin_tile(
     tile["visualization_name"] = plugin_visualization_name(plugin_id)
     tile["selected_visualization"] = plugin_visualization_name(plugin_id)
     tile["visualization_options"] = [plugin_visualization_name(plugin_id)]
+    _attach_plugin_provenance(
+        tile,
+        mod=mod,
+        plugin_id=plugin_id,
+        scope="variable",
+        meta=meta,
+        options=normalized_options,
+        ctx=ctx,
+        started_at_utc=started_at_utc,
+        started_monotonic=started_monotonic,
+    )
     axes = dict(meta.get("axes", {}) or {})
     if axes:
         plot_axis_name = str(meta.get("plot_x_axis", "") or "")
@@ -623,6 +867,8 @@ def render_source_plugin_tile(
     if not callable(render):
         raise ValueError(f"Plugin {plugin_id} has no render(ctx)")
 
+    started_at_utc = _utc_timestamp()
+    started_monotonic = time.monotonic()
     tile = render(ctx)
     if not isinstance(tile, dict):
         raise ValueError(f"Plugin {plugin_id} returned {type(tile).__name__}, expected dict")
@@ -635,6 +881,17 @@ def render_source_plugin_tile(
     tile["selected_visualization"] = plugin_visualization_name(plugin_id)
     tile["visualization_options"] = [plugin_visualization_name(plugin_id)]
     tile["plugin_scope"] = "source"
+    _attach_plugin_provenance(
+        tile,
+        mod=mod,
+        plugin_id=plugin_id,
+        scope="source",
+        meta=meta,
+        options=normalized_options,
+        ctx=ctx,
+        started_at_utc=started_at_utc,
+        started_monotonic=started_monotonic,
+    )
     return tile
 
 

@@ -19,10 +19,10 @@ from ui import build_ui
 
 class SeuratAppTests(unittest.TestCase):
     def test_browser_assets_use_current_cache_namespace(self):
-        self.assertEqual(seurat_module.BASE_URL, "seurat_0_1_10")
+        self.assertEqual(seurat_module.BASE_URL, "seurat_0_1_11")
         self.assertEqual(
             seurat_module.styles,
-            ["seurat_0_1_10/seurat.css"],
+            ["seurat_0_1_11/seurat.css"],
         )
 
     def test_provenance_panel_styles_enable_bounded_two_axis_resize(self):

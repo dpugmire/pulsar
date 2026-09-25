@@ -1,6 +1,8 @@
 """Visualization, plot, scalar-field, and plugin controller behavior."""
 
 import asyncio
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
@@ -27,6 +29,7 @@ from plugin_runtime import (
     normalize_plugin_options,
 )
 from query_parser import and_filter
+from seurat.learning.context import stable_fingerprint
 from seurat.models import plot as plot_model
 from seurat.models.plugin_options import plugin_option_rows, plugin_options_from_rows
 from seurat.models.grid import (
@@ -132,6 +135,108 @@ class VisualizationControllerMixin:
             if name and name not in out:
                 out.append(name)
         return out
+
+    def execute_plugin_render(
+        self,
+        *,
+        plugin_id: str,
+        plugin_scope_name: str,
+        variable_id: str,
+        source_dataset: str,
+        options: Dict[str, Any],
+        renderer,
+    ) -> Dict[str, Any]:
+        started_at_utc = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        started_monotonic = time.monotonic()
+        tile: Dict[str, Any] = {}
+        error = None
+        try:
+            tile = renderer()
+            return tile
+        except Exception as caught:
+            error = caught
+            raise
+        finally:
+            execution = dict(tile.get("plugin_execution_provenance", {}) or {})
+            ended_at_utc = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
+            status = "failure" if error is not None else "success"
+            input_variables = [
+                str(value or "")
+                for value in list(execution.get("input_variables", []) or [])
+                if str(value or "")
+            ]
+            if variable_id and variable_id not in input_variables:
+                input_variables.insert(0, variable_id)
+            source_datasets = [
+                str(value or "")
+                for value in list(execution.get("source_datasets", []) or [])
+                if str(value or "")
+            ]
+            if source_dataset and source_dataset not in source_datasets:
+                source_datasets.insert(0, source_dataset)
+            payload: Dict[str, Any] = {
+                "plugin_id": str(
+                    execution.get("plugin_id", "") or plugin_id or ""
+                ),
+                "plugin_label": str(
+                    execution.get("plugin_label", "") or plugin_id or ""
+                ),
+                "plugin_module": str(execution.get("plugin_module", "") or ""),
+                "plugin_version": str(execution.get("plugin_version", "") or ""),
+                "plugin_scope": str(
+                    execution.get("plugin_scope", "")
+                    or plugin_scope_name
+                    or "variable"
+                ),
+                "started_at_utc": str(
+                    execution.get("started_at_utc", "") or started_at_utc
+                ),
+                "ended_at_utc": str(
+                    execution.get("ended_at_utc", "") or ended_at_utc
+                ),
+                "duration_ms": int(
+                    execution.get("duration_ms", 0)
+                    or max(
+                        0,
+                        int((time.monotonic() - started_monotonic) * 1000),
+                    )
+                ),
+                "status": status,
+                "normalized_options": dict(
+                    execution.get("normalized_options", {}) or options or {}
+                ),
+                "input_variables": input_variables,
+                "source_ids": [
+                    stable_fingerprint(value, "source")
+                    for value in source_datasets
+                ],
+                "query_id": str(self._interaction_query_id or ""),
+            }
+            if execution.get("output"):
+                payload["output"] = dict(execution["output"])
+            if execution.get("scientific_context"):
+                payload["scientific_context"] = dict(
+                    execution["scientific_context"]
+                )
+            if execution.get("annotation_error_type"):
+                payload["annotation_error_type"] = str(
+                    execution["annotation_error_type"]
+                )
+            if error is not None:
+                payload["error_type"] = type(error).__name__
+            self.record_interaction(
+                "plugin.executed",
+                source="plugin_runtime",
+                payload=payload,
+            )
 
     def active_selection_axis_cell_index(
         self,
@@ -377,11 +482,25 @@ class VisualizationControllerMixin:
             else dict(existing.get("plugin_options", {}) or {})
         )
         options = normalize_plugin_options(schema, raw_options)
-        tile = render_source_plugin_tile(
-            self.campaign_path, plugin, meta, options=options
+        source_fields = dict(meta.get("source_fields", {}) or {})
+        tile = self.execute_plugin_render(
+            plugin_id=plugin,
+            plugin_scope_name="source",
+            variable_id=str(meta.get("variable_id", "") or ""),
+            source_dataset=str(
+                meta.get("source_dataset", "")
+                or source_fields.get("source_dataset", "")
+                or ""
+            ),
+            options=options,
+            renderer=lambda: render_source_plugin_tile(
+                self.campaign_path,
+                plugin,
+                meta,
+                options=options,
+            ),
         )
 
-        source_fields = dict(meta.get("source_fields", {}) or {})
         tile.update({k: v for k, v in source_fields.items() if v})
         source_key = str(source_fields.get("_source_key", "") or "")
         tile["_source_keys"] = [source_key] if source_key else []
@@ -1464,8 +1583,18 @@ class VisualizationControllerMixin:
             else dict((existing_cell or {}).get("plugin_options", {}) or {})
         )
         options = normalize_plugin_options(schema, raw_options)
-        tile = render_plugin_tile(
-            self.campaign_path, plugin_id, candidate, options=options
+        tile = self.execute_plugin_render(
+            plugin_id=plugin_id,
+            plugin_scope_name="variable",
+            variable_id=var_id,
+            source_dataset=str(meta.get("source_dataset", "") or ""),
+            options=options,
+            renderer=lambda: render_plugin_tile(
+                self.campaign_path,
+                plugin_id,
+                candidate,
+                options=options,
+            ),
         )
         label = self.variable_label(var_id)
         source_fields = self.source_fields_for_assignment(
@@ -2114,6 +2243,17 @@ class VisualizationControllerMixin:
 
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.state.activeGridCell = idx
+        current_cell = dict(self.state.gridCells[idx] or {})
+        self.set_details_provenance_context(True)
+        self.state.selectedVar = var_id
+        self.state.draggedVar = var_id
+        self.update_selected_var_panels(
+            var_id,
+            preferred_source_key=str(current_cell.get("_source_key", "") or ""),
+            include_visualization_provenance=True,
+            preferred_visualization=selected_vis,
+            provenance_tile=current_cell,
+        )
         self.state.pluginOptionsStatus = ""
         self.state.showPluginOptionsModal = False
 

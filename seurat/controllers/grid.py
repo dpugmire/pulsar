@@ -1341,6 +1341,7 @@ class GridControllerMixin:
                         or cells[idx].get("visualization_name", "")
                         or ""
                     ),
+                    provenance_tile=dict(cells[idx] or {}),
                 )
             return
 
@@ -1364,6 +1365,7 @@ class GridControllerMixin:
                     or cells[idx].get("visualization_name", "")
                     or ""
                 ),
+                provenance_tile=dict(cells[idx] or {}),
             )
             return
 
@@ -2095,6 +2097,7 @@ class GridControllerMixin:
                 or current_cell.get("visualization_name", "")
                 or ""
             ),
+            provenance_tile=current_cell,
         )
         previous_visualization = str(
             previous_cell.get("selected_visualization", "")

@@ -617,6 +617,33 @@ def render(ctx):
     ...
 ```
 
+Every plugin render automatically adds visualization provenance for the plugin
+workflow, action, software agent, normalized options, inputs, output type,
+execution timing, and success status. Seurat shows that record in the
+provenance viewer and, when interaction logging is enabled, writes a
+`plugin.executed` event for successful and failed attempts.
+
+Plugins may optionally provide scientific context without constructing the
+full provenance record themselves:
+
+```python
+PLUGIN_VERSION = "1.0"
+
+def provenance(ctx, tile):
+    return {
+        "intent": "Compare the observed profile with the expected decay.",
+        "hypothesis": "The edge profile follows an exponential decay.",
+        "observations": ["The outer points depart from the fitted curve."],
+        "conclusion": "A single exponential is insufficient.",
+        "outcome": "rejected",
+    }
+```
+
+The hook is optional and does not affect rendering. If it raises an exception,
+Seurat keeps the plot and records the annotation error type. A plugin may still
+return `visualization_activity_provenance` directly when it needs to override
+the automatically generated workflow, action, agent, or input description.
+
 Minimal source/run plugin:
 
 ```python
