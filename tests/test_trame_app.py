@@ -18,6 +18,33 @@ from ui import build_ui
 
 
 class SeuratAppTests(unittest.TestCase):
+    def test_browser_assets_use_current_cache_namespace(self):
+        self.assertEqual(seurat_module.BASE_URL, "seurat_0_1_10")
+        self.assertEqual(
+            seurat_module.styles,
+            ["seurat_0_1_10/seurat.css"],
+        )
+
+    def test_provenance_panel_styles_enable_bounded_two_axis_resize(self):
+        css = (
+            Path(seurat_module.__file__).parent
+            / "serve"
+            / "seurat.css"
+        ).read_text(encoding="utf-8")
+
+        provenance_rule = css.split(
+            ".seurat-floating-options-panel.seurat-provenance-panel {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("resize: both", provenance_rule)
+        self.assertIn("overflow: hidden", provenance_rule)
+        self.assertIn("min-width:", provenance_rule)
+        self.assertIn("min-height:", provenance_rule)
+        self.assertIn("max-width:", provenance_rule)
+        self.assertIn("max-height:", provenance_rule)
+        self.assertIn("border:", provenance_rule)
+        self.assertIn("box-shadow:", provenance_rule)
+
     def test_composition_root_connects_application_dependencies(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             campaign_path = Path(temp_dir) / "sample.aca"
@@ -272,6 +299,18 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("input.variable", ui.layout.html)
         self.assertIn("input.role", ui.layout.html)
         self.assertIn("seurat-provenance-branch-section", ui.layout.html)
+        self.assertIn("segment.type === 'activity_context'", ui.layout.html)
+        self.assertIn("seurat-provenance-activity-context-row", ui.layout.html)
+        self.assertIn("context.relation", ui.layout.html)
+        self.assertIn("segment.type === 'plan_group'", ui.layout.html)
+        self.assertIn("seurat-provenance-plan-group", ui.layout.html)
+        self.assertIn("segment.selected_action.node", ui.layout.html)
+        self.assertNotIn("Other actions in this plan", ui.layout.html)
+        self.assertIn("seurat-provenance-resize-handle", ui.layout.html)
+        self.assertIn("Resize provenance viewer", ui.layout.html)
+        self.assertIn("Workflow Plan", ui.layout.html)
+        self.assertIn("Agent", ui.layout.html)
+        self.assertIn("Provenance Viewer", ui.layout.html)
         self.assertIn("showProvenanceModal", ui.layout.html)
         self.assertIn("seurat-provenance-graph", ui.layout.html)
         self.assertIn('id="seurat-provenance-panel"', ui.layout.html)

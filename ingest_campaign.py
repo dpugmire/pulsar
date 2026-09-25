@@ -3101,6 +3101,117 @@ def _prov_activity_uuid(activity_id: str) -> str:
     return text
 
 
+def _prov_workflow_context(
+    entities: Dict[str, Any],
+    agents: Dict[str, Any],
+    associations: Dict[str, Any],
+    activity_id: str,
+) -> Dict[str, Any]:
+    """Return the Plan and Agent associated with one PROV Activity."""
+
+    context: Dict[str, Any] = {}
+    for association in associations.values():
+        if not isinstance(association, dict):
+            continue
+        if _prov_reference(association.get("prov:activity")) != activity_id:
+            continue
+
+        plan_id = _prov_reference(association.get("prov:plan"))
+        plan = entities.get(plan_id, {})
+        if (
+            "workflow_plan" not in context
+            and plan_id
+            and isinstance(plan, dict)
+            and _prov_has_type(plan, "Plan")
+        ):
+            context["workflow_plan"] = {
+                "id": plan_id,
+                "label": str(plan.get("prov:label", "") or ""),
+                "location": _prov_reference(plan.get("prov:location", "")),
+                "details": _json_object_or_empty(plan.get("prov:value", "")),
+            }
+
+        agent_id = _prov_reference(association.get("prov:agent"))
+        agent = agents.get(agent_id, {})
+        if (
+            "activity_agent" not in context
+            and agent_id
+            and isinstance(agent, dict)
+        ):
+            agent_types = [
+                _prov_qname(value)
+                for value in _prov_type_values(agent)
+                if _prov_qname(value)
+            ]
+            context["activity_agent"] = {
+                "id": agent_id,
+                "label": str(agent.get("prov:label", "") or ""),
+                "type": agent_types[0] if agent_types else "",
+                "version": str(agent.get("hpc:version", "") or ""),
+            }
+    return context
+
+
+def _read_text_json_dataset(
+    con: sqlite3.Connection,
+    dataset_name: str,
+) -> Dict[str, Any]:
+    """Read one unencrypted ACA TEXT dataset as a JSON object."""
+
+    name = str(dataset_name or "").strip("/")
+    if not name or not _CAMPAIGN_SCHEMA_TABLES.issubset(_sqlite_table_names(con)):
+        return {}
+    row = con.execute(
+        """
+        select
+            r.keyid as keyid,
+            f.compression as compression,
+            f.data as data
+        from dataset as d
+        join replica as r on r.datasetid = d.rowid
+        join repfiles as rf on rf.replicaid = r.rowid
+        join file as f on f.fileid = rf.fileid
+        where d.name = ? and d.fileformat = 'TEXT'
+          and d.deltime = 0 and r.deltime = 0
+        order by r.rowid desc, f.fileid desc
+        limit 1
+        """,
+        (name,),
+    ).fetchone()
+    if row is None or int(row["keyid"] or 0) > 0:
+        return {}
+    data = bytes(row["data"])
+    if int(row["compression"] or 0):
+        data = zlib.decompress(data)
+    return _json_object_or_empty(data.decode("utf-8", errors="replace"))
+
+
+def _prov_visualization_sequence(
+    con: sqlite3.Connection,
+    output_dataset: str,
+    metadata: Dict[str, Any],
+) -> str:
+    """Resolve a visualization sequence through its embedded manifest."""
+
+    sequence_name = str(
+        metadata.get("visualization_sequence", "")
+        or metadata.get("sequence_name", "")
+        or ""
+    ).strip()
+    if sequence_name:
+        return sequence_name
+    manifest_name = str(
+        metadata.get("sequence_manifest", "") or output_dataset or ""
+    ).strip("/")
+    if not manifest_name:
+        return ""
+    try:
+        manifest = _read_text_json_dataset(con, manifest_name)
+    except (sqlite3.Error, OSError, ValueError, zlib.error):
+        return ""
+    return str(manifest.get("sequence_name", "") or "").strip()
+
+
 def _load_prov_json_activity_provenance_index(
     con: sqlite3.Connection,
 ) -> Dict[tuple[str, str], Dict[str, Any]]:
@@ -3129,11 +3240,20 @@ def _load_prov_json_activity_provenance_index(
 
         entities = document.get("entity", {})
         activities = document.get("activity", {})
+        agents = document.get("agent", {})
         usages = document.get("used", {})
         derivations = document.get("wasDerivedFrom", {})
+        associations = document.get("wasAssociatedWith", {})
         if not all(
             isinstance(value, dict)
-            for value in (entities, activities, usages, derivations)
+            for value in (
+                entities,
+                activities,
+                agents,
+                usages,
+                derivations,
+                associations,
+            )
         ):
             continue
 
@@ -3157,12 +3277,13 @@ def _load_prov_json_activity_provenance_index(
                 continue
 
             metadata = _prov_action_metadata(entities, usages, activity_id)
+            activity_kind = _prov_activity_kind(activity)
             key = (output_dataset, output_variable)
             entry = grouped.setdefault(
                 key,
                 {
                     "activity_uuid": _prov_activity_uuid(activity_id),
-                    "activity_kind": _prov_activity_kind(activity),
+                    "activity_kind": activity_kind,
                     "activity_operation": _prov_activity_operation(metadata),
                     "activity_metadata": metadata,
                     "output_role": "",
@@ -3172,6 +3293,26 @@ def _load_prov_json_activity_provenance_index(
                     "inputs": [],
                 },
             )
+            entry.update(
+                {
+                    field: value
+                    for field, value in _prov_workflow_context(
+                        entities,
+                        agents,
+                        associations,
+                        activity_id,
+                    ).items()
+                    if value
+                }
+            )
+            if activity_kind == "visualization":
+                sequence_name = _prov_visualization_sequence(
+                    con,
+                    output_dataset,
+                    metadata,
+                )
+                if sequence_name:
+                    entry["visualization_sequence"] = sequence_name
 
             source_variable = str(source.get("hpc:variable", "") or "").strip()
             if not source_variable:
@@ -3297,7 +3438,19 @@ def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str],
 
         for entry in grouped.values():
             entry["inputs"] = _normalize_activity_inputs(entry.get("inputs", []))
-        return grouped or _load_prov_json_activity_provenance_index(con)
+        prov_json = _load_prov_json_activity_provenance_index(con)
+        for key, prov_entry in prov_json.items():
+            if key not in grouped:
+                grouped[key] = prov_entry
+                continue
+            for field in (
+                "workflow_plan",
+                "activity_agent",
+                "visualization_sequence",
+            ):
+                if prov_entry.get(field):
+                    grouped[key][field] = prov_entry[field]
+        return grouped
     except sqlite3.Error as e:
         print(f"[warn] could not read activity provenance metadata: {e}")
         return {}
@@ -3514,6 +3667,11 @@ def parse_campaign(
     unified_representation_index = _load_unified_representation_index(campaign_path)
     visualization_api_index = unified_representation_index or legacy_visualization_api_index
     activity_provenance_index = _load_activity_provenance_index(campaign_path)
+    visualization_activity_provenance_index = {
+        str(entry.get("visualization_sequence", "") or ""): entry
+        for entry in activity_provenance_index.values()
+        if str(entry.get("visualization_sequence", "") or "")
+    }
     visualization_metadata_source = (
         "activity-backed"
         if unified_representation_index
@@ -3783,6 +3941,18 @@ def parse_campaign(
                             ),
                         }
                     )
+                    visualization_activity_provenance = (
+                        visualization_activity_provenance_index.get(
+                            str(
+                                visualization_api_entry.get("sequence_name", "")
+                                or ""
+                            )
+                        )
+                    )
+                    if visualization_activity_provenance:
+                        base_document["visualization_activity_provenance"] = (
+                            visualization_activity_provenance
+                        )
 
                 for record in image_variable_records:
                     record_source_dataset = str(record.get("source_dataset", "") or source_dataset)
@@ -3932,6 +4102,15 @@ def parse_campaign(
             "min": fmin,
             "max": fmax,
         }
+        visualization_activity_provenance = (
+            visualization_activity_provenance_index.get(
+                str(visualization_api_entry.get("sequence_name", "") or "")
+            )
+        )
+        if visualization_activity_provenance:
+            base_document["visualization_activity_provenance"] = (
+                visualization_activity_provenance
+            )
 
         for record in scalar_variable_records:
             record_source_dataset = str(record.get("source_dataset", "") or "")

@@ -372,6 +372,8 @@ def build_fixture_server(mode):
             "id": "visualization",
             "kind": "visualization",
             "label": "velocity_streamlines",
+            "display_label": "Velocity streamlines",
+            "secondary_label": "velocity_streamlines",
             "shape": "box",
             "details": [
                 {"label": "Visualization", "value": "velocity_streamlines"},
@@ -382,6 +384,8 @@ def build_fixture_server(mode):
             "id": "activity",
             "kind": "activity",
             "label": "visualization: streamlines",
+            "display_label": "Streamlines",
+            "secondary_label": "visualization: streamlines",
             "shape": "box",
             "details": [
                 {"label": "Kind", "value": "visualization"},
@@ -456,14 +460,48 @@ def build_fixture_server(mode):
         provenance_nodes,
         state.detailsProvenanceExpanded,
     )
+    plan_node = {
+        "id": "visualization-activity-plan",
+        "kind": "plan",
+        "label": "MHD visualization workflow",
+        "shape": "box",
+        "details": [
+            {"label": "Workflow", "value": "render_visualizations"},
+            {
+                "label": "Implementation",
+                "value": "plans/render_adios_visualizations_to_campaign.py",
+            },
+        ],
+    }
+    agent_node = {
+        "id": "visualization-activity-agent",
+        "kind": "agent",
+        "label": "Matplotlib",
+        "shape": "box",
+        "details": [
+            {"label": "Type", "value": "SoftwareAgent"},
+            {"label": "Version", "value": "3.10.0"},
+        ],
+    }
     state.detailsProvenanceGraph = _apply_provenance_graph_expansion(
         [
             {"id": "node-visualization", "type": "node", "node": provenance_nodes[0]},
-            {"id": "arrow-1", "type": "arrow"},
-            {"id": "node-activity", "type": "node", "node": provenance_nodes[1]},
+            {"id": "arrow-1", "type": "arrow", "relation": ""},
+            {
+                "id": "plan-group-visualization-activity",
+                "type": "plan_group",
+                "plan": plan_node,
+                "selected_action": {
+                    "id": "visualization-activity-selected-action",
+                    "node": provenance_nodes[1],
+                    "agent": agent_node,
+                    "selected": True,
+                },
+            },
             {
                 "id": "branches-input",
                 "type": "branches",
+                "relation": "uses",
                 "branches": [
                     {
                         "id": item["id"],

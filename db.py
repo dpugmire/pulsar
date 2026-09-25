@@ -865,6 +865,9 @@ class CampaignDb:
                     "activity_provenance": _dict_field(
                         doc.get("activity_provenance", {})
                     ),
+                    "visualization_activity_provenance": _dict_field(
+                        doc.get("visualization_activity_provenance", {})
+                    ),
                     "association_source": str(doc.get("association_source", "") or ""),
                     "campaign_path": str(doc.get("campaign_path", "") or ""),
                     "variable_location": str(doc.get("variable_location", "") or ""),
@@ -913,6 +916,9 @@ class CampaignDb:
                     "activity_provenance": _dict_field(
                         doc.get("activity_provenance", {})
                     ),
+                    "visualization_activity_provenance": _dict_field(
+                        doc.get("visualization_activity_provenance", {})
+                    ),
                     "association_source": str(doc.get("association_source", "") or ""),
                     "campaign_path": str(doc.get("campaign_path", "") or ""),
                     "variable_location": str(doc.get("variable_location", "") or ""),
@@ -960,6 +966,9 @@ class CampaignDb:
                 ),
                 "activity_provenance": _dict_field(
                     doc.get("activity_provenance", {})
+                ),
+                "visualization_activity_provenance": _dict_field(
+                    doc.get("visualization_activity_provenance", {})
                 ),
                 "association_source": str(doc.get("association_source", "") or ""),
                 "campaign_path": str(doc.get("campaign_path", "") or ""),
@@ -3403,6 +3412,7 @@ class CampaignDb:
             "variable_location": 1,
             "metadata": 1,
             "activity_provenance": 1,
+            "visualization_activity_provenance": 1,
             "Min": 1,
             "Max": 1,
             "min": 1,
@@ -3728,6 +3738,7 @@ class CampaignDb:
             "visualization_roles": 1,
             "visualization_sequence_metadata": 1,
             "visualization_item_metadata": 1,
+            "visualization_activity_provenance": 1,
             "min": 1,
             "max": 1,
             "axes": 1,
@@ -3827,6 +3838,9 @@ class CampaignDb:
                         ),
                         "visualization_item_metadata": _dict_field(
                             doc.get("visualization_item_metadata", {})
+                        ),
+                        "visualization_activity_provenance": _dict_field(
+                            doc.get("visualization_activity_provenance", {})
                         ),
                         "scalar_field_axes": scalar_field_axis_spec(
                             doc.get("scalar_field_metadata", {})

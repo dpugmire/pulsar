@@ -638,13 +638,13 @@ class BackendInjectionTests(unittest.TestCase):
         server.controller.actions["toggle_provenance_node_details"]("variable")
         self.assertEqual(state.detailsProvenanceExpanded, {"variable": True})
         self.assertTrue(state.detailsProvenanceNodes[0]["expanded"])
-        self.assertTrue(state.detailsProvenanceGraph[0]["node"]["expanded"])
+        self.assertTrue(state.detailsProvenanceGraph[0]["entity"]["expanded"])
         self.assertFalse(state.detailsProvenanceNodes[1]["expanded"])
 
         server.controller.actions["toggle_provenance_node_details"]("variable")
         self.assertEqual(state.detailsProvenanceExpanded, {"variable": False})
         self.assertFalse(state.detailsProvenanceNodes[0]["expanded"])
-        self.assertFalse(state.detailsProvenanceGraph[0]["node"]["expanded"])
+        self.assertFalse(state.detailsProvenanceGraph[0]["entity"]["expanded"])
 
     def test_controller_details_show_visualization_provenance_in_visualization_context(self):
         backend = FakeCatalogBackend(source_summary=source_summary_with_one_source())
@@ -668,6 +668,37 @@ class BackendInjectionTests(unittest.TestCase):
                     "visualization_kind": "scalar_field",
                     "source_dataset": "run/output.bp",
                     "status": "ok",
+                    "visualization_activity_provenance": {
+                        "activity_kind": "visualization",
+                        "activity_operation": "scalar_field",
+                        "activity_metadata": {
+                            "steps": [0, 1],
+                            "rendering_parameters": {"dpi": 120},
+                        },
+                        "workflow_plan": {
+                            "label": "MHD visualization workflow",
+                            "location": (
+                                "plans/render_adios_visualizations_to_campaign.py"
+                            ),
+                            "details": {
+                                "workflow": "render_visualizations",
+                                "implementation_dataset": (
+                                    "plans/"
+                                    "render_adios_visualizations_to_campaign.py"
+                                ),
+                                "selection": {"variables": ["Energy"]},
+                                "parameters": {
+                                    "visualization_type": "scalar_field"
+                                },
+                                "output_policy": {"replace": True},
+                            },
+                        },
+                        "activity_agent": {
+                            "label": "Matplotlib",
+                            "type": "SoftwareAgent",
+                            "version": "3.10.0",
+                        },
+                    },
                 }
             ]
 
@@ -734,6 +765,30 @@ class BackendInjectionTests(unittest.TestCase):
                     "shape": "cylinder",
                 },
             ],
+        )
+        self.assertEqual(
+            [segment["type"] for segment in state.detailsProvenanceGraph],
+            ["node", "arrow", "plan_group", "branches"],
+        )
+        plan_segment = state.detailsProvenanceGraph[2]
+        self.assertEqual(
+            plan_segment["selected_action"]["node"]["label"],
+            "visualization: scalar_field",
+        )
+        self.assertEqual(
+            plan_segment["plan"]["label"],
+            "MHD visualization workflow",
+        )
+        self.assertEqual(
+            plan_segment["selected_action"]["agent"]["label"],
+            "Matplotlib",
+        )
+        visualization_details = state.detailsProvenanceNodes[1]["details"]
+        self.assertEqual(
+            next(row for row in visualization_details if row["label"] == "Steps")[
+                "value"
+            ],
+            "[0, 1]",
         )
 
     def test_controller_details_show_streamline_activity_inputs(self):
@@ -837,8 +892,85 @@ class BackendInjectionTests(unittest.TestCase):
                 "variable_path": "run/analysis.bp/div_b",
                 "source_dataset": "run/analysis.bp",
                 "activity_provenance": {
+                    "activity_uuid": "divergence",
                     "activity_kind": "quantity_of_interest",
                     "activity_operation": "divergence",
+                    "workflow_plan": {
+                        "label": "MHD derived-variable workflow",
+                        "location": "plans/adios_derived_variables.py",
+                        "details": {
+                            "workflow": "derived_variables",
+                            "implementation_dataset": (
+                                "plans/adios_derived_variables.py"
+                            ),
+                            "selection": {
+                                "datasets": ["run/analysis.bp"]
+                            },
+                            "parameters": {
+                                "discretization": "numpy.gradient"
+                            },
+                        },
+                        "activities": [
+                            {
+                                "id": "divergence",
+                                "activity_kind": "quantity_of_interest",
+                                "activity_operation": "divergence",
+                                "activity_agent": {
+                                    "label": "NumPy",
+                                    "type": "SoftwareAgent",
+                                    "version": "2.0.0",
+                                },
+                                "inputs": [
+                                    {
+                                        "name": "bx",
+                                        "roles": ["magnetic_x"],
+                                    },
+                                    {
+                                        "name": "by",
+                                        "roles": ["magnetic_y"],
+                                    },
+                                ],
+                                "outputs": [
+                                    {
+                                        "dataset": "run/analysis.bp",
+                                        "variable": "div_b",
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "gradient",
+                                "activity_kind": "quantity_of_interest",
+                                "activity_operation": "gradient_magnitude",
+                                "activity_metadata": {
+                                    "script_dataset": (
+                                        "plans/adios_derived_variables.py"
+                                    )
+                                },
+                                "activity_agent": {
+                                    "label": "NumPy",
+                                    "type": "SoftwareAgent",
+                                    "version": "2.0.0",
+                                },
+                                "inputs": [
+                                    {
+                                        "name": "rho",
+                                        "roles": ["density"],
+                                    }
+                                ],
+                                "outputs": [
+                                    {
+                                        "dataset": "run/analysis.bp",
+                                        "variable": "grad_rho_abs",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    "activity_agent": {
+                        "label": "NumPy",
+                        "type": "SoftwareAgent",
+                        "version": "2.0.0",
+                    },
                     "inputs": [
                         {"name": "bx", "roles": ["magnetic_x"]},
                         {"name": "by", "roles": ["magnetic_y"]},
@@ -898,8 +1030,45 @@ class BackendInjectionTests(unittest.TestCase):
             )
         self.assertEqual(
             [segment["type"] for segment in state.detailsProvenanceGraph],
-            ["node", "arrow", "node", "branches"],
+            ["node", "arrow", "plan_group", "branches"],
         )
+        plan_segment = state.detailsProvenanceGraph[2]
+        self.assertEqual(
+            plan_segment["selected_action"]["node"]["label"],
+            "derived: divergence",
+        )
+        self.assertEqual(
+            plan_segment["selected_action"]["agent"]["label"],
+            "NumPy",
+        )
+        self.assertNotIn("other_actions", plan_segment)
+        self.assertNotIn("gradient_magnitude", str(plan_segment))
+        plan_node = plan_segment["plan"]
+        self.assertEqual(plan_node["kind"], "plan")
+        self.assertEqual(plan_node["label"], "MHD derived-variable workflow")
+        self.assertEqual(
+            {row["label"]: row["value"] for row in plan_node["details"]},
+            {
+                "Workflow": "derived_variables",
+                "Implementation": "plans/adios_derived_variables.py",
+                "Location": "plans/adios_derived_variables.py",
+                "Selection": '{"datasets": ["run/analysis.bp"]}',
+                "Parameters": '{"discretization": "numpy.gradient"}',
+            },
+        )
+        agent_node = plan_segment["selected_action"]["agent"]
+        self.assertEqual(agent_node["kind"], "agent")
+        self.assertEqual(agent_node["label"], "NumPy")
+        self.assertEqual(
+            {row["label"]: row["value"] for row in agent_node["details"]},
+            {"Type": "SoftwareAgent", "Version": "2.0.0"},
+        )
+
+        server.controller.actions["toggle_provenance_node_details"](
+            "activity-plan"
+        )
+        plan_segment = state.detailsProvenanceGraph[2]
+        self.assertTrue(plan_segment["plan"]["expanded"])
 
     def test_controller_visualization_extends_analysis_provenance_to_output_source(self):
         summary = source_summary_with_one_source()
@@ -1046,22 +1215,39 @@ class BackendInjectionTests(unittest.TestCase):
                 "arrow",
                 "node",
                 "arrow",
-                "node",
-                "arrow",
-                "node",
+                "entity_source",
                 "arrow",
                 "node",
                 "branches",
             ],
         )
+        self.assertEqual(
+            [
+                segment.get("relation", "")
+                for segment in state.detailsProvenanceGraph
+                if segment["type"] in {"arrow", "branches"}
+            ],
+            ["", "uses", "", "uses"],
+        )
+        self.assertEqual(
+            state.detailsProvenanceNodes[0]["display_label"],
+            "Grad rho abs heatmap",
+        )
+        self.assertEqual(
+            state.detailsProvenanceNodes[1]["display_label"],
+            "Heatmap",
+        )
+        self.assertEqual(
+            state.detailsProvenanceNodes[4]["display_label"],
+            "Gradient magnitude",
+        )
         visualization_input_segment = state.detailsProvenanceGraph[4]
         self.assertEqual(
-            visualization_input_segment["node"]["label"],
+            visualization_input_segment["entity"]["label"],
             "grad_rho_abs",
         )
-        stored_source_segment = state.detailsProvenanceGraph[6]
         self.assertEqual(
-            stored_source_segment["node"]["label"],
+            visualization_input_segment["source"]["label"],
             "hll_128/analysis.bp",
         )
         self.assertEqual(
