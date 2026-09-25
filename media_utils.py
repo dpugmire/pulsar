@@ -26,7 +26,7 @@ def frames_to_mp4_bytes(png_frames: List[bytes], fps: int = 24) -> bytes:
     if fps <= 0:
         fps = 24
 
-    with tempfile.TemporaryDirectory(prefix="seurat_movie_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="pulsar_movie_") as tmpdir:
         for i, b in enumerate(png_frames):
             fname = os.path.join(tmpdir, f"frame_{i:06d}.png")
             with open(fname, "wb") as f:

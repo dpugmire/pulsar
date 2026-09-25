@@ -1,7 +1,7 @@
-# Seurat
+# Pulsar
 
 This is a small Trame (Vue3) application for viewing ADIOS campaign data.
-On startup, it reads a `.aca` campaign file into a Seurat SQLite sidecar DB and
+On startup, it reads a `.aca` campaign file into a Pulsar SQLite sidecar DB and
 provides a UI to browse variables, view min/max summaries, filter with a simple
 query language, and preview image sequences as short videos.
 
@@ -9,22 +9,22 @@ query language, and preview image sequences as short videos.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a diagram of the browser, Trame,
 application, backend, local ACA/SQLite, and future Phobos layers.
-See [SEURAT_OVERVIEW.md](SEURAT_OVERVIEW.md) for a consolidated product,
+See [PULSAR_OVERVIEW.md](PULSAR_OVERVIEW.md) for a consolidated product,
 interaction-design, implementation, and prioritized roadmap overview.
 
-`seurat.app.SeuratApp` is the composition root. It owns the Trame server,
-enables Seurat's web module, initializes state, connects the data access layer
+`pulsar.app.PulsarApp` is the composition root. It owns the Trame server,
+enables Pulsar's web module, initializes state, connects the data access layer
 to controller adapters, and constructs the UI. The top-level `app.py`, `ui.py`,
 and `state_init.py` modules remain compatibility entry points.
 
 The main architectural boundaries are:
 
-- `seurat/components/`: composable `TrameComponent` UI sections. The root UI
+- `pulsar/components/`: composable `TrameComponent` UI sections. The root UI
   owns the query toolbar, variable catalog, grid workspace, dialogs/settings,
   and context menu.
-- `seurat/module/`: registered JavaScript and CSS assets served by Trame. Web
-  identifiers use the `seurat` namespace and assets are included in wheels.
-- `seurat/widgets.py`: Python wrappers for Seurat's registered Vue components.
+- `pulsar/module/`: registered JavaScript and CSS assets served by Trame. Web
+  identifiers use the `pulsar` namespace and assets are included in wheels.
+- `pulsar/widgets.py`: Python wrappers for Pulsar's registered Vue components.
   The grid runtime component coordinates focused timeline, media, and plot
   lifecycles. The timeline runtime owns timeline selection, VCR controls,
   image/video synchronization, timers, and media observation. The media runtime
@@ -35,15 +35,15 @@ The main architectural boundaries are:
   owns variable-panel and grid-track resizing, including pointer capture. All
   runtimes release their listeners, observers, timers, pointer state, and
   transient styling on unmount.
-- `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
+- `pulsar/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
-- `seurat/state/`: explicit, non-overlapping state ownership for catalog,
+- `pulsar/state/`: explicit, non-overlapping state ownership for catalog,
   sources, visualization settings, grid/timeline, and context menus.
-- `seurat/controllers/`: Trame-facing adapters organized by catalog, source,
+- `pulsar/controllers/`: Trame-facing adapters organized by catalog, source,
   grid, visualization, context-menu, and lifecycle ownership. Each domain
   declares the actions, triggers, and state-change callbacks it registers.
-- `seurat/backends/`: backend-neutral capability contracts and the current
+- `pulsar/backends/`: backend-neutral capability contracts and the current
   local ACA/SQLite adapter. Catalog navigation, availability, source
   descriptors, source statistics, and source restriction resolution now route
   through this seam; later query, media, and compute capabilities remain
@@ -55,9 +55,9 @@ The main architectural boundaries are:
 - `ingest_campaign.py`, `sqlite_store.py`, and `db.py`: ACA ingestion, SQLite
   collection compatibility, and campaign data access/rendering.
 
-Keep domain decisions in `seurat/models/` and state defaults in the owning
-`seurat/state/` module. Keep Trame callbacks and their registration declarations
-in the matching `seurat/controllers/` domain. UI components should bind state
+Keep domain decisions in `pulsar/models/` and state defaults in the owning
+`pulsar/state/` module. Keep Trame callbacks and their registration declarations
+in the matching `pulsar/controllers/` domain. UI components should bind state
 and controller actions, not duplicate those decisions in markup or browser
 code. Backend implementations should return normalized application DTOs rather
 than exposing collection documents, ACA paths, or remote API objects to Trame
@@ -75,13 +75,13 @@ variable/grid/tab drag-and-drop, Freeform canvas placement and resizing,
 pane-divider resizing, context menus, floating-panel movement,
 variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
 plot rendering observation. Timeline/VCR policy lives in
-`seurat/module/serve/seurat-timeline-runtime.js`; media pan/zoom and its reset
-observer live in `seurat/module/serve/seurat-media-runtime.js`; plot parsing,
+`pulsar/module/serve/pulsar-timeline-runtime.js`; media pan/zoom and its reset
+observer live in `pulsar/module/serve/pulsar-media-runtime.js`; plot parsing,
 SVG rendering, and plot interaction live in
-`seurat/module/serve/seurat-plot-runtime.js`. The small
-`seurat/module/serve/seurat.js` coordinator mounts these domains and connects
+`pulsar/module/serve/pulsar-plot-runtime.js`. The small
+`pulsar/module/serve/pulsar.js` coordinator mounts these domains and connects
 combined reset/cursor behavior. Internal runtime objects are collected under
-`window.seurat.runtimes`; existing top-level aliases remain for Trame Vue plugin
+`window.pulsar.runtimes`; existing top-level aliases remain for Trame Vue plugin
 registration compatibility.
 
 ### Workspace panes and tabs
@@ -145,7 +145,7 @@ The browser tests are opt-in so the normal suite remains fast and does not
 require a browser installation:
 
 ```bash
-SEURAT_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
+PULSAR_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
 ```
 
 The deterministic browser fixture does not require a campaign archive. It
@@ -166,7 +166,7 @@ python app.py campaign.aca
 python app.py --demo
 # Optionally choose a source count from 1 through 49
 python app.py --demo 12
-# Equivalent after an editable install: seurat --demo
+# Equivalent after an editable install: pulsar --demo
 
 # Optional: supply a campaign schema when schema.yaml is not embedded
 python app.py campaign.aca --campaign-schema schema.yaml
@@ -185,7 +185,7 @@ three 1D profiles, two scalar time series, and three 2D scalar fields. The
 scalar time series track the moving pulse's circular centroid and the damped
 mode's mean squared amplitude. Every 2D field has both heatmap images and a
 `scalar_field` representation. The campaign, source data, rendered images,
-scalar payloads, and Seurat sidecar are kept in one temporary directory and
+scalar payloads, and Pulsar sidecar are kept in one temporary directory and
 removed when the viewer exits normally. `--demo` is mutually exclusive with a
 campaign path and external schema options.
 
@@ -193,20 +193,20 @@ campaign path and external schema options.
 
 The optional Query Assistant translates a natural-language request into a
 versioned, structured Viewer Action proposal. The current action types are
-`catalog.query` and `visualization.add`. Seurat validates and previews every
+`catalog.query` and `visualization.add`. Pulsar validates and previews every
 proposal and changes viewer state only after explicit confirmation. The model
 proposes an action; it cannot invoke viewer operations, read array values, or
 bypass server-side validation.
 
 Source ranking uses the campaign's stored per-source `minimum` and `maximum`
 metadata. For example, select `pressure` in the catalog and ask `largest max`.
-The model describes the ranking operation without guessing a value, and Seurat
+The model describes the ranking operation without guessing a value, and Pulsar
 locally finds the source or tied sources whose pressure maximum is largest.
 Phase 1 supports AND-combined conditions and top-one source ranking with ties.
 
 The dialog shows a read-only **Resolved Advanced Query** because the current
 local backend still consumes the existing Python-like query representation.
-That string is generated by Seurat from the validated Viewer Action; it is a
+That string is generated by Pulsar from the validated Viewer Action; it is a
 compatibility detail, not model output. Manually authored queries remain
 available in the toolbar as **Advanced Query**.
 
@@ -224,14 +224,14 @@ that the viewer will use. **Add to Grid** applies the action through the same
 assignment path used by the GUI.
 
 The first visualization increment accepts one exact variable and the active
-cell. Seurat applies the active catalog query, current source selection, default
+cell. Pulsar applies the active catalog query, current source selection, default
 visualization choice, plugin availability, and scalar-plot generation policy.
 Explicit visualization types, sources, multiple variables or cells, overlays,
 and visualization settings are not yet accepted. If raw scalar data requires
 generation and the session policy is **Ask**, the existing scalar-plot
 confirmation dialog still appears.
 
-Seurat talks to an OpenAI-compatible Chat Completions endpoint using Python's
+Pulsar talks to an OpenAI-compatible Chat Completions endpoint using Python's
 standard library, so no additional Python package is required. For a local
 Ollama `gpt-oss:20b` server:
 
@@ -239,19 +239,19 @@ Ollama `gpt-oss:20b` server:
 ollama pull gpt-oss:20b
 ollama serve
 
-export SEURAT_LLM_MODEL="gpt-oss:20b"
-export SEURAT_LLM_BASE_URL="http://localhost:11434/v1"
-export SEURAT_LLM_API_KEY="ollama"
+export PULSAR_LLM_MODEL="gpt-oss:20b"
+export PULSAR_LLM_BASE_URL="http://localhost:11434/v1"
+export PULSAR_LLM_API_KEY="ollama"
 python app.py campaign.aca
 ```
 
-`SEURAT_LLM_MODEL` enables the **Ask** and **Visualize** buttons. The base URL
+`PULSAR_LLM_MODEL` enables the **Ask** and **Visualize** buttons. The base URL
 defaults to the Ollama endpoint above, the API key defaults to Ollama's dummy
-`ollama` value, and `SEURAT_LLM_TIMEOUT_SECONDS` defaults to 30. A `llama.cpp`
+`ollama` value, and `PULSAR_LLM_TIMEOUT_SECONDS` defaults to 30. A `llama.cpp`
 server or another provider can be used by setting its OpenAI-compatible `/v1`
 base URL, model name, and API key.
 
-For each translation, Seurat sends the request, at most 200 variable catalog
+For each translation, Pulsar sends the request, at most 200 variable catalog
 entries (IDs, names, labels, paths, and source-dataset names), and at most 200
 distinct source-dataset names to the configured endpoint. Individual metadata
 values are also length-bounded. Per-source numeric statistics used for ranking
@@ -264,13 +264,13 @@ Open the hamburger menu to access **Save**, **Save As…**, and **Load…**.
 **Save As…** opens a native file browser and defaults to `<campaign>.json`.
 After saving or loading, the drawer shows the absolute path; subsequent
 **Save** commands write to that file. The selected path is on the machine
-running Seurat.
+running Pulsar.
 
 The versioned JSON document stores the active query and catalog view, grid
 layout and sizing, variable/source assignments, visualization choices and
 settings, selected cells, and timeline driver. Rendered plots, image/video
 bytes, frame payloads, and other derived media are intentionally excluded.
-Seurat validates the state-file version and campaign name, then rebuilds
+Pulsar validates the state-file version and campaign name, then rebuilds
 derived content from the campaign when loading.
 
 The grid settings menu offers **Uniform**, **Spanning**, and **Freeform**
@@ -282,37 +282,37 @@ pixels.
 
 ## Optional Interaction Log
 
-Seurat can write a local, append-only JSONL log of normalized queries,
+Pulsar can write a local, append-only JSONL log of normalized queries,
 visualization choices, workspace tab/pane/grid organization, and sanitized
 saved-workspace snapshots. Logging is disabled by default and does not change
 visualization behavior. Enable it by selecting a private directory:
 
 ```bash
-export SEURAT_INTERACTION_LOG_DIR=/path/to/private/seurat-logs
-export SEURAT_INTERACTION_LOG_MAX_MB=64
+export PULSAR_INTERACTION_LOG_DIR=/path/to/private/pulsar-logs
+export PULSAR_INTERACTION_LOG_MAX_MB=64
 ```
 
 The log excludes campaign and workspace file paths, raw query/assistant text,
 tab titles, arrays, and media payloads. Validate and summarize it with:
 
 ```bash
-python -m seurat.learning.audit /path/to/private/seurat-logs
+python -m pulsar.learning.audit /path/to/private/pulsar-logs
 ```
 
 See [Interaction Log v1](docs/interaction-log-v1.md) for the event contract,
 privacy boundaries, and workspace snapshot schema.
 
-By default, Seurat stores its viewer sidecar DB under `~/.cache/seurat` using a
+By default, Pulsar stores its viewer sidecar DB under `~/.cache/pulsar` using a
 filename derived from the resolved campaign path. Override the location with:
 
 ```bash
-export SEURAT_CACHE_DIR=/path/to/cache-dir
-export SEURAT_SQLITE_DB=/path/to/viewer-cache.sqlite
+export PULSAR_CACHE_DIR=/path/to/cache-dir
+export PULSAR_SQLITE_DB=/path/to/viewer-cache.sqlite
 ```
 
 ## Embedded Campaign Schema
 
-Seurat reads hpc-campaign's canonical embedded text dataset
+Pulsar reads hpc-campaign's canonical embedded text dataset
 `__campaign_schema.yaml`. Archives using the earlier `schema.yaml` name remain
 supported as a fallback. If both names are present, the canonical name wins.
 A time-series group written by appending steps to one ADIOS dataset can select
@@ -349,7 +349,7 @@ with `--campaign-schema path/to/schema.yaml`.
 Optional `axes`, `meshes`, `basis`, `variable_groups`, and
 `visualization_templates` sections describe multiple logical data models inside
 one source dataset. Variable-group patterns match complete ADIOS variable paths;
-`*` stays within one path segment and `**` may cross `/` separators. Seurat
+`*` stays within one path segment and `**` may cross `/` separators. Pulsar
 validates referenced ADIOS variables during ingest and attaches the matched
 group, role, data model, resources, axes, and static status to each variable.
 
@@ -454,7 +454,7 @@ array whose matching row is loaded with the selected data row.
 #### Axis-selected waveform performance
 
 An axis-selected waveform reads one signal row and, for a per-selection plot
-axis, one coordinate row for the selected shot. Seurat reuses one synchronized
+axis, one coordinate row for the selected shot. Pulsar reuses one synchronized
 ACA reader instead of reopening the archive for every selection. The reader is
 closed before campaign re-ingestion and when the application exits.
 
@@ -522,7 +522,7 @@ Visualization association notes:
   through the ACA `logical_variable` and `variable_*` graph tables.
 - Campaigns created with the earlier hpc-campaign visualization API remain
   associated through the ACA `visualization_*` metadata tables.
-- Seurat treats `variable_id` as a source-independent variable identity. Different source datasets for that same variable remain separate through the `source_dataset` field.
+- Pulsar treats `variable_id` as a source-independent variable identity. Different source datasets for that same variable remain separate through the `source_dataset` field.
 - For visualization API images, `variable_id` comes from `visualization_variable.variable_name`.
 - Legacy image path parsing is still used as a fallback for older campaigns.
 - A campaign schema may assign a display-only label through a variable group's `display_name_template`; the raw variable name, variable identity, and source dataset remain unchanged.
@@ -546,41 +546,41 @@ physical_to_logical:
 
 ## Plugins
 
-Seurat loads built-in plugins from `seurat_plugins/` and personal plugins from:
+Pulsar loads built-in plugins from `pulsar_plugins/` and personal plugins from:
 
 ```text
-~/.seurat/plugins
+~/.pulsar/plugins
 ```
 
 Add more personal plugin search directories with a colon-separated environment
 variable:
 
 ```bash
-export SEURAT_PLUGIN_PATH=~/.seurat/plugins:/path/to/other/plugins
+export PULSAR_PLUGIN_PATH=~/.pulsar/plugins:/path/to/other/plugins
 ```
 
 For persistent per-user plugin paths, add `plugin_paths` to
-`~/.seurat/profile.json`:
+`~/.pulsar/profile.json`:
 
 ```json
 {
   "plugin_paths": [
-    "/path/to/hpc-campaign-examples/plugins/seurat",
-    "~/other/seurat/plugins"
+    "/path/to/hpc-campaign-examples/plugins/pulsar",
+    "~/other/pulsar/plugins"
   ]
 }
 ```
 
-Seurat expands `~` and environment variables in these paths. Plugin paths are
+Pulsar expands `~` and environment variables in these paths. Plugin paths are
 loaded in this order, with duplicates ignored:
 
-1. `~/.seurat/plugins`
-2. `~/.seurat/profile.json`
-3. `SEURAT_PLUGIN_PATH`
+1. `~/.pulsar/plugins`
+2. `~/.pulsar/profile.json`
+3. `PULSAR_PLUGIN_PATH`
 
 Each plugin is a Python file. Files whose names start with `_` are ignored.
 Broken personal plugins are skipped and reported on stderr so one bad local
-plugin does not prevent Seurat from starting.
+plugin does not prevent Pulsar from starting.
 
 Plugin directories may also contain helper modules whose names start with `_`.
 Plugin files can import those helpers with relative imports, for example:
@@ -591,11 +591,11 @@ from ._helpers import shared_function
 
 Simulation-specific plugins should live with the simulation or example repo
 that defines the relevant variables. For example, the Orszag-Tang MHD energy
-diagnostic plugins live in `hpc-campaign-examples/plugins/seurat` and can be
+diagnostic plugins live in `hpc-campaign-examples/plugins/pulsar` and can be
 enabled with:
 
 ```bash
-export SEURAT_PLUGIN_PATH=/path/to/hpc-campaign-examples/plugins/seurat
+export PULSAR_PLUGIN_PATH=/path/to/hpc-campaign-examples/plugins/pulsar
 ```
 
 Minimal variable plugin:
@@ -613,13 +613,13 @@ def options_schema(meta):
 
 def render(ctx):
     helpers = ctx["helpers"]
-    # Return a Seurat tile dict, for example media_type="plot1d".
+    # Return a Pulsar tile dict, for example media_type="plot1d".
     ...
 ```
 
 Every plugin render automatically adds visualization provenance for the plugin
 workflow, action, software agent, normalized options, inputs, output type,
-execution timing, and success status. Seurat shows that record in the
+execution timing, and success status. Pulsar shows that record in the
 provenance viewer and, when interaction logging is enabled, writes a
 `plugin.executed` event for successful and failed attempts.
 
@@ -640,7 +640,7 @@ def provenance(ctx, tile):
 ```
 
 The hook is optional and does not affect rendering. If it raises an exception,
-Seurat keeps the plot and records the annotation error type. A plugin may still
+Pulsar keeps the plot and records the annotation error type. A plugin may still
 return `visualization_activity_provenance` directly when it needs to override
 the automatically generated workflow, action, agent, or input description.
 
@@ -658,7 +658,7 @@ def options_schema(meta):
     return []
 
 def render(ctx):
-    # Return a Seurat tile dict, for example media_type="image".
+    # Return a Pulsar tile dict, for example media_type="image".
     ...
 ```
 

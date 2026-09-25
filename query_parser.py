@@ -66,7 +66,7 @@ NUMERIC_FIELDS = {
 
 
 class QueryValidationError(ValueError):
-    """Raised when query text is outside Seurat's supported language."""
+    """Raised when query text is outside Pulsar's supported language."""
 
 
 def _field_name(name: str) -> str:

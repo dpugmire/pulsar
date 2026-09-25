@@ -15,7 +15,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from media_utils import png_bytes_to_data_uri
 from query_parser import and_filter, mongo_filter_matches
-from seurat.constants import SCALAR_FIELD_COLORMAP_OPTIONS
+from pulsar.constants import SCALAR_FIELD_COLORMAP_OPTIONS
 
 
 GENERATED_SCALAR_PLOT_VIS = "generated_timeseries"

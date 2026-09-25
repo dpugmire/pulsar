@@ -1,12 +1,12 @@
-"""Compatibility entry point for building the Seurat UI."""
+"""Compatibility entry point for building the Pulsar UI."""
 
-from seurat.components import SeuratUI
+from pulsar.components import PulsarUI
 
 
-__all__ = ["SeuratUI", "build_ui"]
+__all__ = ["PulsarUI", "build_ui"]
 
 
 def build_ui(server, refresh_variable_list=None, campaign_name=""):
     # Kept for compatibility with the original top-level application API.
     _ = refresh_variable_list
-    return SeuratUI(server, campaign_name=campaign_name)
+    return PulsarUI(server, campaign_name=campaign_name)

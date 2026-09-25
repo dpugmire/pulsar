@@ -1,4 +1,4 @@
-"""Characterize Seurat behavior in a mounted Vue client."""
+"""Characterize Pulsar behavior in a mounted Vue client."""
 
 import io
 import json
@@ -12,13 +12,13 @@ from PIL import Image
 pytestmark = [
     pytest.mark.browser,
     pytest.mark.skipif(
-        os.environ.get("SEURAT_RUN_BROWSER_TESTS") != "1",
-        reason="set SEURAT_RUN_BROWSER_TESTS=1 to run browser tests",
+        os.environ.get("PULSAR_RUN_BROWSER_TESTS") != "1",
+        reason="set PULSAR_RUN_BROWSER_TESTS=1 to run browser tests",
     ),
 ]
 
 
-def _open_app(page, seurat_server, mode="step"):
+def _open_app(page, pulsar_server, mode="step"):
     console_errors = []
     page_errors = []
     response_errors = []
@@ -39,8 +39,8 @@ def _open_app(page, seurat_server, mode="step"):
             else None
         ),
     )
-    page.goto(seurat_server(mode), wait_until="networkidle")
-    page.locator("#seurat-variable-column").wait_for(state="visible")
+    page.goto(pulsar_server(mode), wait_until="networkidle")
+    page.locator("#pulsar-variable-column").wait_for(state="visible")
     return console_errors, page_errors, response_errors
 
 
@@ -57,29 +57,29 @@ def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
 
 
 def _split_workspace_pane_by_drag(page, pane_bar, direction):
-    pane_count = page.locator(".seurat-workspace-tab-bar").count()
+    pane_count = page.locator(".pulsar-workspace-tab-bar").count()
     pane_id = pane_bar.get_attribute("data-pane-frame-id")
     assert pane_id
-    original = pane_bar.locator(".seurat-workspace-tab.is-pane-tab-active")
+    original = pane_bar.locator(".pulsar-workspace-tab.is-pane-tab-active")
     original_tab_id = original.get_attribute("data-tab-id")
     assert original_tab_id
-    tab_count = pane_bar.locator(".seurat-workspace-tab").count()
+    tab_count = pane_bar.locator(".pulsar-workspace-tab").count()
     pane_bar.get_by_role("button", name="New tab").click()
     page.wait_for_function(
         f"""() => {{
           const bar = document.querySelector(
-            '.seurat-workspace-tab-bar[data-pane-frame-id="{pane_id}"]'
+            '.pulsar-workspace-tab-bar[data-pane-frame-id="{pane_id}"]'
           );
           const active = bar && bar.querySelector(
-            '.seurat-workspace-tab.is-pane-tab-active'
+            '.pulsar-workspace-tab.is-pane-tab-active'
           );
           return bar
-            && bar.querySelectorAll('.seurat-workspace-tab').length === {tab_count + 1}
+            && bar.querySelectorAll('.pulsar-workspace-tab').length === {tab_count + 1}
             && active
             && active.getAttribute('data-tab-id') !== {original_tab_id!r};
         }}"""
     )
-    source = pane_bar.locator(".seurat-workspace-tab.is-pane-tab-active")
+    source = pane_bar.locator(".pulsar-workspace-tab.is-pane-tab-active")
     source.wait_for(state="visible")
     moved_tab_id = source.get_attribute("data-tab-id")
     assert moved_tab_id
@@ -100,7 +100,7 @@ def _split_workspace_pane_by_drag(page, pane_bar, direction):
         ".classList.contains('is-workspace-tab-dragging')"
     )
     preview = page.locator(
-        f'.seurat-workspace-tab-dock-preview[data-tab-dock-pane-id="{pane_id}"]'
+        f'.pulsar-workspace-tab-dock-preview[data-tab-dock-pane-id="{pane_id}"]'
     )
     preview_bounds = preview.bounding_box()
     assert preview_bounds is not None
@@ -117,32 +117,32 @@ def _split_workspace_pane_by_drag(page, pane_bar, direction):
     )
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-workspace-tab-dock-target.is-tab-dock-active'"
+        "'.pulsar-workspace-tab-dock-target.is-tab-dock-active'"
         ").length === 1"
     )
     page.mouse.up()
     page.wait_for_function(
-        f"document.querySelectorAll('.seurat-workspace-tab-bar').length === {pane_count + 1}"
+        f"document.querySelectorAll('.pulsar-workspace-tab-bar').length === {pane_count + 1}"
     )
     page.locator(
-        f'.seurat-workspace-tab[data-pane-id="{pane_id}"]'
+        f'.pulsar-workspace-tab[data-pane-id="{pane_id}"]'
         f'[data-tab-id="{original_tab_id}"]'
     ).click()
     page.wait_for_function(
-        f"document.querySelector('.seurat-workspace-active-grid')"
+        f"document.querySelector('.pulsar-workspace-active-grid')"
         f".getAttribute('data-pane-id') === {pane_id!r}"
     )
     page.locator(
-        f'.seurat-workspace-tab[data-tab-id="{moved_tab_id}"]'
+        f'.pulsar-workspace-tab[data-tab-id="{moved_tab_id}"]'
     ).click()
     page.wait_for_function(
-        f"document.querySelector('.seurat-workspace-active-grid')"
+        f"document.querySelector('.pulsar-workspace-active-grid')"
         f".getAttribute('data-tab-id') === {moved_tab_id!r}"
     )
 
 
-def test_canvas_layout_shared_conformance_fixtures(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_canvas_layout_shared_conformance_fixtures(page, pulsar_server):
+    _open_app(page, pulsar_server)
     fixture_path = (
         Path(__file__).resolve().parents[1]
         / "fixtures"
@@ -152,7 +152,7 @@ def test_canvas_layout_shared_conformance_fixtures(page, seurat_server):
 
     results = page.evaluate(
         """cases => cases.map(testCase => {
-            const layout = window.seuratCanvasLayout;
+            const layout = window.pulsarCanvasLayout;
             const args = testCase.arguments;
             if (testCase.operation === 'horizontal_resize_push') {
                 return layout.horizontalResizePush(
@@ -188,88 +188,88 @@ def test_canvas_layout_shared_conformance_fixtures(page, seurat_server):
     assert results == [test_case["expected"] for test_case in cases]
 
 
-def test_app_mounts_and_renders_structural_ui(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_app_mounts_and_renders_structural_ui(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     assert page.get_by_text("browser-step.aca", exact=True).is_visible()
     assert page.locator('[title="fixture/scalars.bp/internal_energy"]').is_visible()
     assert page.locator('[title="fixture/images/current_z"]').is_visible()
-    assert page.locator(".seurat-plot1d svg").is_visible()
-    page.locator('[data-seurat-grid-runtime="mounted"]').wait_for(state="attached")
-    page.locator('[data-seurat-interaction-runtime="mounted"]').wait_for(
+    assert page.locator(".pulsar-plot1d svg").is_visible()
+    page.locator('[data-pulsar-grid-runtime="mounted"]').wait_for(state="attached")
+    page.locator('[data-pulsar-interaction-runtime="mounted"]').wait_for(
         state="attached"
     )
-    page.locator('[data-seurat-canvas-runtime="mounted"]').wait_for(
+    page.locator('[data-pulsar-canvas-runtime="mounted"]').wait_for(
         state="attached"
     )
-    page.locator('[data-seurat-resize-runtime="mounted"]').wait_for(
+    page.locator('[data-pulsar-resize-runtime="mounted"]').wait_for(
         state="attached"
     )
-    page.locator('[data-seurat-history-runtime="mounted"]').wait_for(
+    page.locator('[data-pulsar-history-runtime="mounted"]').wait_for(
         state="attached"
     )
     assert (
         page.locator(
-            '.seurat-content-column[data-seurat-grid-runtime-owner="mounted"]'
+            '.pulsar-content-column[data-pulsar-grid-runtime-owner="mounted"]'
         ).count()
         == 1
     )
     assert (
         page.locator(
-            '.seurat-content-column[data-seurat-media-runtime-owner="mounted"]'
+            '.pulsar-content-column[data-pulsar-media-runtime-owner="mounted"]'
         ).count()
         == 1
     )
     assert (
         page.locator(
-            '.seurat-content-column[data-seurat-plot-runtime-owner="mounted"]'
+            '.pulsar-content-column[data-pulsar-plot-runtime-owner="mounted"]'
         ).count()
         == 1
     )
     assert (
         page.locator(
-            '.seurat-content-column[data-seurat-timeline-runtime-owner="mounted"]'
+            '.pulsar-content-column[data-pulsar-timeline-runtime-owner="mounted"]'
         ).count()
         == 1
     )
     assert (
         page.locator(
-            '.v-application[data-seurat-canvas-runtime-owner="1"]'
+            '.v-application[data-pulsar-canvas-runtime-owner="1"]'
         ).count()
         == 1
     )
     assert (
         page.locator(
-            '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
+            '.v-application[data-pulsar-interaction-runtime-owner="mounted"]'
         ).count()
         == 1
     )
     assert (
-        page.locator('.v-application[data-seurat-resize-runtime-owner="mounted"]').count()
+        page.locator('.v-application[data-pulsar-resize-runtime-owner="mounted"]').count()
         == 1
     )
     assert (
-        page.locator('.v-application[data-seurat-history-runtime-owner="mounted"]').count()
+        page.locator('.v-application[data-pulsar-history-runtime-owner="mounted"]').count()
         == 1
     )
     assert page.evaluate(
         """() => {
-            const runtimes = window.seurat && window.seurat.runtimes;
+            const runtimes = window.pulsar && window.pulsar.runtimes;
             return Boolean(
                 runtimes
-                && runtimes.grid === window.seuratGridRuntime
-                && runtimes.media === window.seuratMediaRuntime
-                && runtimes.plot === window.seuratPlotRuntime
-                && runtimes.timeline === window.seuratTimelineRuntime
-                && runtimes.canvas === window.seuratCanvasRuntime
-                && runtimes.interaction === window.seuratInteractionRuntime
-                && runtimes.resize === window.seuratResizeRuntime
-                && runtimes.history === window.seuratHistoryRuntime
+                && runtimes.grid === window.pulsarGridRuntime
+                && runtimes.media === window.pulsarMediaRuntime
+                && runtimes.plot === window.pulsarPlotRuntime
+                && runtimes.timeline === window.pulsarTimelineRuntime
+                && runtimes.canvas === window.pulsarCanvasRuntime
+                && runtimes.interaction === window.pulsarInteractionRuntime
+                && runtimes.resize === window.pulsarResizeRuntime
+                && runtimes.history === window.pulsarHistoryRuntime
             );
         }"""
     )
 
-    rendered = page.locator(".seurat-content-column").screenshot()
+    rendered = page.locator(".pulsar-content-column").screenshot()
     image = Image.open(io.BytesIO(rendered)).convert("RGB")
     assert image.width >= 500
     assert image.height >= 300
@@ -279,28 +279,28 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert console_errors == [], response_errors
 
 
-def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_provenance_detail_buttons_expand_in_popup(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Provenance", exact=True).click()
-    panel = page.locator("#seurat-provenance-panel")
+    panel = page.locator("#pulsar-provenance-panel")
     panel.wait_for(state="visible")
-    dialog = page.locator(".seurat-provenance-dialog")
+    dialog = page.locator(".pulsar-provenance-dialog")
     dialog.wait_for(state="visible")
     assert panel.get_by_text("Provenance Viewer", exact=True).is_visible()
-    plan_group = dialog.locator(".seurat-provenance-plan-group")
+    plan_group = dialog.locator(".pulsar-provenance-plan-group")
     assert plan_group.is_visible()
     assert plan_group.bounding_box()["width"] <= 460
-    header = plan_group.locator(".seurat-provenance-plan-group-header")
+    header = plan_group.locator(".pulsar-provenance-plan-group-header")
     assert header.get_by_text("WORKFLOW", exact=True).is_visible()
     header_metrics = header.evaluate(
         """element => ({
             height: element.getBoundingClientRect().height,
             workflowTop: element.querySelector(
-                '.seurat-provenance-plan-group-kicker'
+                '.pulsar-provenance-plan-group-kicker'
             ).getBoundingClientRect().top,
             titleTop: element.querySelector(
-                '.seurat-provenance-node-label'
+                '.pulsar-provenance-node-label'
             ).getBoundingClientRect().top,
         })"""
     )
@@ -311,36 +311,36 @@ def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
         exact=True,
     ).is_visible()
     action_node = plan_group.locator(
-        ".seurat-provenance-plan-action-row.is-selected"
-    ).locator(".seurat-provenance-node.is-activity")
+        ".pulsar-provenance-plan-action-row.is-selected"
+    ).locator(".pulsar-provenance-node.is-activity")
     assert action_node.get_by_text("Streamlines", exact=True).is_visible()
     assert action_node.get_by_text(
         "visualization: streamlines",
         exact=True,
     ).is_visible()
-    agent_node = plan_group.locator(".seurat-provenance-node.is-agent")
-    assert action_node.locator(".seurat-provenance-detail-btn").count() == 1
-    assert agent_node.locator(".seurat-provenance-detail-btn").count() == 1
-    assert plan_group.locator(".seurat-provenance-node.is-activity").count() == 1
+    agent_node = plan_group.locator(".pulsar-provenance-node.is-agent")
+    assert action_node.locator(".pulsar-provenance-detail-btn").count() == 1
+    assert agent_node.locator(".pulsar-provenance-detail-btn").count() == 1
+    assert plan_group.locator(".pulsar-provenance-node.is-activity").count() == 1
 
-    plan_node = header.locator(".seurat-provenance-node.is-plan")
-    plan_node.locator(".seurat-provenance-detail-btn").click()
+    plan_node = header.locator(".pulsar-provenance-node.is-plan")
+    plan_node.locator(".pulsar-provenance-detail-btn").click()
     page.wait_for_function(
         """() => Boolean(document.querySelector(
-          '.seurat-provenance-plan-group-header '
-          + '.seurat-provenance-node.is-plan.is-expanded '
-          + '.seurat-provenance-node-details'
+          '.pulsar-provenance-plan-group-header '
+          + '.pulsar-provenance-node.is-plan.is-expanded '
+          + '.pulsar-provenance-node-details'
         ))"""
     )
     expanded_plan_metrics = header.evaluate(
         """element => {
             const plan = element.querySelector(
-                '.seurat-provenance-node.is-plan'
+                '.pulsar-provenance-node.is-plan'
             );
-            const title = plan.querySelector('.seurat-provenance-node-label');
-            const details = plan.querySelector('.seurat-provenance-node-details');
+            const title = plan.querySelector('.pulsar-provenance-node-label');
+            const details = plan.querySelector('.pulsar-provenance-node-details');
             const workflow = element.querySelector(
-                '.seurat-provenance-plan-group-kicker'
+                '.pulsar-provenance-plan-group-kicker'
             );
             const planStyle = getComputedStyle(plan);
             const titleRect = title.getBoundingClientRect();
@@ -363,18 +363,18 @@ def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
         expanded_plan_metrics["titleBottom"]
         <= expanded_plan_metrics["detailsTop"]
     )
-    plan_node.locator(".seurat-provenance-detail-btn").click()
+    plan_node.locator(".pulsar-provenance-detail-btn").click()
     page.wait_for_function(
         """() => !document.querySelector(
-          '.seurat-provenance-plan-group-header '
-          + '.seurat-provenance-node.is-plan '
-          + '.seurat-provenance-node-details'
+          '.pulsar-provenance-plan-group-header '
+          + '.pulsar-provenance-node.is-plan '
+          + '.pulsar-provenance-node-details'
         )"""
     )
 
     assert dialog.get_by_text("generated by", exact=True).count() == 0
     assert dialog.get_by_text("uses", exact=True).is_visible()
-    content_styles = panel.locator(".seurat-provenance-dialog-content").evaluate(
+    content_styles = panel.locator(".pulsar-provenance-dialog-content").evaluate(
         """element => {
             const style = window.getComputedStyle(element);
             return {
@@ -384,7 +384,7 @@ def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
             };
         }"""
     )
-    graph_styles = panel.locator(".seurat-provenance-graph").evaluate(
+    graph_styles = panel.locator(".pulsar-provenance-graph").evaluate(
         """element => {
             const style = window.getComputedStyle(element);
             return {
@@ -396,67 +396,67 @@ def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
     assert content_styles["maxHeight"] != "none"
     assert content_styles["overflowY"] in {"auto", "scroll"}
     assert graph_styles["overflowX"] in {"auto", "scroll"}
-    assert dialog.locator(".seurat-provenance-node-details").count() == 0
-    assert dialog.locator(".seurat-provenance-branch-section").count() == 1
-    assert dialog.locator(".seurat-provenance-input-row").get_by_text(
+    assert dialog.locator(".pulsar-provenance-node-details").count() == 0
+    assert dialog.locator(".pulsar-provenance-branch-section").count() == 1
+    assert dialog.locator(".pulsar-provenance-input-row").get_by_text(
         "vx",
         exact=True,
     ).is_visible()
-    assert dialog.locator(".seurat-provenance-input-row").get_by_text(
+    assert dialog.locator(".pulsar-provenance-input-row").get_by_text(
         "vy",
         exact=True,
     ).is_visible()
-    assert dialog.locator(".seurat-provenance-input-row").get_by_text(
+    assert dialog.locator(".pulsar-provenance-input-row").get_by_text(
         "pressure",
         exact=True,
     ).is_visible()
-    assert dialog.locator(".seurat-provenance-shared-source-row").get_by_text(
+    assert dialog.locator(".pulsar-provenance-shared-source-row").get_by_text(
         "hll_128/output.bp",
         exact=True,
     ).is_visible()
 
-    dialog.locator(".seurat-provenance-detail-btn").first.click()
+    dialog.locator(".pulsar-provenance-detail-btn").first.click()
     page.wait_for_function(
         """() => {
-            const dialog = document.querySelector('.seurat-provenance-dialog');
+            const dialog = document.querySelector('.pulsar-provenance-dialog');
             return Boolean(
                 dialog
-                && dialog.querySelector('.seurat-provenance-node-details')
-                && dialog.querySelector('.seurat-provenance-detail-btn')
+                && dialog.querySelector('.pulsar-provenance-node-details')
+                && dialog.querySelector('.pulsar-provenance-detail-btn')
                     ?.getAttribute('aria-expanded') === 'true'
             );
         }"""
     )
-    assert dialog.locator(".seurat-provenance-detail-row").filter(
+    assert dialog.locator(".pulsar-provenance-detail-row").filter(
         has_text="Visualization"
     ).first.is_visible()
-    assert dialog.locator(".seurat-provenance-detail-row").filter(
+    assert dialog.locator(".pulsar-provenance-detail-row").filter(
         has_text="velocity_streamlines"
     ).first.is_visible()
 
-    dialog.locator(".seurat-provenance-detail-btn").first.click()
+    dialog.locator(".pulsar-provenance-detail-btn").first.click()
     page.wait_for_function(
         """() => {
-            const dialog = document.querySelector('.seurat-provenance-dialog');
+            const dialog = document.querySelector('.pulsar-provenance-dialog');
             return Boolean(
                 dialog
-                && !dialog.querySelector('.seurat-provenance-node-details')
-                && dialog.querySelector('.seurat-provenance-detail-btn')
+                && !dialog.querySelector('.pulsar-provenance-node-details')
+                && dialog.querySelector('.pulsar-provenance-detail-btn')
                     ?.getAttribute('aria-expanded') === 'false'
             );
         }"""
     )
-    action_node = dialog.locator(".seurat-provenance-node.is-activity").first
-    action_node.locator(".seurat-provenance-detail-btn").click()
+    action_node = dialog.locator(".pulsar-provenance-node.is-activity").first
+    action_node.locator(".pulsar-provenance-detail-btn").click()
     page.wait_for_function(
         """() => {
             const action = document.querySelector(
-              '.seurat-provenance-node.is-activity'
+              '.pulsar-provenance-node.is-activity'
             );
             return Boolean(
                 action
-                && action.querySelector('.seurat-provenance-node-details')
-                && action.querySelector('.seurat-provenance-input-table')
+                && action.querySelector('.pulsar-provenance-node-details')
+                && action.querySelector('.pulsar-provenance-input-table')
                 && action.textContent.includes('Variable')
                 && action.textContent.includes('Role')
                 && action.textContent.includes('vx')
@@ -470,33 +470,33 @@ def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
         }"""
     )
 
-    agent_node.locator(".seurat-provenance-detail-btn").click()
+    agent_node.locator(".pulsar-provenance-detail-btn").click()
     page.wait_for_function(
         """() => Boolean(document.querySelector(
-          '.seurat-provenance-node.is-agent .seurat-provenance-node-details'
+          '.pulsar-provenance-node.is-agent .pulsar-provenance-node-details'
         ))"""
     )
     agent_detail_labels = agent_node.locator(
-        ".seurat-provenance-detail-label"
+        ".pulsar-provenance-detail-label"
     ).evaluate_all("labels => labels.map(label => label.textContent.trim())")
     assert agent_detail_labels == ["Type", "Version"]
 
     input_node = dialog.locator(
-        ".seurat-provenance-input-row .seurat-provenance-node.is-variable"
+        ".pulsar-provenance-input-row .pulsar-provenance-node.is-variable"
     ).first
-    input_node.locator(".seurat-provenance-detail-btn").click()
+    input_node.locator(".pulsar-provenance-detail-btn").click()
     page.wait_for_function(
         """() => {
             const input = document.querySelector(
-              '.seurat-provenance-input-row .seurat-provenance-node.is-variable'
+              '.pulsar-provenance-input-row .pulsar-provenance-node.is-variable'
             );
             return Boolean(
-                input && input.querySelector('.seurat-provenance-node-details')
+                input && input.querySelector('.pulsar-provenance-node-details')
             );
         }"""
     )
     input_detail_labels = input_node.locator(
-        ".seurat-provenance-detail-label"
+        ".pulsar-provenance-detail-label"
     ).evaluate_all("labels => labels.map(label => label.textContent.trim())")
     assert input_detail_labels == ["Variable"]
 
@@ -504,13 +504,13 @@ def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
     assert console_errors == [], response_errors
 
 
-def test_provenance_popup_drags_and_clamps(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_provenance_popup_drags_and_clamps(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Provenance", exact=True).click()
-    panel = page.locator("#seurat-provenance-panel")
+    panel = page.locator("#pulsar-provenance-panel")
     panel.wait_for(state="visible")
-    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    handle = panel.locator(".pulsar-floating-panel-drag-handle")
     initial = panel.bounding_box()
     assert initial is not None
 
@@ -526,11 +526,11 @@ def test_provenance_popup_drags_and_clamps(page, seurat_server):
     assert clamped["y"] + clamped["height"] <= page.viewport_size["height"] - 7
 
 
-def test_provenance_popup_resizes_and_scrolls_content(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_provenance_popup_resizes_and_scrolls_content(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Provenance", exact=True).click()
-    panel = page.locator("#seurat-provenance-panel")
+    panel = page.locator("#pulsar-provenance-panel")
     panel.wait_for(state="visible")
     initial = panel.bounding_box()
     assert initial is not None
@@ -539,10 +539,10 @@ def test_provenance_popup_resizes_and_scrolls_content(page, seurat_server):
         """panel => {
             const panelStyle = getComputedStyle(panel);
             const titleStyle = getComputedStyle(
-                panel.querySelector('.seurat-provenance-titlebar')
+                panel.querySelector('.pulsar-provenance-titlebar')
             );
             const contentStyle = getComputedStyle(
-                panel.querySelector('.seurat-provenance-dialog-content')
+                panel.querySelector('.pulsar-provenance-dialog-content')
             );
             return {
                 borderStyle: panelStyle.borderTopStyle,
@@ -560,19 +560,19 @@ def test_provenance_popup_resizes_and_scrolls_content(page, seurat_server):
 
     _drag(
         page,
-        panel.locator(".seurat-provenance-resize-handle"),
+        panel.locator(".pulsar-provenance-resize-handle"),
         delta_x=-120,
         delta_y=262 - initial["height"],
     )
 
     page.wait_for_function(
-        """() => document.querySelector('#seurat-provenance-panel')
+        """() => document.querySelector('#pulsar-provenance-panel')
             ?.classList.contains('is-user-resized')"""
     )
     resized = panel.bounding_box()
     assert resized["width"] < initial["width"] - 80
     assert resized["height"] <= 300
-    content = panel.locator(".seurat-provenance-dialog-content")
+    content = panel.locator(".pulsar-provenance-dialog-content")
     content_metrics = content.evaluate(
         """element => ({
             clientHeight: element.clientHeight,
@@ -591,29 +591,29 @@ def test_provenance_popup_resizes_and_scrolls_content(page, seurat_server):
 
 
 def test_workspace_tabs_and_split_panes_preserve_grid_content(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
-    assert page.locator(".seurat-workspace-tab").count() == 2
+    assert page.locator(".pulsar-workspace-tab").count() == 2
 
     add_tab = first_bar.get_by_role("button", name="New tab")
     assert add_tab.evaluate(
         """button => {
             const strip = button.parentElement;
-            const tabs = strip.querySelectorAll(':scope > .seurat-workspace-tab-shell');
-            return strip.classList.contains('seurat-workspace-tabs')
+            const tabs = strip.querySelectorAll(':scope > .pulsar-workspace-tab-shell');
+            return strip.classList.contains('pulsar-workspace-tabs')
                 && strip.lastElementChild === button
                 && button.previousElementSibling === tabs[tabs.length - 1];
         }"""
     )
     last_tab_bounds = first_bar.locator(
-        ".seurat-workspace-tab-shell"
+        ".pulsar-workspace-tab-shell"
     ).last.bounding_box()
     add_tab_bounds = add_tab.bounding_box()
     assert last_tab_bounds is not None
@@ -623,36 +623,36 @@ def test_workspace_tabs_and_split_panes_preserve_grid_content(
     ) <= 1
 
     page.get_by_role("tab", name="View 1").click()
-    page.locator(".seurat-workspace-active-grid").get_by_text(
+    page.locator(".pulsar-workspace-active-grid").get_by_text(
         "internal_energy", exact=True
     ).wait_for(state="visible")
 
     _split_workspace_pane_by_drag(page, first_bar, "horizontal")
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
 
-    assert page.locator(".seurat-workspace-tab-bar").count() == 2
-    assert page.locator(".seurat-main-grid").count() == 2
-    assert page.locator(".seurat-workspace-grid-preview").count() == 1
+    assert page.locator(".pulsar-workspace-tab-bar").count() == 2
+    assert page.locator(".pulsar-main-grid").count() == 2
+    assert page.locator(".pulsar-workspace-grid-preview").count() == 1
     assert page.locator(
-        ".seurat-workspace-active-grid.seurat-workspace-slot-second"
+        ".pulsar-workspace-active-grid.pulsar-workspace-slot-second"
     ).count() == 1
-    assert page.locator(".seurat-workspace-grid-preview").get_by_text(
+    assert page.locator(".pulsar-workspace-grid-preview").get_by_text(
         "internal_energy", exact=True
     ).is_visible()
 
     page.get_by_role("tab", name="View 1").click()
     page.locator(
-        ".seurat-workspace-active-grid.seurat-workspace-slot-first"
+        ".pulsar-workspace-active-grid.pulsar-workspace-slot-first"
     ).wait_for(state="visible")
-    assert page.locator(".seurat-workspace-grid-preview").count() == 1
+    assert page.locator(".pulsar-workspace-grid-preview").count() == 1
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
-def test_workspace_undo_redo_buttons_and_shortcuts(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
-    undo_button, redo_button = page.locator(".seurat-history-button").all()
+def test_workspace_undo_redo_buttons_and_shortcuts(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
+    undo_button, redo_button = page.locator(".pulsar-history-button").all()
     assert undo_button.is_disabled()
     assert redo_button.is_disabled()
 
@@ -663,12 +663,12 @@ def test_workspace_undo_redo_buttons_and_shortcuts(page, seurat_server):
 
     undo_button.click()
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-workspace-tab').length === 1"
+        "document.querySelectorAll('.pulsar-workspace-tab').length === 1"
     )
     assert not redo_button.is_disabled()
     assert "Redo Add tab" in redo_button.get_attribute("title")
 
-    page.locator(".seurat-content-column").focus()
+    page.locator(".pulsar-content-column").focus()
     page.keyboard.press("Control+Shift+Z")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
     assert page.get_by_role("tab", name="View 1").get_attribute(
@@ -676,7 +676,7 @@ def test_workspace_undo_redo_buttons_and_shortcuts(page, seurat_server):
     ) == "true"
     page.keyboard.press("Control+Z")
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-workspace-tab').length === 1"
+        "document.querySelectorAll('.pulsar-workspace-tab').length === 1"
     )
 
     page.get_by_role("button", name="New tab").click()
@@ -686,21 +686,21 @@ def test_workspace_undo_redo_buttons_and_shortcuts(page, seurat_server):
     )
     query_field.fill("density")
     query_field.press("Control+Z")
-    assert page.locator(".seurat-workspace-tab").count() == 2
+    assert page.locator(".pulsar-workspace-tab").count() == 2
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
-def test_plot_undo_after_timeline_scrub(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
-    undo_button, redo_button = page.locator(".seurat-history-button").all()
+def test_plot_undo_after_timeline_scrub(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
+    undo_button, redo_button = page.locator(".pulsar-history-button").all()
 
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Freeform", exact=True).click()
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     canvas.wait_for(state="visible")
-    tiles = canvas.locator(":scope > .seurat-dropcell")
+    tiles = canvas.locator(":scope > .pulsar-dropcell")
     assert tiles.count() == 2
 
     page.locator('[data-item="internal_energy"]').drag_to(
@@ -709,11 +709,11 @@ def test_plot_undo_after_timeline_scrub(page, seurat_server):
     )
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+        "'.pulsar-freeform-canvas > .pulsar-dropcell').length === 3"
     )
     assert "Undo Add plot" in undo_button.get_attribute("title")
 
-    slider = page.locator("#seurat-vcr-step-slider")
+    slider = page.locator("#pulsar-vcr-step-slider")
     slider_bounds = slider.bounding_box()
     assert slider_bounds is not None
     slider.click(
@@ -727,19 +727,19 @@ def test_plot_undo_after_timeline_scrub(page, seurat_server):
     undo_button.click()
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-freeform-canvas > .seurat-dropcell').length === 2"
+        "'.pulsar-freeform-canvas > .pulsar-dropcell').length === 2"
     )
     redo_button.click()
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+        "'.pulsar-freeform-canvas > .pulsar-dropcell').length === 3"
     )
 
     slider.focus()
     slider.press("Control+Z")
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-freeform-canvas > .seurat-dropcell').length === 2"
+        "'.pulsar-freeform-canvas > .pulsar-dropcell').length === 2"
     )
 
     assert page_errors == []
@@ -747,12 +747,12 @@ def test_plot_undo_after_timeline_scrub(page, seurat_server):
 
 
 def test_visualization_drop_on_inactive_pane_moves_and_activates_it(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     pane_one_bar = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     _split_workspace_pane_by_drag(page, pane_one_bar, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -762,67 +762,67 @@ def test_visualization_drop_on_inactive_pane_moves_and_activates_it(
     page.get_by_role("tab", name="View 1").click()
 
     source_grid = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-1"]'
     )
     source_grid.wait_for(state="visible")
-    source = source_grid.locator('.seurat-dropcell[data-cell-index="0"]')
+    source = source_grid.locator('.pulsar-dropcell[data-cell-index="0"]')
     destination = page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-2"] '
-        '.seurat-workspace-preview-cell[data-cell-index="2"]'
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-2"] '
+        '.pulsar-workspace-preview-cell[data-cell-index="2"]'
     )
     destination.wait_for(state="visible")
 
     source.drag_to(destination)
 
     destination_grid = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-2"]'
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-2"]'
     )
     destination_grid.wait_for(state="visible")
     destination_grid.locator(
-        '.seurat-dropcell[data-cell-index="2"]'
+        '.pulsar-dropcell[data-cell-index="2"]'
     ).get_by_text("internal_energy", exact=True).wait_for(state="visible")
     assert page.get_by_role("tab", name="View 2").get_attribute(
         "aria-selected"
     ) == "true"
     assert page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
-        '.seurat-workspace-preview-cell[data-cell-index="0"]'
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        '.pulsar-workspace-preview-cell[data-cell-index="0"]'
     ).get_attribute("data-cell-filled") == "0"
     assert page.locator(
-        ".seurat-workspace-grid-preview.is-visualization-drop-target"
+        ".pulsar-workspace-grid-preview.is-visualization-drop-target"
     ).count() == 0
-    assert page.locator(".seurat-dropcell.seurat-drop-hover").count() == 0
+    assert page.locator(".pulsar-dropcell.pulsar-drop-hover").count() == 0
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
 def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     _split_workspace_pane_by_drag(page, first_bar, "vertical")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     page.get_by_role("tab", name="View 1").click()
     lower_preview = page.locator(
-        ".seurat-workspace-grid-preview.seurat-workspace-slot-second"
+        ".pulsar-workspace-grid-preview.pulsar-workspace-slot-second"
     )
     lower_preview.wait_for(state="visible")
-    assert lower_preview.locator(".seurat-workspace-preview-cell").evaluate_all(
+    assert lower_preview.locator(".pulsar-workspace-preview-cell").evaluate_all(
         "cells => cells.every(cell => getComputedStyle(cell).backgroundColor === 'rgb(255, 255, 255)')"
     )
 
     page.get_by_role("tab", name="View 2").click()
     upper_preview = page.locator(
-        ".seurat-workspace-grid-preview.seurat-workspace-slot-first"
+        ".pulsar-workspace-grid-preview.pulsar-workspace-slot-first"
     )
     upper_preview.wait_for(state="visible")
-    assert upper_preview.locator(".seurat-plot1d").evaluate(
+    assert upper_preview.locator(".pulsar-plot1d").evaluate(
         "plot => getComputedStyle(plot).backgroundColor === 'rgb(255, 255, 255)'"
     )
 
@@ -830,23 +830,23 @@ def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
     assert console_errors == [], response_errors
 
 
-def test_split_pane_slider_updates_inactive_1d_plot(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_split_pane_slider_updates_inactive_1d_plot(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     _split_workspace_pane_by_drag(page, first_bar, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     preview = page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-1"]'
     )
-    cursor = preview.locator(".seurat-plot1d-cursor-line")
+    cursor = preview.locator(".pulsar-plot1d-cursor-line")
     cursor.wait_for(state="attached")
     initial_x = float(cursor.get_attribute("x1"))
 
-    slider = page.locator("#seurat-vcr-step-slider")
+    slider = page.locator("#pulsar-vcr-step-slider")
     slider_bounds = slider.bounding_box()
     assert slider_bounds is not None
     slider.click(
@@ -858,7 +858,7 @@ def test_split_pane_slider_updates_inactive_1d_plot(page, seurat_server):
     selected_step = int(slider.input_value())
     assert selected_step > 0
     page.wait_for_function(
-        "step => document.querySelector('#seurat-vcr-time-value').textContent === 'Step = ' + step",
+        "step => document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = ' + step",
         arg=selected_step,
     )
 
@@ -867,17 +867,17 @@ def test_split_pane_slider_updates_inactive_1d_plot(page, seurat_server):
 
     page.get_by_role("tab", name="View 1").click()
     active_cursor = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"] '
-        ".seurat-plot1d-cursor-line"
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-1"] '
+        ".pulsar-plot1d-cursor-line"
     )
     active_cursor.wait_for(state="attached")
     page.wait_for_function(
-        "step => document.querySelector('#seurat-vcr-time-value').textContent === 'Step = ' + step",
+        "step => document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = ' + step",
         arg=selected_step,
     )
     active_frame = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"] '
-        ".seurat-plot1d svg rect"
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-1"] '
+        ".pulsar-plot1d svg rect"
     ).first
     frame_x = float(active_frame.get_attribute("x"))
     frame_width = float(active_frame.get_attribute("width"))
@@ -889,11 +889,11 @@ def test_split_pane_slider_updates_inactive_1d_plot(page, seurat_server):
     assert console_errors == [], response_errors
 
 
-def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_split_pane_tab_switch_keeps_2d_image_fitted(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -906,8 +906,8 @@ def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
 
     preview_image = page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
-        '.seurat-workspace-preview-media img[data-grid-image-sequence="1"]'
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        '.pulsar-workspace-preview-media img[data-grid-image-sequence="1"]'
     )
     preview_image.wait_for(state="visible")
     preview_geometry = preview_image.evaluate(
@@ -924,7 +924,7 @@ def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
             };
         }"""
     )
-    assert "seurat-workspace-preview-image" in preview_geometry["className"]
+    assert "pulsar-workspace-preview-image" in preview_geometry["className"]
     assert preview_geometry["objectFit"] == "contain"
     assert preview_geometry["width"] == pytest.approx(
         preview_geometry["parentWidth"], abs=1
@@ -936,12 +936,12 @@ def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
     page.get_by_role("tab", name="View 2").click()
     page.get_by_role("tab", name="View 1").click()
     active_viewport = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"] '
-        ".seurat-panzoom-viewport"
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-1"] '
+        ".pulsar-panzoom-viewport"
     )
     active_viewport.wait_for(state="visible")
     assert active_viewport.evaluate(
-        "viewport => ({ ...viewport.__seuratPanZoomState })"
+        "viewport => ({ ...viewport.__pulsarPanZoomState })"
     ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
 
     page.get_by_role("tab", name="View 3").click()
@@ -949,18 +949,18 @@ def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
     page.get_by_role("tab", name="View 1").click()
     active_viewport.wait_for(state="visible")
     assert active_viewport.evaluate(
-        "viewport => ({ ...viewport.__seuratPanZoomState })"
+        "viewport => ({ ...viewport.__pulsarPanZoomState })"
     ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
-def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_workspace_can_create_a_nested_three_pane_layout(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     pane_one = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     _split_workspace_pane_by_drag(page, pane_one, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -974,10 +974,10 @@ def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
 
     pane_two = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-2"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-2"]'
     )
     pane_three = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-3"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-3"]'
     )
     pane_one_bounds = pane_one.bounding_box()
     pane_two_bounds = pane_two.bounding_box()
@@ -986,9 +986,9 @@ def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
     assert pane_two_bounds is not None
     assert pane_three_bounds is not None
 
-    assert page.locator(".seurat-workspace-tab-bar").count() == 3
-    assert page.locator(".seurat-workspace-splitter").count() == 2
-    assert page.locator(".seurat-main-grid").count() == 3
+    assert page.locator(".pulsar-workspace-tab-bar").count() == 3
+    assert page.locator(".pulsar-workspace-splitter").count() == 2
+    assert page.locator(".pulsar-main-grid").count() == 3
     assert pane_two_bounds["x"] > pane_one_bounds["x"] + pane_one_bounds["width"] - 2
     assert pane_three_bounds["x"] == pytest.approx(pane_one_bounds["x"], abs=2)
     assert pane_three_bounds["y"] > pane_one_bounds["y"]
@@ -997,23 +997,23 @@ def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
     )
 
     root_splitter = page.locator(
-        '.seurat-workspace-splitter[data-split-id="split-1"]'
+        '.pulsar-workspace-splitter[data-split-id="split-1"]'
     )
     _drag(page, root_splitter, delta_x=-60, release=False)
     assert page.locator(
-        ".seurat-workspace-tab-dock-preview.is-split-resize-first"
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-first"
     ).count() == 2
     assert page.locator(
-        ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-second"
     ).count() == 1
     assert "% / " in root_splitter.locator(
-        ".seurat-workspace-split-readout"
+        ".pulsar-workspace-split-readout"
     ).text_content()
     page.mouse.up()
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-workspace-tab-dock-preview.is-split-resize-first, "
-        ".seurat-workspace-tab-dock-preview.is-split-resize-second'"
+        "'.pulsar-workspace-tab-dock-preview.is-split-resize-first, "
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-second'"
         ").length === 0"
     )
 
@@ -1021,31 +1021,31 @@ def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
     assert console_errors == [], response_errors
 
 
-def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_workspace_splitter_resizes_and_resets_panes(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     pane_one = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     _split_workspace_pane_by_drag(page, pane_one, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     splitter = page.locator(
-        '.seurat-workspace-splitter[data-split-id="split-1"]'
+        '.pulsar-workspace-splitter[data-split-id="split-1"]'
     )
     splitter.wait_for(state="visible")
     initial_width = pane_one.bounding_box()["width"]
 
     _drag(page, splitter, delta_x=120, release=False)
     assert "is-resizing" in (splitter.get_attribute("class") or "")
-    readout = splitter.locator(".seurat-workspace-split-readout")
+    readout = splitter.locator(".pulsar-workspace-split-readout")
     assert readout.is_visible()
     assert "% / " in readout.text_content()
     assert page.locator(
-        ".seurat-workspace-tab-dock-preview.is-split-resize-first"
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-first"
     ).count() == 1
     assert page.locator(
-        ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-second"
     ).count() == 1
     live_width = pane_one.bounding_box()["width"]
     live_ratio = splitter.get_attribute("data-split-ratio")
@@ -1069,12 +1069,12 @@ def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
     )
     page.wait_for_function(
         "getComputedStyle(document.querySelector("
-        "'.seurat-workspace-split-readout')).opacity === '0'"
+        "'.pulsar-workspace-split-readout')).opacity === '0'"
     )
     assert readout.text_content() == ""
     assert page.locator(
-        ".seurat-workspace-tab-dock-preview.is-split-resize-first, "
-        ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-first, "
+        ".pulsar-workspace-tab-dock-preview.is-split-resize-second"
     ).count() == 0
 
     splitter.dblclick()
@@ -1089,12 +1089,12 @@ def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
 
 
 def test_workspace_tabs_preserve_independent_grid_track_sizes(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -1102,15 +1102,15 @@ def test_workspace_tabs_preserve_independent_grid_track_sizes(
     page.get_by_role("button", name="Uniform", exact=True).click()
     page.get_by_role("button", name="Settings", exact=True).click()
 
-    grid = page.locator(".seurat-workspace-active-grid")
+    grid = page.locator(".pulsar-workspace-active-grid")
     original_sizes = grid.get_attribute("data-grid-column-sizes")
     handle = grid.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+        '.pulsar-dropcell[data-cell-index="0"] '
+        '.pulsar-grid-col-resize-handle[data-resize-edge="right"]'
     )
     _drag(page, handle, delta_x=45)
     page.wait_for_function(
-        "Number(document.querySelector('.seurat-workspace-active-grid')"
+        "Number(document.querySelector('.pulsar-workspace-active-grid')"
         ".getAttribute('data-grid-column-sizes').split(',')[0]) > 320"
     )
     resized_sizes = grid.get_attribute("data-grid-column-sizes")
@@ -1118,7 +1118,7 @@ def test_workspace_tabs_preserve_independent_grid_track_sizes(
 
     page.get_by_role("tab", name="View 1").click()
     page.wait_for_function(
-        "document.querySelector('.seurat-workspace-active-grid')"
+        "document.querySelector('.pulsar-workspace-active-grid')"
         ".getAttribute('data-grid-column-sizes') === "
         f"{original_sizes!r}"
     )
@@ -1126,7 +1126,7 @@ def test_workspace_tabs_preserve_independent_grid_track_sizes(
 
     page.get_by_role("tab", name="View 2").click()
     page.wait_for_function(
-        "document.querySelector('.seurat-workspace-active-grid')"
+        "document.querySelector('.pulsar-workspace-active-grid')"
         ".getAttribute('data-grid-column-sizes') === "
         f"{resized_sizes!r}"
     )
@@ -1137,12 +1137,12 @@ def test_workspace_tabs_preserve_independent_grid_track_sizes(
 
 
 def test_workspace_tabs_drag_to_reorder_with_insertion_feedback(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     add_tab = first_bar.get_by_role("button", name="New tab")
     add_tab.click()
@@ -1168,26 +1168,26 @@ def test_workspace_tabs_drag_to_reorder_with_insertion_feedback(
         steps=8,
     )
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-workspace-tab-shell.is-tab-drop-after').length === 1"
+        "document.querySelectorAll('.pulsar-workspace-tab-shell.is-tab-drop-after').length === 1"
     )
     assert source.get_attribute("aria-grabbed") == "true"
     page.mouse.up()
 
     page.wait_for_function(
-        """() => Array.from(document.querySelectorAll('.seurat-workspace-tab'))
+        """() => Array.from(document.querySelectorAll('.pulsar-workspace-tab'))
             .map(tab => tab.textContent.trim()).join(',') === 'View 2,View 3,View 1'"""
     )
-    assert page.locator(".seurat-workspace-tab-shell.is-tab-dragging").count() == 0
+    assert page.locator(".pulsar-workspace-tab-shell.is-tab-dragging").count() == 0
     assert page.locator(
-        ".seurat-workspace-tab-shell.is-tab-drop-before, "
-        ".seurat-workspace-tab-shell.is-tab-drop-after"
+        ".pulsar-workspace-tab-shell.is-tab-drop-before, "
+        ".pulsar-workspace-tab-shell.is-tab-drop-after"
     ).count() == 0
     assert page.get_by_role("tab", name="View 3").get_attribute(
         "aria-selected"
     ) == "true"
 
     page.get_by_role("tab", name="View 1").click()
-    page.locator(".seurat-workspace-active-grid").get_by_text(
+    page.locator(".pulsar-workspace-active-grid").get_by_text(
         "internal_energy", exact=True
     ).wait_for(state="visible")
 
@@ -1196,12 +1196,12 @@ def test_workspace_tabs_drag_to_reorder_with_insertion_feedback(
 
 
 def test_workspace_tabs_drag_between_panes_at_the_drop_position(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     pane_one = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     pane_one.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -1210,10 +1210,10 @@ def test_workspace_tabs_drag_between_panes_at_the_drop_position(
     page.wait_for_function(
         """() => {
             const first = document.querySelector(
-              '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+              '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
             );
             const second = document.querySelector(
-              '.seurat-workspace-tab-bar[data-pane-frame-id="pane-2"]'
+              '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-2"]'
             );
             if (!first || !second) return false;
             const firstBounds = first.getBoundingClientRect();
@@ -1240,13 +1240,13 @@ def test_workspace_tabs_drag_between_panes_at_the_drop_position(
     page.wait_for_function(
         """() => {
             const paneOne = document.querySelector(
-              '.seurat-workspace-tabs[data-pane-id="pane-1"]'
+              '.pulsar-workspace-tabs[data-pane-id="pane-1"]'
             );
             const paneTwo = document.querySelector(
-              '.seurat-workspace-tabs[data-pane-id="pane-2"]'
+              '.pulsar-workspace-tabs[data-pane-id="pane-2"]'
             );
             const titles = element => Array.from(
-              element.querySelectorAll('.seurat-workspace-tab')
+              element.querySelectorAll('.pulsar-workspace-tab')
             ).map(tab => tab.textContent.trim()).join(',');
             return paneOne && paneTwo
               && titles(paneOne) === 'View 2'
@@ -1256,13 +1256,13 @@ def test_workspace_tabs_drag_between_panes_at_the_drop_position(
     assert page.get_by_role("tab", name="View 1").get_attribute(
         "aria-selected"
     ) == "true"
-    page.locator(".seurat-workspace-active-grid").get_by_text(
+    page.locator(".pulsar-workspace-active-grid").get_by_text(
         "internal_energy", exact=True
     ).wait_for(state="visible")
-    assert page.locator(".seurat-workspace-tabs.is-tab-drop-target").count() == 0
+    assert page.locator(".pulsar-workspace-tabs.is-tab-drop-target").count() == 0
     assert page.locator(
-        ".seurat-workspace-tab-shell.is-tab-drop-before, "
-        ".seurat-workspace-tab-shell.is-tab-drop-after"
+        ".pulsar-workspace-tab-shell.is-tab-drop-before, "
+        ".pulsar-workspace-tab-shell.is-tab-drop-after"
     ).count() == 0
 
     assert page_errors == []
@@ -1270,12 +1270,12 @@ def test_workspace_tabs_drag_between_panes_at_the_drop_position(
 
 
 def test_workspace_tab_drag_to_right_edge_creates_split_and_undoes_once(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -1301,13 +1301,13 @@ def test_workspace_tab_drag_to_right_edge_creates_split_and_undoes_once(
         ".classList.contains('is-workspace-tab-dragging')"
     )
     dock_preview = page.locator(
-        '.seurat-workspace-tab-dock-preview[data-tab-dock-pane-id="pane-1"]'
+        '.pulsar-workspace-tab-dock-preview[data-tab-dock-pane-id="pane-1"]'
     )
     right_target = dock_preview.locator(
-        '.seurat-workspace-tab-dock-target[data-tab-dock-direction="horizontal"]'
+        '.pulsar-workspace-tab-dock-target[data-tab-dock-direction="horizontal"]'
     )
     bottom_target = dock_preview.locator(
-        '.seurat-workspace-tab-dock-target[data-tab-dock-direction="vertical"]'
+        '.pulsar-workspace-tab-dock-target[data-tab-dock-direction="vertical"]'
     )
     preview_bounds = dock_preview.bounding_box()
     right_bounds = right_target.bounding_box()
@@ -1328,38 +1328,38 @@ def test_workspace_tab_drag_to_right_edge_creates_split_and_undoes_once(
     )
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-workspace-tab-dock-target.is-tab-dock-active.is-tab-dock-right'"
+        "'.pulsar-workspace-tab-dock-target.is-tab-dock-active.is-tab-dock-right'"
         ").length === 1"
     )
     page.mouse.up()
 
     page.get_by_role("tab", name="View 1").wait_for(state="visible")
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-workspace-tab-bar').length === 2"
+        "document.querySelectorAll('.pulsar-workspace-tab-bar').length === 2"
     )
     assert page.locator(
-        '.seurat-workspace-tabs[data-pane-id="pane-1"] .seurat-workspace-tab'
+        '.pulsar-workspace-tabs[data-pane-id="pane-1"] .pulsar-workspace-tab'
     ).all_text_contents() == ["View 2"]
     assert page.locator(
-        '.seurat-workspace-tabs[data-pane-id="pane-2"] .seurat-workspace-tab'
+        '.pulsar-workspace-tabs[data-pane-id="pane-2"] .pulsar-workspace-tab'
     ).all_text_contents() == ["View 1"]
     assert page.get_by_role("tab", name="View 1").get_attribute(
         "aria-selected"
     ) == "true"
     assert page.locator(
-        ".seurat-workspace-tab-dock-target.is-tab-dock-active"
+        ".pulsar-workspace-tab-dock-target.is-tab-dock-active"
     ).count() == 0
     assert page.locator(
-        '.seurat-workspace-splitter[data-split-direction="horizontal"]'
+        '.pulsar-workspace-splitter[data-split-direction="horizontal"]'
     ).count() == 1
 
-    undo_button = page.locator(".seurat-history-button").first
+    undo_button = page.locator(".pulsar-history-button").first
     assert "Undo Split tab" in undo_button.get_attribute("title")
     undo_button.click()
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-workspace-tab-bar').length === 1"
+        "document.querySelectorAll('.pulsar-workspace-tab-bar').length === 1"
     )
-    assert page.locator(".seurat-workspace-tab").all_text_contents() == [
+    assert page.locator(".pulsar-workspace-tab").all_text_contents() == [
         "View 1",
         "View 2",
     ]
@@ -1369,13 +1369,13 @@ def test_workspace_tab_drag_to_right_edge_creates_split_and_undoes_once(
 
 
 def test_workspace_only_tab_drag_to_bottom_leaves_empty_source_tab(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     source = page.get_by_role("tab", name="View 1")
     target = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-1"]'
     )
     source_bounds = source.bounding_box()
     target_bounds = target.bounding_box()
@@ -1394,46 +1394,46 @@ def test_workspace_only_tab_drag_to_bottom_leaves_empty_source_tab(
     )
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-workspace-tab-dock-target.is-tab-dock-active.is-tab-dock-bottom'"
+        "'.pulsar-workspace-tab-dock-target.is-tab-dock-active.is-tab-dock-bottom'"
         ").length === 1"
     )
     page.mouse.up()
 
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-workspace-tab-bar').length === 2"
+        "document.querySelectorAll('.pulsar-workspace-tab-bar').length === 2"
     )
     assert page.locator(
-        '.seurat-workspace-tabs[data-pane-id="pane-1"] .seurat-workspace-tab'
+        '.pulsar-workspace-tabs[data-pane-id="pane-1"] .pulsar-workspace-tab'
     ).all_text_contents() == ["View 2"]
     assert page.locator(
-        '.seurat-workspace-tabs[data-pane-id="pane-2"] .seurat-workspace-tab'
+        '.pulsar-workspace-tabs[data-pane-id="pane-2"] .pulsar-workspace-tab'
     ).all_text_contents() == ["View 1"]
     assert page.locator(
-        '.seurat-workspace-splitter[data-split-direction="vertical"]'
+        '.pulsar-workspace-splitter[data-split-direction="vertical"]'
     ).count() == 1
     page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-2"]'
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-2"]'
     ).get_by_text("internal_energy", exact=True).wait_for(state="visible")
     empty_preview = page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-1"]'
     )
-    assert empty_preview.locator(".seurat-dropcell").count() == 0
+    assert empty_preview.locator(".pulsar-dropcell").count() == 0
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
-def test_tab_context_menu_renames_and_closes_with_icons(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_tab_context_menu_renames_and_closes_with_icons(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     page.get_by_role("tab", name="View 1").click(button="right")
-    menu = page.locator("#seurat-context-menu")
+    menu = page.locator("#pulsar-context-menu")
     menu.get_by_text("View 1", exact=True).wait_for(state="visible")
     assert menu.locator(".mdi-pencil-outline").count() == 1
     assert menu.locator(".mdi-close").count() == 1
@@ -1447,19 +1447,19 @@ def test_tab_context_menu_renames_and_closes_with_icons(page, seurat_server):
     page.once("dialog", lambda dialog: dialog.accept())
     menu.get_by_text("Close", exact=True).click()
     page.get_by_role("tab", name="Overview").wait_for(state="detached")
-    assert page.locator(".seurat-workspace-tab").count() == 1
+    assert page.locator(".pulsar-workspace-tab").count() == 1
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
 def test_workspace_tab_close_button_is_visible_for_active_and_hovered_tabs(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
@@ -1479,38 +1479,38 @@ def test_workspace_tab_close_button_is_visible_for_active_and_hovered_tabs(
     page.once("dialog", lambda dialog: dialog.accept())
     inactive_close.click()
     inactive_tab.wait_for(state="detached")
-    assert page.locator(".seurat-workspace-tab").count() == 1
-    assert first_bar.locator(".seurat-workspace-tab-close").count() == 0
+    assert page.locator(".pulsar-workspace-tab").count() == 1
+    assert first_bar.locator(".pulsar-workspace-tab-close").count() == 0
 
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
 def test_workspace_tab_strip_marks_hidden_tabs_at_each_scroll_edge(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     add_tab = first_bar.get_by_role("button", name="New tab")
     for expected_count in range(2, 19):
         add_tab.click()
         page.wait_for_function(
-            "expected => document.querySelectorAll('.seurat-workspace-tab').length === expected",
+            "expected => document.querySelectorAll('.pulsar-workspace-tab').length === expected",
             arg=expected_count,
         )
 
-    viewport = first_bar.locator(".seurat-workspace-tabs-viewport")
-    tabs = viewport.locator(".seurat-workspace-tabs")
+    viewport = first_bar.locator(".pulsar-workspace-tabs-viewport")
+    tabs = viewport.locator(".pulsar-workspace-tabs")
     active_tab = page.get_by_role("tab", name="View 18")
     page.wait_for_function(
-        "document.querySelector('.seurat-workspace-tabs').scrollLeft > 0"
+        "document.querySelector('.pulsar-workspace-tabs').scrollLeft > 0"
     )
     assert active_tab.evaluate(
         """tab => {
-            const strip = tab.closest('.seurat-workspace-tabs');
+            const strip = tab.closest('.pulsar-workspace-tabs');
             const tabBounds = tab.getBoundingClientRect();
             const stripBounds = strip.getBoundingClientRect();
             return tabBounds.left >= stripBounds.left
@@ -1528,13 +1528,13 @@ def test_workspace_tab_strip_marks_hidden_tabs_at_each_scroll_edge(
 
     tabs.evaluate("element => { element.scrollLeft = 0; }")
     page.wait_for_function(
-        "document.querySelector('.seurat-workspace-tabs-viewport').classList.contains('has-overflow-right')"
+        "document.querySelector('.pulsar-workspace-tabs-viewport').classList.contains('has-overflow-right')"
     )
     assert viewport.evaluate("element => element.classList.contains('has-overflow-left')") is False
 
     tabs.evaluate("element => { element.scrollLeft = element.scrollWidth; }")
     page.wait_for_function(
-        "document.querySelector('.seurat-workspace-tabs-viewport').classList.contains('has-overflow-left')"
+        "document.querySelector('.pulsar-workspace-tabs-viewport').classList.contains('has-overflow-left')"
     )
     assert viewport.evaluate("element => element.classList.contains('has-overflow-right')") is False
 
@@ -1542,8 +1542,8 @@ def test_workspace_tab_strip_marks_hidden_tabs_at_each_scroll_edge(
     assert console_errors == [], response_errors
 
 
-def test_query_assistant_reviews_before_applying(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_query_assistant_reviews_before_applying(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Ask").click()
     page.get_by_text("Query Assistant", exact=True).wait_for(state="visible")
@@ -1568,13 +1568,13 @@ def test_query_assistant_reviews_before_applying(page, seurat_server):
     assert console_errors == [], response_errors
 
 
-def test_query_assistant_panel_drags(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_query_assistant_panel_drags(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Ask").click()
-    panel = page.locator("#seurat-query-assistant-panel")
+    panel = page.locator("#pulsar-query-assistant-panel")
     panel.wait_for(state="visible")
-    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    handle = panel.locator(".pulsar-floating-panel-drag-handle")
     initial = panel.bounding_box()
     assert initial is not None
 
@@ -1586,14 +1586,14 @@ def test_query_assistant_panel_drags(page, seurat_server):
 
 
 def test_visualization_assistant_reviews_before_adding_to_grid(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
-    target_cell = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    target_cell = page.locator('.pulsar-dropcell[data-cell-index="2"]')
     target_cell.click()
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"2\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"2\"]')"
         ".getAttribute('data-cell-active') === '1'"
     )
     assert target_cell.get_by_text("current_z", exact=True).count() == 0
@@ -1621,9 +1621,9 @@ def test_visualization_assistant_reviews_before_adding_to_grid(
 
 
 def test_source_filter_uses_query_assistant_without_changing_global_query(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     global_query = page.locator('input[placeholder^="e.g. var =="]')
     initial_global_query = global_query.input_value()
@@ -1669,72 +1669,72 @@ def test_source_filter_uses_query_assistant_without_changing_global_query(
 
 def test_scalar_field_axes_and_backgrounds_use_automatic_contrast(
     page,
-    seurat_server,
+    pulsar_server,
 ):
     console_errors, page_errors, response_errors = _open_app(
         page,
-        seurat_server,
+        pulsar_server,
         mode="scalar",
     )
 
     black_view = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] .seurat-scalar-field-view'
+        '.pulsar-dropcell[data-cell-index="0"] .pulsar-scalar-field-view'
     )
     white_view = page.locator(
-        '.seurat-dropcell[data-cell-index="1"] .seurat-scalar-field-view'
+        '.pulsar-dropcell[data-cell-index="1"] .pulsar-scalar-field-view'
     )
 
     for view in (black_view, white_view):
         assert view.locator('[data-scalar-axis="x"]').is_visible()
         assert view.locator('[data-scalar-axis="y"]').is_visible()
-        assert view.locator(".seurat-scalar-field-x-tick").count() == 3
-        assert view.locator(".seurat-scalar-field-y-tick").count() == 3
-        assert view.locator(".seurat-scalar-field-x-label").text_content() == "R"
-        assert view.locator(".seurat-scalar-field-y-label").text_content() == "Z"
+        assert view.locator(".pulsar-scalar-field-x-tick").count() == 3
+        assert view.locator(".pulsar-scalar-field-y-tick").count() == 3
+        assert view.locator(".pulsar-scalar-field-x-label").text_content() == "R"
+        assert view.locator(".pulsar-scalar-field-y-label").text_content() == "Z"
 
     assert black_view.evaluate(
         "view => getComputedStyle(view).backgroundColor"
     ) == "rgb(0, 0, 0)"
-    assert black_view.locator(".seurat-scalar-field-x-tick").first.evaluate(
+    assert black_view.locator(".pulsar-scalar-field-x-tick").first.evaluate(
         "tick => getComputedStyle(tick).color"
     ) == "rgb(255, 255, 255)"
-    assert black_view.locator(".seurat-scalar-field-x-axis").evaluate(
+    assert black_view.locator(".pulsar-scalar-field-x-axis").evaluate(
         "axis => getComputedStyle(axis).borderTopColor"
     ) == "rgb(255, 255, 255)"
 
     assert white_view.evaluate(
         "view => getComputedStyle(view).backgroundColor"
     ) == "rgb(255, 255, 255)"
-    assert white_view.locator(".seurat-scalar-field-x-tick").first.evaluate(
+    assert white_view.locator(".pulsar-scalar-field-x-tick").first.evaluate(
         "tick => getComputedStyle(tick).color"
     ) == "rgb(17, 17, 17)"
-    assert white_view.locator(".seurat-scalar-field-x-axis").evaluate(
+    assert white_view.locator(".pulsar-scalar-field-x-axis").evaluate(
         "axis => getComputedStyle(axis).borderTopColor"
     ) == "rgb(17, 17, 17)"
 
-    black_viewport = black_view.locator(".seurat-panzoom-viewport")
+    black_viewport = black_view.locator(".pulsar-panzoom-viewport")
     page.wait_for_function(
         """() => Boolean(
             document.querySelector(
-                '.seurat-dropcell[data-cell-index="0"] .seurat-panzoom-viewport'
-            ).__seuratScalarFieldDataRect
+                '.pulsar-dropcell[data-cell-index="0"] .pulsar-panzoom-viewport'
+            ).__pulsarScalarFieldDataRect
         )"""
     )
     data_rect = black_viewport.evaluate(
-        "viewport => ({ ...viewport.__seuratScalarFieldDataRect })"
+        "viewport => ({ ...viewport.__pulsarScalarFieldDataRect })"
     )
     x_axis_box = black_view.locator(
-        ".seurat-scalar-field-x-axis"
+        ".pulsar-scalar-field-x-axis"
     ).bounding_box()
     y_axis_box = black_view.locator(
-        ".seurat-scalar-field-y-axis"
+        ".pulsar-scalar-field-y-axis"
     ).bounding_box()
     assert x_axis_box["width"] == pytest.approx(data_rect["width"], abs=1)
     assert y_axis_box["height"] == pytest.approx(data_rect["height"], abs=1)
 
     def axis_values(axis):
         return black_view.locator(
-            f'.seurat-scalar-field-{axis}-axis'
+            f'.pulsar-scalar-field-{axis}-axis'
         ).evaluate(
             """axis => Array.from(axis.querySelectorAll('[data-axis-value]'))
                 .map(tick => Number(tick.getAttribute('data-axis-value')))"""
@@ -1769,40 +1769,40 @@ def test_scalar_field_axes_and_backgrounds_use_automatic_contrast(
 
 def test_scalar_field_contour_controls_follow_render_mode(
     page,
-    seurat_server,
+    pulsar_server,
 ):
     console_errors, page_errors, response_errors = _open_app(
         page,
-        seurat_server,
+        pulsar_server,
         mode="scalar-settings",
     )
 
-    panel = page.locator("#seurat-scalar-field-settings-panel")
+    panel = page.locator("#pulsar-scalar-field-settings-panel")
     panel.wait_for(state="visible")
-    section_titles = panel.locator(".seurat-scalar-field-section-title")
+    section_titles = panel.locator(".pulsar-scalar-field-section-title")
     heatmap = section_titles.nth(0).locator('input[type="checkbox"]')
     contour = section_titles.nth(1).locator('input[type="checkbox"]')
-    sections = panel.locator(".seurat-scalar-field-layer-section")
-    display_section = panel.locator(".seurat-plot-settings-section").nth(0)
+    sections = panel.locator(".pulsar-scalar-field-layer-section")
+    display_section = panel.locator(".pulsar-plot-settings-section").nth(0)
     heatmap_section = sections.nth(0)
-    contour_section = panel.locator(".seurat-scalar-field-contour-section")
+    contour_section = panel.locator(".pulsar-scalar-field-contour-section")
     background = display_section.locator(
-        ".seurat-scalar-field-background-toggle"
+        ".pulsar-scalar-field-background-toggle"
     )
     axes = display_section.locator('input[type="checkbox"]')
     colormap_row = heatmap_section.locator(
-        ".seurat-scalar-field-compact-row"
+        ".pulsar-scalar-field-compact-row"
     ).nth(0)
     range_row = heatmap_section.locator(
-        ".seurat-scalar-field-compact-row"
+        ".pulsar-scalar-field-compact-row"
     ).nth(1)
-    colormap = colormap_row.locator(".seurat-scalar-field-colormap")
+    colormap = colormap_row.locator(".pulsar-scalar-field-colormap")
     colorbar = colormap_row.locator('input[type="checkbox"]')
 
     assert heatmap.is_checked()
     assert not contour.is_checked()
     assert (
-        panel.locator(".seurat-plot-settings-section-title")
+        panel.locator(".pulsar-plot-settings-section-title")
         .first.text_content()
         .strip()
         == "Display"
@@ -1818,19 +1818,19 @@ def test_scalar_field_contour_controls_follow_render_mode(
     assert range_row.get_by_label("Min").is_disabled()
     assert range_row.get_by_label("Max").is_disabled()
     assert contour_section.locator(
-        ".seurat-scalar-field-contour-color"
+        ".pulsar-scalar-field-contour-color"
     ).is_disabled()
 
     background.click()
     page.wait_for_function(
         """() => getComputedStyle(
-            document.querySelector('.seurat-scalar-field-background-toggle')
+            document.querySelector('.pulsar-scalar-field-background-toggle')
         ).backgroundColor === 'rgb(255, 255, 255)'"""
     )
     background.click()
     page.wait_for_function(
         """() => getComputedStyle(
-            document.querySelector('.seurat-scalar-field-background-toggle')
+            document.querySelector('.pulsar-scalar-field-background-toggle')
         ).backgroundColor === 'rgb(0, 0, 0)'"""
     )
 
@@ -1839,7 +1839,7 @@ def test_scalar_field_contour_controls_follow_render_mode(
     assert not colormap.is_disabled()
     assert not colorbar.is_disabled()
     contour_color = contour_section.locator(
-        ".seurat-scalar-field-contour-color"
+        ".pulsar-scalar-field-contour-color"
     )
     assert not contour_color.is_disabled()
 
@@ -1855,17 +1855,17 @@ def test_scalar_field_contour_controls_follow_render_mode(
     assert contour_section.get_by_label("Number").input_value() == "5"
 
     values_radio.check()
-    values = panel.locator(".seurat-scalar-field-contour-values input")
+    values = panel.locator(".pulsar-scalar-field-contour-values input")
     values.wait_for(state="visible")
     assert values.input_value() == "-1, 0, 1"
 
     contour_color.click()
-    color_popup = page.locator(".seurat-plot-settings-color-popup").last
+    color_popup = page.locator(".pulsar-plot-settings-color-popup").last
     color_popup.wait_for(state="visible")
     color_popup.locator('button[title="#ff0000"]').click()
     page.wait_for_function(
         """() => getComputedStyle(
-            document.querySelector('.seurat-scalar-field-contour-color')
+            document.querySelector('.pulsar-scalar-field-contour-color')
         ).backgroundColor === 'rgb(255, 0, 0)'"""
     )
 
@@ -1878,10 +1878,10 @@ def test_scalar_field_contour_controls_follow_render_mode(
     assert console_errors == [], response_errors
 
 
-def test_workspace_commands_are_in_hamburger_drawer(page, seurat_server):
+def test_workspace_commands_are_in_hamburger_drawer(page, pulsar_server):
     console_errors, page_errors, response_errors = _open_app(
         page,
-        seurat_server,
+        pulsar_server,
     )
 
     drawer = page.locator(".v-navigation-drawer")
@@ -1905,14 +1905,14 @@ def test_workspace_commands_are_in_hamburger_drawer(page, seurat_server):
 
 def test_workspace_save_and_load_restore_live_grid_track_sizes(
     page,
-    seurat_server,
+    pulsar_server,
 ):
-    _open_app(page, seurat_server)
+    _open_app(page, pulsar_server)
 
-    grid = page.locator(".seurat-main-grid")
+    grid = page.locator(".pulsar-main-grid")
     corner = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        ".seurat-grid-corner-bottom-right"
+        '.pulsar-dropcell[data-cell-index="0"] '
+        ".pulsar-grid-corner-bottom-right"
     )
     _drag(page, corner, delta_x=55, delta_y=40)
     saved_column_sizes = grid.get_attribute("data-grid-column-sizes")
@@ -1940,7 +1940,7 @@ def test_workspace_save_and_load_restore_live_grid_track_sizes(
     drawer.get_by_text("Load…", exact=True).click()
     page.wait_for_function(
         """([columnSizes, rowSizes]) => {
-            const grid = document.querySelector('.seurat-main-grid');
+            const grid = document.querySelector('.pulsar-main-grid');
             return grid
                 && grid.getAttribute('data-grid-column-sizes') === columnSizes
                 && grid.getAttribute('data-grid-row-sizes') === rowSizes;
@@ -1956,8 +1956,8 @@ def test_workspace_save_and_load_restore_live_grid_track_sizes(
     )
 
 
-def test_variable_group_expands_and_collapses(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_variable_group_expands_and_collapses(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     group = page.get_by_role("button", name="▾0D", exact=True)
     variable = page.locator('[title="fixture/scalars.bp/internal_energy"]')
@@ -1976,11 +1976,11 @@ def test_variable_group_expands_and_collapses(page, seurat_server):
 
 def test_variable_catalog_search_filters_locally_and_preserves_collapse_state(
     page,
-    seurat_server,
+    pulsar_server,
 ):
-    _open_app(page, seurat_server)
+    _open_app(page, pulsar_server)
 
-    search = page.locator(".seurat-variable-search input")
+    search = page.locator(".pulsar-variable-search input")
     zero_d_group = page.get_by_role("button", name="▾0D", exact=True)
     internal_energy = page.locator('[data-item="internal_energy"]')
     current_z = page.locator('[data-item="current_z"]')
@@ -2012,20 +2012,20 @@ def test_variable_catalog_search_filters_locally_and_preserves_collapse_state(
     ) == "false"
 
 
-def test_grid_selection_assignment_and_layout_controls(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_grid_selection_assignment_and_layout_controls(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    empty_cell = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    empty_cell = page.locator('.pulsar-dropcell[data-cell-index="2"]')
     empty_cell.click()
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"2\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"2\"]')"
         ".getAttribute('data-cell-active') === '1'"
     )
 
     variable = page.locator('[data-item="current_z"]')
     variable.drag_to(empty_cell)
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"2\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"2\"]')"
         ".getAttribute('data-cell-filled') === '1'"
     )
     assert empty_cell.get_by_text("current_z", exact=True).is_visible()
@@ -2033,22 +2033,22 @@ def test_grid_selection_assignment_and_layout_controls(page, seurat_server):
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Grid size 1 x 3 ▾", exact=True).click()
     page.get_by_role("button", name="2 x 2", exact=True).click()
-    page.wait_for_function("document.querySelectorAll('.seurat-dropcell').length === 4")
+    page.wait_for_function("document.querySelectorAll('.pulsar-dropcell').length === 4")
 
 
-def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Freeform", exact=True).click()
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     canvas.wait_for(state="visible")
-    tiles = canvas.locator(":scope > .seurat-dropcell")
+    tiles = canvas.locator(":scope > .pulsar-dropcell")
     assert tiles.count() == 2
     assert canvas.evaluate("element => getComputedStyle(element).backgroundImage") == "none"
     page.wait_for_function(
         """() => {
-            const canvas = document.querySelector('.seurat-freeform-canvas');
+            const canvas = document.querySelector('.pulsar-freeform-canvas');
             const first = document.querySelector('[data-tile-id="tile-1"]');
             const second = document.querySelector('[data-tile-id="tile-2"]');
             if (!canvas || !first || !second) return false;
@@ -2074,7 +2074,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
 
     page.get_by_role("button", name="Settings", exact=True).click()
     first = canvas.locator('[data-tile-id="tile-1"]')
-    _drag(page, first.locator(".seurat-tile-header"), delta_y=9 * 24)
+    _drag(page, first.locator(".pulsar-tile-header"), delta_y=9 * 24)
     page.wait_for_function(
         "document.querySelector('[data-tile-id=\"tile-1\"]')"
         ".getAttribute('data-canvas-y') === '9'"
@@ -2083,7 +2083,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     second = canvas.locator('[data-tile-id="tile-2"]')
     _drag(
         page,
-        second.locator(".seurat-canvas-resize-handle"),
+        second.locator(".pulsar-canvas-resize-handle"),
         delta_x=90,
         delta_y=48,
     )
@@ -2094,7 +2094,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     assert second.get_attribute("data-canvas-h") == "10"
     page.wait_for_function(
         "() => { const canvas = document.querySelector("
-        "'.seurat-freeform-canvas'); const tile = document.querySelector("
+        "'.pulsar-freeform-canvas'); const tile = document.querySelector("
         "'[data-tile-id=\"tile-2\"]'); return canvas && tile"
         " && Math.abs(tile.getBoundingClientRect().width"
         " - (canvas.clientWidth * 12 / 24 - 4)) < 1; }"
@@ -2102,7 +2102,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     canvas_width = canvas.evaluate("element => element.clientWidth")
     _drag(
         page,
-        second.locator(".seurat-canvas-resize-handle"),
+        second.locator(".pulsar-canvas-resize-handle"),
         delta_x=-11 * canvas_width / 24,
     )
     page.wait_for_function(
@@ -2113,7 +2113,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     variable = page.locator('[data-item="internal_energy"]')
     variable.drag_to(canvas, target_position={"x": 540, "y": 340})
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+        "document.querySelectorAll('.pulsar-freeform-canvas > .pulsar-dropcell').length === 3"
     )
     added = canvas.locator('[data-tile-id="tile-3"]')
     added_bounds = added.bounding_box()
@@ -2124,13 +2124,13 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Show grid", exact=True).click()
     page.wait_for_function(
-        "document.querySelector('.seurat-freeform-canvas')"
+        "document.querySelector('.pulsar-freeform-canvas')"
         ".classList.contains('show-grid')"
     )
-    overlay = canvas.locator(".seurat-canvas-grid-overlay")
+    overlay = canvas.locator(".pulsar-canvas-grid-overlay")
     overlay.wait_for(state="visible")
-    vertical_lines = overlay.locator(".seurat-canvas-grid-line.is-vertical")
-    horizontal_lines = overlay.locator(".seurat-canvas-grid-line.is-horizontal")
+    vertical_lines = overlay.locator(".pulsar-canvas-grid-line.is-vertical")
+    horizontal_lines = overlay.locator(".pulsar-canvas-grid-line.is-horizontal")
     assert vertical_lines.count() == 23
     assert horizontal_lines.count() >= 12
     assert overlay.evaluate("element => getComputedStyle(element).backgroundImage") == "none"
@@ -2154,7 +2154,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     assert before_columns_bounds is not None
     page.get_by_role("button", name="48 columns", exact=True).click()
     page.wait_for_function(
-        "document.querySelector('.seurat-freeform-canvas')"
+        "document.querySelector('.pulsar-freeform-canvas')"
         ".getAttribute('data-canvas-cols') === '48'"
     )
     page.wait_for_timeout(180)
@@ -2167,7 +2167,7 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
     for columns in (12, 24, 36):
         page.get_by_role("button", name=f"{columns} columns", exact=True).click()
         page.wait_for_function(
-            "columns => document.querySelector('.seurat-freeform-canvas')"
+            "columns => document.querySelector('.pulsar-freeform-canvas')"
             ".getAttribute('data-canvas-cols') === String(columns)",
             arg=columns,
         )
@@ -2187,9 +2187,9 @@ def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_serv
 
 
 def test_freeform_new_plot_size_is_shared_across_workspace_tabs(
-    page, seurat_server
+    page, pulsar_server
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Freeform", exact=True).click()
@@ -2200,12 +2200,12 @@ def test_freeform_new_plot_size_is_shared_across_workspace_tabs(
     page.get_by_role("button", name="Settings", exact=True).click()
 
     first_bar = page.locator(
-        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+        ".pulsar-workspace-tab-bar.pulsar-workspace-slot-first"
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     canvas.wait_for(state="visible")
     assert canvas.get_attribute("data-canvas-default-tile-width") == "4"
     page.get_by_role("button", name="Settings", exact=True).click()
@@ -2217,7 +2217,7 @@ def test_freeform_new_plot_size_is_shared_across_workspace_tabs(
         target_position={"x": 260, "y": 180},
     )
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 1"
+        "document.querySelectorAll('.pulsar-freeform-canvas > .pulsar-dropcell').length === 1"
     )
     added = canvas.locator('[data-tile-id="tile-1"]')
     assert added.get_attribute("data-canvas-w") == "4"
@@ -2233,10 +2233,10 @@ def test_freeform_new_plot_size_is_shared_across_workspace_tabs(
 
 
 def test_freeform_crowded_drop_preserves_configured_plot_size(
-    page, seurat_server
+    page, pulsar_server
 ):
     console_errors, page_errors, response_errors = _open_app(
-        page, seurat_server, "freeform-column-seam"
+        page, pulsar_server, "freeform-column-seam"
     )
 
     page.get_by_role("button", name="Settings", exact=True).click()
@@ -2246,7 +2246,7 @@ def test_freeform_crowded_drop_preserves_configured_plot_size(
     page.get_by_text("12 columns", exact=True).wait_for(state="visible")
     page.get_by_role("button", name="Settings", exact=True).click()
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     canvas.wait_for(state="visible")
     assert canvas.get_attribute("data-canvas-default-tile-width") == "12"
     canvas_width = canvas.evaluate("element => element.clientWidth")
@@ -2256,7 +2256,7 @@ def test_freeform_crowded_drop_preserves_configured_plot_size(
     )
     page.wait_for_function(
         "document.querySelectorAll("
-        "'.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+        "'.pulsar-freeform-canvas > .pulsar-dropcell').length === 3"
     )
 
     added = canvas.locator('[data-tile-id="tile-3"]')
@@ -2268,19 +2268,19 @@ def test_freeform_crowded_drop_preserves_configured_plot_size(
     assert console_errors == [], response_errors
 
 
-def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Freeform", exact=True).click()
     page.get_by_role("button", name="Show grid", exact=True).click()
     page.get_by_role("button", name="Settings", exact=True).click()
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     canvas.wait_for(state="visible")
     first = canvas.locator('[data-tile-id="tile-1"]')
     page.wait_for_function(
-        "() => { const canvas = document.querySelector('.seurat-freeform-canvas');"
+        "() => { const canvas = document.querySelector('.pulsar-freeform-canvas');"
         " const tile = document.querySelector('[data-tile-id=\"tile-1\"]');"
         " if (!canvas || !tile) return false;"
         " return Math.abs(tile.getBoundingClientRect().width"
@@ -2292,7 +2292,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     page.get_by_role("button", name="Zoom out", exact=True).click()
     page.wait_for_function(
-        "document.querySelector('.seurat-freeform-canvas')"
+        "document.querySelector('.pulsar-freeform-canvas')"
         ".getAttribute('data-canvas-effective-zoom') === '0.75'"
     )
     page.wait_for_timeout(180)
@@ -2305,7 +2305,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
     canvas_width = canvas.evaluate("element => element.clientWidth")
     visual_column = canvas_width * 0.75 / 24
     vertical_line = canvas.locator(
-        ".seurat-canvas-grid-line.is-vertical"
+        ".pulsar-canvas-grid-line.is-vertical"
     ).first.bounding_box()
     canvas_bounds = canvas.bounding_box()
     assert vertical_line is not None
@@ -2314,7 +2314,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     _drag(
         page,
-        first.locator(".seurat-tile-header"),
+        first.locator(".pulsar-tile-header"),
         delta_y=3 * 24 * 0.75,
     )
     page.wait_for_function(
@@ -2324,7 +2324,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     _drag(
         page,
-        first.locator(".seurat-canvas-resize-handle"),
+        first.locator(".pulsar-canvas-resize-handle"),
         delta_x=2 * visual_column,
         delta_y=2 * 24 * 0.75,
     )
@@ -2336,7 +2336,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     _drag(
         page,
-        first.locator(".seurat-tile-header"),
+        first.locator(".pulsar-tile-header"),
         delta_y=12 * 24 * 0.75,
     )
     page.wait_for_function(
@@ -2346,7 +2346,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     page.get_by_role("button", name="Fit", exact=True).click()
     page.wait_for_function(
-        "() => { const canvas = document.querySelector('.seurat-freeform-canvas');"
+        "() => { const canvas = document.querySelector('.pulsar-freeform-canvas');"
         " return canvas && canvas.getAttribute('data-canvas-fit') === '1'"
         " && Number(canvas.getAttribute('data-canvas-effective-zoom')) < 0.75; }"
     )
@@ -2361,7 +2361,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     canvas_bounds = canvas.bounding_box()
     assert canvas_bounds is not None
-    for tile in canvas.locator(":scope > .seurat-dropcell").all():
+    for tile in canvas.locator(":scope > .pulsar-dropcell").all():
         tile_bounds = tile.bounding_box()
         assert tile_bounds is not None
         assert tile_bounds["x"] >= canvas_bounds["x"] - 1
@@ -2375,7 +2375,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
     _drag(
         page,
-        first.locator(".seurat-tile-header"),
+        first.locator(".pulsar-tile-header"),
         delta_y=-5 * 24 * fit_zoom,
     )
     page.wait_for_function(
@@ -2383,7 +2383,7 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
         ".getAttribute('data-canvas-y') === '10'"
     )
     page.wait_for_function(
-        "previous => Number(document.querySelector('.seurat-freeform-canvas')"
+        "previous => Number(document.querySelector('.pulsar-freeform-canvas')"
         ".getAttribute('data-canvas-effective-zoom')) > previous",
         arg=fit_zoom,
     )
@@ -2396,13 +2396,13 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
     ) == "true"
 
     page.wait_for_function(
-        "() => { const canvas = document.querySelector('.seurat-freeform-canvas');"
+        "() => { const canvas = document.querySelector('.pulsar-freeform-canvas');"
         " return Math.abs(Number(canvas.getAttribute('data-canvas-zoom'))"
         " - Number(canvas.getAttribute('data-canvas-effective-zoom'))) < 0.002; }"
     )
     page.get_by_role("button", name="Zoom in", exact=True).click()
     page.wait_for_function(
-        "document.querySelector('.seurat-freeform-canvas')"
+        "document.querySelector('.pulsar-freeform-canvas')"
         ".getAttribute('data-canvas-fit') === '0'"
     )
     assert abs(
@@ -2417,23 +2417,23 @@ def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_serve
 
 
 def test_freeform_canvas_resize_preview_and_directional_handles(
-    page, seurat_server
+    page, pulsar_server
 ):
     console_errors, page_errors, response_errors = _open_app(
-        page, seurat_server, "freeform-resize"
+        page, pulsar_server, "freeform-resize"
     )
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     tile = canvas.locator('[data-tile-id="tile-1"]')
-    placeholder = canvas.locator(":scope > .seurat-canvas-placeholder")
+    placeholder = canvas.locator(":scope > .pulsar-canvas-placeholder")
     canvas.wait_for(state="visible")
     page.wait_for_function(
         "document.querySelectorAll('[data-tile-id=\"tile-1\"] "
-        ".seurat-canvas-resize-zone').length === 8"
+        ".pulsar-canvas-resize-zone').length === 8"
     )
-    handles = tile.locator(".seurat-canvas-resize-zone")
+    handles = tile.locator(".pulsar-canvas-resize-zone")
     assert handles.count() == 8
-    assert tile.locator(".seurat-canvas-resize-handle").count() == 1
+    assert tile.locator(".pulsar-canvas-resize-handle").count() == 1
 
     expected_cursors = {
         "top": "ns-resize",
@@ -2451,12 +2451,12 @@ def test_freeform_canvas_resize_preview_and_directional_handles(
         assert handle.evaluate(
             "element => getComputedStyle(element).cursor"
         ) == cursor
-    close_button = tile.locator(".seurat-cell-close")
+    close_button = tile.locator(".pulsar-cell-close")
     assert close_button.evaluate(
         "button => { const bounds = button.getBoundingClientRect();"
         " const hit = document.elementFromPoint("
         "bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);"
-        " return hit === button || (hit && hit.closest('.seurat-cell-close')"
+        " return hit === button || (hit && hit.closest('.pulsar-cell-close')"
         " === button); }"
     )
 
@@ -2570,22 +2570,22 @@ def test_freeform_canvas_resize_preview_and_directional_handles(
     assert console_errors == [], response_errors
 
 
-def test_freeform_1d_plot_redraws_at_resized_dimensions(page, seurat_server):
+def test_freeform_1d_plot_redraws_at_resized_dimensions(page, pulsar_server):
     console_errors, page_errors, response_errors = _open_app(
-        page, seurat_server, "freeform-resize"
+        page, pulsar_server, "freeform-resize"
     )
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     tile = canvas.locator('[data-tile-id="tile-1"]')
-    plot = tile.locator(".seurat-plot1d")
+    plot = tile.locator(".pulsar-plot1d")
     plot.locator("svg").wait_for(state="visible")
     page.evaluate(
         """() => {
-            const runtime = window.seuratPlotRuntime;
+            const runtime = window.pulsarPlotRuntime;
             const original = runtime.scheduleRender;
-            window.__seuratPlotResizeRenderRequests = 0;
+            window.__pulsarPlotResizeRenderRequests = 0;
             runtime.scheduleRender = function() {
-                window.__seuratPlotResizeRenderRequests += 1;
+                window.__pulsarPlotResizeRenderRequests += 1;
                 return original();
             };
         }"""
@@ -2622,7 +2622,7 @@ def test_freeform_1d_plot_redraws_at_resized_dimensions(page, seurat_server):
     )
     page.wait_for_function(
         "previous => { const plot = document.querySelector("
-        "'[data-tile-id=\"tile-1\"] .seurat-plot1d');"
+        "'[data-tile-id=\"tile-1\"] .pulsar-plot1d');"
         " const bounds = plot.getBoundingClientRect();"
         " const viewBox = plot.querySelector('svg').viewBox.baseVal;"
         " return bounds.width < previous"
@@ -2634,7 +2634,7 @@ def test_freeform_1d_plot_redraws_at_resized_dimensions(page, seurat_server):
     assert narrower["view_width"] == pytest.approx(narrower["width"], abs=1.5)
     assert narrower["view_height"] == pytest.approx(narrower["height"], abs=1.5)
     assert narrower["series_path"] != initial["series_path"]
-    assert page.evaluate("window.__seuratPlotResizeRenderRequests") > 0
+    assert page.evaluate("window.__pulsarPlotResizeRenderRequests") > 0
 
     _drag(
         page,
@@ -2647,7 +2647,7 @@ def test_freeform_1d_plot_redraws_at_resized_dimensions(page, seurat_server):
     )
     page.wait_for_function(
         "previous => { const plot = document.querySelector("
-        "'[data-tile-id=\"tile-1\"] .seurat-plot1d');"
+        "'[data-tile-id=\"tile-1\"] .pulsar-plot1d');"
         " const bounds = plot.getBoundingClientRect();"
         " const viewBox = plot.querySelector('svg').viewBox.baseVal;"
         " return bounds.height < previous"
@@ -2664,13 +2664,13 @@ def test_freeform_1d_plot_redraws_at_resized_dimensions(page, seurat_server):
     assert console_errors == [], response_errors
 
 
-def test_freeform_vertical_seam_inserts_tile_between_neighbors(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_freeform_vertical_seam_inserts_tile_between_neighbors(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Freeform", exact=True).click()
     page.get_by_role("button", name="Settings", exact=True).click()
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     variable = page.locator('[data-item="internal_energy"]')
     canvas_width = canvas.evaluate("element => element.clientWidth")
     variable.drag_to(
@@ -2678,7 +2678,7 @@ def test_freeform_vertical_seam_inserts_tile_between_neighbors(page, seurat_serv
         target_position={"x": 9.8 * canvas_width / 24, "y": 0.1 * 24},
     )
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+        "document.querySelectorAll('.pulsar-freeform-canvas > .pulsar-dropcell').length === 3"
     )
 
     moving = canvas.locator('[data-tile-id="tile-3"]')
@@ -2702,21 +2702,21 @@ def test_freeform_vertical_seam_inserts_tile_between_neighbors(page, seurat_serv
     assert console_errors == [], response_errors
 
 
-def test_freeform_width_resize_pushes_right_neighbor_horizontally(page, seurat_server):
+def test_freeform_width_resize_pushes_right_neighbor_horizontally(page, pulsar_server):
     console_errors, page_errors, response_errors = _open_app(
         page,
-        seurat_server,
+        pulsar_server,
         "freeform-column-seam",
     )
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     first = canvas.locator('[data-tile-id="tile-1"]')
     second = canvas.locator('[data-tile-id="tile-2"]')
     canvas_width = canvas.evaluate("element => element.clientWidth")
 
     _drag(
         page,
-        first.locator(".seurat-canvas-resize-handle"),
+        first.locator(".pulsar-canvas-resize-handle"),
         delta_x=2 * canvas_width / 24,
     )
     page.wait_for_function(
@@ -2732,14 +2732,14 @@ def test_freeform_width_resize_pushes_right_neighbor_horizontally(page, seurat_s
     assert console_errors == [], response_errors
 
 
-def test_freeform_horizontal_seam_inserts_tile_between_neighbors(page, seurat_server):
+def test_freeform_horizontal_seam_inserts_tile_between_neighbors(page, pulsar_server):
     console_errors, page_errors, response_errors = _open_app(
         page,
-        seurat_server,
+        pulsar_server,
         "freeform-row-seam",
     )
 
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     first = canvas.locator('[data-tile-id="tile-1"]')
     canvas_width = canvas.evaluate("element => element.clientWidth")
 
@@ -2749,7 +2749,7 @@ def test_freeform_horizontal_seam_inserts_tile_between_neighbors(page, seurat_se
         target_position={"x": 10.1 * canvas_width / 24, "y": 7.8 * 24},
     )
     page.wait_for_function(
-        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+        "document.querySelectorAll('.pulsar-freeform-canvas > .pulsar-dropcell').length === 3"
     )
     moving = canvas.locator('[data-tile-id="tile-3"]')
     page.wait_for_function(
@@ -2764,25 +2764,25 @@ def test_freeform_horizontal_seam_inserts_tile_between_neighbors(page, seurat_se
     assert console_errors == [], response_errors
 
 
-def test_freeform_tile_moves_to_another_freeform_pane(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+def test_freeform_tile_moves_to_another_freeform_pane(page, pulsar_server):
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Freeform", exact=True).click()
     page.get_by_role("button", name="Settings", exact=True).click()
     pane_one_bar = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     _split_workspace_pane_by_drag(page, pane_one_bar, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
     page.get_by_role("tab", name="View 1").click()
 
     source = page.locator(
-        '.seurat-freeform-canvas[data-pane-id="pane-1"] '
-        '.seurat-dropcell[data-tile-id="tile-1"] .seurat-tile-header'
+        '.pulsar-freeform-canvas[data-pane-id="pane-1"] '
+        '.pulsar-dropcell[data-tile-id="tile-1"] .pulsar-tile-header'
     )
     destination = page.locator(
-        '.seurat-freeform-preview[data-pane-id="pane-2"]'
+        '.pulsar-freeform-preview[data-pane-id="pane-2"]'
     )
     source_bounds = source.bounding_box()
     destination_bounds = destination.bounding_box()
@@ -2804,80 +2804,80 @@ def test_freeform_tile_moves_to_another_freeform_pane(page, seurat_server):
     )
 
     destination_grid = page.locator(
-        '.seurat-freeform-canvas[data-pane-id="pane-2"]'
+        '.pulsar-freeform-canvas[data-pane-id="pane-2"]'
     )
     destination_grid.wait_for(state="visible")
     assert destination_grid.locator(
-        ':scope > .seurat-dropcell[data-tile-id="tile-1"]'
+        ':scope > .pulsar-dropcell[data-tile-id="tile-1"]'
     ).count() == 1
     assert page.locator(
-        '.seurat-freeform-preview[data-pane-id="pane-1"] > .seurat-dropcell'
+        '.pulsar-freeform-preview[data-pane-id="pane-1"] > .pulsar-dropcell'
     ).count() == 1
-    assert page.locator(".seurat-canvas-cross-pane-ghost").count() == 0
+    assert page.locator(".pulsar-canvas-cross-pane-ghost").count() == 0
     assert page_errors == []
     assert console_errors == [], response_errors
 
 
-def test_cell_context_menu_opens(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_cell_context_menu_opens(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    cell = page.locator('.seurat-dropcell[data-cell-index="0"]')
+    cell = page.locator('.pulsar-dropcell[data-cell-index="0"]')
     cell.click(button="right")
 
-    menu = page.locator("#seurat-context-menu")
+    menu = page.locator("#pulsar-context-menu")
     menu.wait_for(state="visible")
     assert menu.get_by_text("internal_energy", exact=True).is_visible()
     assert menu.get_by_text("Select Cell", exact=True).is_visible()
 
 
-def test_variable_context_menu_opens(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_variable_context_menu_opens(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     variable = page.locator('[data-item="internal_energy"]')
     variable.click(button="right")
 
-    menu = page.locator("#seurat-context-menu")
+    menu = page.locator("#pulsar-context-menu")
     menu.wait_for(state="visible")
     assert menu.get_by_text("internal_energy", exact=True).is_visible()
     assert menu.get_by_text("Add To Grid", exact=True).is_visible()
     assert menu.get_by_text("Select Variable", exact=True).is_visible()
 
 
-def test_grid_cell_drag_moves_content(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_grid_cell_drag_moves_content(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    source = page.locator('.seurat-dropcell[data-cell-index="0"]')
-    target = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    source = page.locator('.pulsar-dropcell[data-cell-index="0"]')
+    target = page.locator('.pulsar-dropcell[data-cell-index="2"]')
     source.drag_to(target)
 
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"0\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"0\"]')"
         ".getAttribute('data-cell-filled') === '0'"
     )
     assert target.get_by_text("internal_energy", exact=True).is_visible()
 
 
-def test_interaction_runtime_releases_and_restores_handlers(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_interaction_runtime_releases_and_restores_handlers(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     root = page.locator(".v-application")
-    menu = page.locator("#seurat-context-menu")
-    cell = page.locator('.seurat-dropcell[data-cell-index="0"]')
+    menu = page.locator("#pulsar-context-menu")
+    cell = page.locator('.pulsar-dropcell[data-cell-index="0"]')
 
-    root.evaluate("root => window.seuratInteractionRuntime.unmount(root)")
-    assert root.get_attribute("data-seurat-interaction-runtime-owner") is None
+    root.evaluate("root => window.pulsarInteractionRuntime.unmount(root)")
+    assert root.get_attribute("data-pulsar-interaction-runtime-owner") is None
     cell.click(button="right")
     assert not menu.is_visible()
 
-    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
-    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
-    assert root.get_attribute("data-seurat-interaction-runtime-owner") == "mounted"
+    root.evaluate("root => window.pulsarInteractionRuntime.mount(root)")
+    root.evaluate("root => window.pulsarInteractionRuntime.mount(root)")
+    assert root.get_attribute("data-pulsar-interaction-runtime-owner") == "mounted"
     page.evaluate(
         """() => {
             const originalTrigger = window.trame.trigger.bind(window.trame);
-            window.__seuratInteractionTriggerCounts = {};
+            window.__pulsarInteractionTriggerCounts = {};
             window.trame.trigger = (name, args) => {
-                const counts = window.__seuratInteractionTriggerCounts;
+                const counts = window.__pulsarInteractionTriggerCounts;
                 counts[name] = (counts[name] || 0) + 1;
                 return originalTrigger(name, args);
             };
@@ -2887,17 +2887,17 @@ def test_interaction_runtime_releases_and_restores_handlers(page, seurat_server)
     menu.wait_for(state="visible")
     assert menu.get_by_text("internal_energy", exact=True).is_visible()
     assert (
-        page.evaluate("window.__seuratInteractionTriggerCounts.show_cell_context_menu")
+        page.evaluate("window.__pulsarInteractionTriggerCounts.show_cell_context_menu")
         == 1
     )
 
 
-def test_floating_panel_drag_moves_and_clamps_panel(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_floating_panel_drag_moves_and_clamps_panel(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    panel = page.locator("#seurat-plot-settings-panel")
+    panel = page.locator("#pulsar-plot-settings-panel")
     panel.evaluate("panel => { panel.style.display = 'block'; }")
-    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    handle = panel.locator(".pulsar-floating-panel-drag-handle")
     initial = panel.bounding_box()
     assert initial is not None
 
@@ -2914,20 +2914,20 @@ def test_floating_panel_drag_moves_and_clamps_panel(page, seurat_server):
 
 
 def test_floating_panel_runtime_cleans_up_and_owns_window_resize(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server)
+    _open_app(page, pulsar_server)
 
     root = page.locator(".v-application")
-    panel = page.locator("#seurat-plot-settings-panel")
+    panel = page.locator("#pulsar-plot-settings-panel")
     panel.evaluate("panel => { panel.style.display = 'block'; }")
-    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    handle = panel.locator(".pulsar-floating-panel-drag-handle")
 
     _drag(page, handle, delta_x=20, delta_y=10, release=False)
     assert handle.evaluate("handle => handle.hasPointerCapture(1)")
     assert panel.evaluate("panel => panel.classList.contains('is-dragging')")
 
-    root.evaluate("root => window.seuratInteractionRuntime.unmount(root)")
+    root.evaluate("root => window.pulsarInteractionRuntime.unmount(root)")
     assert not handle.evaluate("handle => handle.hasPointerCapture(1)")
     assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
     page.mouse.up()
@@ -2936,41 +2936,41 @@ def test_floating_panel_runtime_cleans_up_and_owns_window_resize(
     page.evaluate("window.dispatchEvent(new Event('resize'))")
     assert panel.get_attribute("style").find("left: 2000px") >= 0
 
-    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
-    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    root.evaluate("root => window.pulsarInteractionRuntime.mount(root)")
+    root.evaluate("root => window.pulsarInteractionRuntime.mount(root)")
     page.evaluate("window.dispatchEvent(new Event('resize'))")
     clamped = panel.bounding_box()
     assert clamped["x"] + clamped["width"] <= page.viewport_size["width"] - 7
     assert clamped["y"] + clamped["height"] <= page.viewport_size["height"] - 7
 
 
-def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_grid_runtime_releases_and_restores_timeline_handlers(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    root = page.locator(".seurat-content-column")
-    label = page.locator("#seurat-vcr-time-value")
+    root = page.locator(".pulsar-content-column")
+    label = page.locator("#pulsar-vcr-time-value")
     forward = page.get_by_title("Forward step")
 
-    root.evaluate("root => window.seuratGridRuntime.unmount(root)")
-    assert root.get_attribute("data-seurat-grid-runtime-owner") is None
-    assert root.get_attribute("data-seurat-timeline-runtime-owner") is None
+    root.evaluate("root => window.pulsarGridRuntime.unmount(root)")
+    assert root.get_attribute("data-pulsar-grid-runtime-owner") is None
+    assert root.get_attribute("data-pulsar-timeline-runtime-owner") is None
     forward.click()
     assert label.text_content() == "Step = 0"
 
-    root.evaluate("root => window.seuratGridRuntime.mount(root)")
-    assert root.get_attribute("data-seurat-grid-runtime-owner") == "mounted"
-    assert root.get_attribute("data-seurat-timeline-runtime-owner") == "mounted"
+    root.evaluate("root => window.pulsarGridRuntime.mount(root)")
+    assert root.get_attribute("data-pulsar-grid-runtime-owner") == "mounted"
+    assert root.get_attribute("data-pulsar-timeline-runtime-owner") == "mounted"
     forward.click()
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 1'"
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = 1'"
     )
 
 
-def test_media_viewport_pan_zoom_and_reset_request(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_media_viewport_pan_zoom_and_reset_request(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     viewport = page.locator(
-        '.seurat-dropcell[data-cell-index="1"] .seurat-panzoom-viewport'
+        '.pulsar-dropcell[data-cell-index="1"] .pulsar-panzoom-viewport'
     )
     bounds = viewport.bounding_box()
     assert bounds is not None
@@ -2979,46 +2979,46 @@ def test_media_viewport_pan_zoom_and_reset_request(page, seurat_server):
         bounds["y"] + bounds["height"] / 2,
     )
     page.mouse.wheel(0, -120)
-    assert viewport.evaluate("viewport => viewport.__seuratPanZoomState.scale") > 1
+    assert viewport.evaluate("viewport => viewport.__pulsarPanZoomState.scale") > 1
 
     viewport.dblclick()
     assert viewport.evaluate(
-        "viewport => viewport.__seuratPanZoomState"
+        "viewport => viewport.__pulsarPanZoomState"
     ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
 
     page.keyboard.down("Shift")
     _drag(page, viewport, delta_x=35, delta_y=20)
     page.keyboard.up("Shift")
-    panned = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    panned = viewport.evaluate("viewport => viewport.__pulsarPanZoomState")
     assert panned["scale"] == pytest.approx(1)
     assert panned["tx"] == pytest.approx(35, abs=1)
     assert panned["ty"] == pytest.approx(20, abs=1)
 
     _drag(page, viewport, delta_y=-30, button="middle")
-    zoomed = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    zoomed = viewport.evaluate("viewport => viewport.__pulsarPanZoomState")
     assert zoomed["scale"] > 1
 
-    request = page.locator("#seurat-reset-view-request")
+    request = page.locator("#pulsar-reset-view-request")
     request.evaluate(
         "element => element.setAttribute('data-reset-view-request', "
         "JSON.stringify({ cell_index: 1, nonce: 1 }))"
     )
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"] "
-        ".seurat-panzoom-viewport').__seuratPanZoomState.scale === 1"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"1\"] "
+        ".pulsar-panzoom-viewport').__pulsarPanZoomState.scale === 1"
     )
-    reset = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    reset = viewport.evaluate("viewport => viewport.__pulsarPanZoomState")
     assert reset == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
 
 
 def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server)
+    _open_app(page, pulsar_server)
 
-    root = page.locator(".seurat-content-column")
+    root = page.locator(".pulsar-content-column")
     viewport = page.locator(
-        '.seurat-dropcell[data-cell-index="1"] .seurat-panzoom-viewport'
+        '.pulsar-dropcell[data-cell-index="1"] .pulsar-panzoom-viewport'
     )
     viewport.dblclick()
 
@@ -3027,20 +3027,20 @@ def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
     assert viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
     assert viewport.evaluate("viewport => viewport.classList.contains('is-panning')")
 
-    root.evaluate("root => window.seuratGridRuntime.unmount(root)")
-    assert root.get_attribute("data-seurat-media-runtime-owner") is None
+    root.evaluate("root => window.pulsarGridRuntime.unmount(root)")
+    assert root.get_attribute("data-pulsar-media-runtime-owner") is None
     assert not viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
     assert not viewport.evaluate(
         "viewport => viewport.classList.contains('is-panning')"
     )
     assert not page.locator("body").evaluate(
-        "body => body.classList.contains('seurat-panzoom-panning')"
+        "body => body.classList.contains('pulsar-panzoom-panning')"
     )
     page.mouse.up()
     page.keyboard.up("Shift")
 
     before_unmounted_wheel = viewport.evaluate(
-        "viewport => ({ ...viewport.__seuratPanZoomState })"
+        "viewport => ({ ...viewport.__pulsarPanZoomState })"
     )
     bounds = viewport.bounding_box()
     page.mouse.move(
@@ -3049,26 +3049,26 @@ def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
     )
     page.mouse.wheel(0, -100)
     assert viewport.evaluate(
-        "viewport => viewport.__seuratPanZoomState"
+        "viewport => viewport.__pulsarPanZoomState"
     ) == pytest.approx(before_unmounted_wheel)
 
-    root.evaluate("root => window.seuratGridRuntime.mount(root)")
-    root.evaluate("root => window.seuratGridRuntime.mount(root)")
-    assert root.get_attribute("data-seurat-media-runtime-owner") == "mounted"
+    root.evaluate("root => window.pulsarGridRuntime.mount(root)")
+    root.evaluate("root => window.pulsarGridRuntime.mount(root)")
+    assert root.get_attribute("data-pulsar-media-runtime-owner") == "mounted"
     viewport.dblclick()
     page.mouse.wheel(0, -100)
     assert viewport.evaluate(
-        "viewport => viewport.__seuratPanZoomState.scale"
+        "viewport => viewport.__pulsarPanZoomState.scale"
     ) == pytest.approx(1.161834, abs=0.001)
 
 
-def test_plot_hover_pan_zoom_and_reset_request(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_plot_hover_pan_zoom_and_reset_request(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    plot = page.locator('.pulsar-dropcell[data-cell-index="0"] .pulsar-plot1d')
     hover_point = plot.evaluate(
         """plot => {
-            const point = plot.__seuratPlotMeta.hoverSeries[0].points[20];
+            const point = plot.__pulsarPlotMeta.hoverSeries[0].points[20];
             const rect = plot.getBoundingClientRect();
             return { x: rect.left + point.px, y: rect.top + point.py };
         }"""
@@ -3076,13 +3076,13 @@ def test_plot_hover_pan_zoom_and_reset_request(page, seurat_server):
     page.keyboard.down("Control")
     page.mouse.move(hover_point["x"], hover_point["y"])
     assert plot.evaluate(
-        "plot => plot.__seuratPlotMeta.hoverGroup.getAttribute('display')"
+        "plot => plot.__pulsarPlotMeta.hoverGroup.getAttribute('display')"
     ) is None
     assert plot.evaluate(
-        "plot => plot.__seuratPlotMeta.hoverTip.style.display"
+        "plot => plot.__pulsarPlotMeta.hoverTip.style.display"
     ) == "block"
     hover_text = plot.evaluate(
-        "plot => plot.__seuratPlotMeta.hoverTip.textContent"
+        "plot => plot.__pulsarPlotMeta.hoverTip.textContent"
     )
     assert "\\n" not in hover_text
     hover_lines = hover_text.splitlines()
@@ -3091,13 +3091,13 @@ def test_plot_hover_pan_zoom_and_reset_request(page, seurat_server):
     assert hover_lines[1].startswith("y: ")
     page.keyboard.up("Control")
     assert plot.evaluate(
-        "plot => plot.__seuratPlotMeta.hoverGroup.getAttribute('display')"
+        "plot => plot.__pulsarPlotMeta.hoverGroup.getAttribute('display')"
     ) == "none"
 
     initial_axes = plot.evaluate(
         "plot => ({"
-        " x: { ...plot.__seuratPlotMeta.xAxis },"
-        " y: { ...plot.__seuratPlotMeta.yAxis }"
+        " x: { ...plot.__pulsarPlotMeta.xAxis },"
+        " y: { ...plot.__pulsarPlotMeta.yAxis }"
         "})"
     )
     bounds = plot.bounding_box()
@@ -3106,47 +3106,47 @@ def test_plot_hover_pan_zoom_and_reset_request(page, seurat_server):
         bounds["y"] + bounds["height"] / 2,
     )
     page.mouse.wheel(0, -120)
-    wheel_state = plot.evaluate("plot => ({ ...plot.__seuratPlotViewState })")
+    wheel_state = plot.evaluate("plot => ({ ...plot.__pulsarPlotViewState })")
     assert wheel_state["xMax"] - wheel_state["xMin"] < (
         initial_axes["x"]["max"] - initial_axes["x"]["min"]
     )
 
     plot.dblclick()
-    assert plot.evaluate("plot => plot.__seuratPlotViewState") is None
+    assert plot.evaluate("plot => plot.__pulsarPlotViewState") is None
 
     page.keyboard.down("Shift")
     _drag(page, plot, delta_x=30, delta_y=15)
     page.keyboard.up("Shift")
-    pan_state = plot.evaluate("plot => ({ ...plot.__seuratPlotViewState })")
+    pan_state = plot.evaluate("plot => ({ ...plot.__pulsarPlotViewState })")
     assert pan_state["xMin"] != pytest.approx(initial_axes["x"]["min"])
     assert pan_state["yMin"] != pytest.approx(initial_axes["y"]["min"])
 
     _drag(page, plot, delta_y=-25, button="middle")
     middle_zoom_state = plot.evaluate(
-        "plot => ({ ...plot.__seuratPlotViewState })"
+        "plot => ({ ...plot.__pulsarPlotViewState })"
     )
     assert middle_zoom_state["xMax"] - middle_zoom_state["xMin"] < (
         pan_state["xMax"] - pan_state["xMin"]
     )
 
-    request = page.locator("#seurat-reset-view-request")
+    request = page.locator("#pulsar-reset-view-request")
     request.evaluate(
         "element => element.setAttribute('data-reset-view-request', "
         "JSON.stringify({ cell_index: 0, nonce: 2 }))"
     )
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"0\"] "
-        ".seurat-plot1d').__seuratPlotViewState === null"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"0\"] "
+        ".pulsar-plot1d').__pulsarPlotViewState === null"
     )
 
 
 def test_plot_runtime_cleans_up_observers_and_remounts_idempotently(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server)
+    _open_app(page, pulsar_server)
 
-    root = page.locator(".seurat-content-column")
-    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    root = page.locator(".pulsar-content-column")
+    plot = page.locator('.pulsar-dropcell[data-cell-index="0"] .pulsar-plot1d')
     plot.dblclick()
 
     page.keyboard.down("Shift")
@@ -3154,34 +3154,34 @@ def test_plot_runtime_cleans_up_observers_and_remounts_idempotently(
     assert plot.evaluate("plot => plot.hasPointerCapture(1)")
     assert plot.evaluate("plot => plot.classList.contains('is-panning')")
 
-    root.evaluate("root => window.seuratGridRuntime.unmount(root)")
-    assert root.get_attribute("data-seurat-plot-runtime-owner") is None
+    root.evaluate("root => window.pulsarGridRuntime.unmount(root)")
+    assert root.get_attribute("data-pulsar-plot-runtime-owner") is None
     assert not plot.evaluate("plot => plot.hasPointerCapture(1)")
     assert not plot.evaluate("plot => plot.classList.contains('is-panning')")
     assert not page.locator("body").evaluate(
-        "body => body.classList.contains('seurat-plot-panning')"
+        "body => body.classList.contains('pulsar-plot-panning')"
     )
     page.mouse.up()
     page.keyboard.up("Shift")
 
-    plot.evaluate("plot => { plot.__seuratPlotRenderKey = 'unmounted'; }")
-    page.evaluate("window.seuratGridRuntime.schedulePlotRender()")
+    plot.evaluate("plot => { plot.__pulsarPlotRenderKey = 'unmounted'; }")
+    page.evaluate("window.pulsarGridRuntime.schedulePlotRender()")
     plot.evaluate(
         "plot => plot.setAttribute('data-plot-settings', "
         "JSON.stringify({ background_color: '#ffeeee' }))"
     )
     page.wait_for_timeout(100)
-    assert plot.evaluate("plot => plot.__seuratPlotRenderKey") == "unmounted"
+    assert plot.evaluate("plot => plot.__pulsarPlotRenderKey") == "unmounted"
 
-    root.evaluate("root => window.seuratGridRuntime.mount(root)")
-    root.evaluate("root => window.seuratGridRuntime.mount(root)")
-    assert root.get_attribute("data-seurat-plot-runtime-owner") == "mounted"
+    root.evaluate("root => window.pulsarGridRuntime.mount(root)")
+    root.evaluate("root => window.pulsarGridRuntime.mount(root)")
+    assert root.get_attribute("data-pulsar-plot-runtime-owner") == "mounted"
     page.wait_for_function(
-        "document.querySelector('.seurat-plot1d').__seuratPlotRenderKey !== 'unmounted'"
+        "document.querySelector('.pulsar-plot1d').__pulsarPlotRenderKey !== 'unmounted'"
     )
     plot.dblclick()
     initial_span = plot.evaluate(
-        "plot => plot.__seuratPlotMeta.xAxis.max - plot.__seuratPlotMeta.xAxis.min"
+        "plot => plot.__pulsarPlotMeta.xAxis.max - plot.__pulsarPlotMeta.xAxis.min"
     )
     bounds = plot.bounding_box()
     page.mouse.move(
@@ -3190,15 +3190,15 @@ def test_plot_runtime_cleans_up_observers_and_remounts_idempotently(
     )
     page.mouse.wheel(0, -100)
     zoomed_span = plot.evaluate(
-        "plot => plot.__seuratPlotViewState.xMax - plot.__seuratPlotViewState.xMin"
+        "plot => plot.__pulsarPlotViewState.xMax - plot.__pulsarPlotViewState.xMin"
     )
     assert zoomed_span / initial_span == pytest.approx(0.860708, abs=0.002)
 
 
-def test_variable_panel_resize_supports_keyboard_and_pointer(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_variable_panel_resize_supports_keyboard_and_pointer(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    panel = page.locator("#seurat-variable-column")
+    panel = page.locator("#pulsar-variable-column")
     handle = page.locator("[data-variable-panel-resizer]")
     initial_width = panel.bounding_box()["width"]
 
@@ -3214,22 +3214,22 @@ def test_variable_panel_resize_supports_keyboard_and_pointer(page, seurat_server
     pointer_width = panel.bounding_box()["width"]
     assert pointer_width == pytest.approx(keyboard_width + 40, abs=2)
     assert not page.locator("body").evaluate(
-        "body => body.classList.contains('seurat-variable-panel-resizing')"
+        "body => body.classList.contains('pulsar-variable-panel-resizing')"
     )
 
 
-def test_grid_column_resize_updates_track_state(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_grid_column_resize_updates_track_state(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    grid = page.locator(".seurat-main-grid")
+    grid = page.locator(".pulsar-main-grid")
     handle = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+        '.pulsar-dropcell[data-cell-index="0"] '
+        '.pulsar-grid-col-resize-handle[data-resize-edge="right"]'
     )
     _drag(page, handle, delta_x=45)
 
     page.wait_for_function(
-        "Number(document.querySelector('.seurat-main-grid')"
+        "Number(document.querySelector('.pulsar-main-grid')"
         ".getAttribute('data-grid-column-sizes').split(',')[0]) > 320"
     )
     sizes = [float(value) for value in grid.get_attribute("data-grid-column-sizes").split(",")]
@@ -3237,41 +3237,41 @@ def test_grid_column_resize_updates_track_state(page, seurat_server):
     assert sizes[1:] == pytest.approx([280, 280], abs=1)
 
 
-def test_fit_grid_column_resize_updates_track_weights(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_fit_grid_column_resize_updates_track_weights(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    grid = page.locator(".seurat-main-grid")
+    grid = page.locator(".pulsar-main-grid")
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Fit window", exact=True).click()
     page.get_by_role("button", name="Settings", exact=True).click()
     page.wait_for_function(
-        "document.querySelector('.seurat-main-grid')"
+        "document.querySelector('.pulsar-main-grid')"
         ".getAttribute('data-grid-sizing-mode') === 'fit'"
     )
     initial_weights = [
         float(value)
         for value in grid.get_attribute("data-grid-column-weights").split(",")
     ]
-    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    plot = page.locator('.pulsar-dropcell[data-cell-index="0"] .pulsar-plot1d')
     page.wait_for_function(
-        "() => { const plot = document.querySelector('.seurat-plot1d');"
+        "() => { const plot = document.querySelector('.pulsar-plot1d');"
         " const svg = plot && plot.querySelector('svg');"
-        " if (!plot || !svg || !plot.__seuratPlotMeta) return false;"
+        " if (!plot || !svg || !plot.__pulsarPlotMeta) return false;"
         " const bounds = plot.getBoundingClientRect();"
         " const viewBox = svg.viewBox.baseVal;"
         " return Math.abs(viewBox.width - Math.round(bounds.width)) < 1"
         " && Math.abs(viewBox.height - Math.round(bounds.height)) < 1; }"
     )
-    initial_plot_width = plot.evaluate("plot => plot.__seuratPlotMeta.plotW")
-    undo_button, redo_button = page.locator(".seurat-history-button").all()
+    initial_plot_width = plot.evaluate("plot => plot.__pulsarPlotMeta.plotW")
+    undo_button, redo_button = page.locator(".pulsar-history-button").all()
     handle = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+        '.pulsar-dropcell[data-cell-index="0"] '
+        '.pulsar-grid-col-resize-handle[data-resize-edge="right"]'
     )
     _drag(page, handle, delta_x=30)
 
     page.wait_for_function(
-        "Number(document.querySelector('.seurat-main-grid')"
+        "Number(document.querySelector('.pulsar-main-grid')"
         ".getAttribute('data-grid-column-weights').split(',')[0]) > 1"
     )
     weights = [
@@ -3283,62 +3283,62 @@ def test_fit_grid_column_resize_updates_track_weights(page, seurat_server):
     assert weights[0] + weights[1] == pytest.approx(2, abs=0.001)
     assert weights[2] == pytest.approx(1)
     page.wait_for_function(
-        "width => document.querySelector('.seurat-plot1d')"
-        ".__seuratPlotMeta.plotW > width",
+        "width => document.querySelector('.pulsar-plot1d')"
+        ".__pulsarPlotMeta.plotW > width",
         arg=initial_plot_width,
     )
 
     undo_button.click()
     page.wait_for_function(
-        "expected => document.querySelector('.seurat-main-grid')"
+        "expected => document.querySelector('.pulsar-main-grid')"
         ".dataset.gridColumnWeights.split(',').map(Number)"
         ".every((value, i) => Math.abs(value - expected[i]) < 0.000001)",
         arg=initial_weights,
     )
     page.wait_for_function(
-        "width => Math.abs(document.querySelector('.seurat-plot1d')"
-        ".__seuratPlotMeta.plotW - width) < 1",
+        "width => Math.abs(document.querySelector('.pulsar-plot1d')"
+        ".__pulsarPlotMeta.plotW - width) < 1",
         arg=initial_plot_width,
     )
 
     redo_button.click()
     page.wait_for_function(
-        "expected => document.querySelector('.seurat-main-grid')"
+        "expected => document.querySelector('.pulsar-main-grid')"
         ".dataset.gridColumnWeights.split(',').map(Number)"
         ".every((value, i) => Math.abs(value - expected[i]) < 0.000001)",
         arg=weights,
     )
 
 
-def test_grid_row_resize_updates_track_state(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_grid_row_resize_updates_track_state(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    grid = page.locator(".seurat-main-grid")
+    grid = page.locator(".pulsar-main-grid")
     handle = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        '.seurat-grid-row-resize-handle[data-resize-edge="bottom"]'
+        '.pulsar-dropcell[data-cell-index="0"] '
+        '.pulsar-grid-row-resize-handle[data-resize-edge="bottom"]'
     )
     _drag(page, handle, delta_y=35)
 
     page.wait_for_function(
-        "Number(document.querySelector('.seurat-main-grid')"
+        "Number(document.querySelector('.pulsar-main-grid')"
         ".getAttribute('data-grid-row-sizes').split(',')[0]) > 380"
     )
     sizes = [float(value) for value in grid.get_attribute("data-grid-row-sizes").split(",")]
     assert sizes == pytest.approx([387], abs=2)
 
 
-def test_grid_corner_resize_updates_both_track_axes(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_grid_corner_resize_updates_both_track_axes(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
-    grid = page.locator(".seurat-main-grid")
+    grid = page.locator(".pulsar-main-grid")
     handle = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] .seurat-grid-corner-bottom-right'
+        '.pulsar-dropcell[data-cell-index="0"] .pulsar-grid-corner-bottom-right'
     )
     _drag(page, handle, delta_x=30, delta_y=25)
 
     page.wait_for_function(
-        "(() => { const grid = document.querySelector('.seurat-main-grid');"
+        "(() => { const grid = document.querySelector('.pulsar-main-grid');"
         " return Number(grid.getAttribute('data-grid-column-sizes').split(',')[0]) > 300"
         " && Number(grid.getAttribute('data-grid-row-sizes').split(',')[0]) > 370; })()"
     )
@@ -3353,20 +3353,20 @@ def test_grid_corner_resize_updates_both_track_axes(page, seurat_server):
 
 @pytest.mark.parametrize("layout_mode", ["uniform", "spanning"])
 def test_grid_corner_resize_undo_redo_restores_both_axes(
-    page, seurat_server, layout_mode
+    page, pulsar_server, layout_mode
 ):
-    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
     if layout_mode == "spanning":
         page.get_by_role("button", name="Settings", exact=True).click()
         page.get_by_role("button", name="Spanning", exact=True).click()
 
-    grid = page.locator(".seurat-main-grid")
-    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
-    undo_button, redo_button = page.locator(".seurat-history-button").all()
+    grid = page.locator(".pulsar-main-grid")
+    plot = page.locator('.pulsar-dropcell[data-cell-index="0"] .pulsar-plot1d')
+    undo_button, redo_button = page.locator(".pulsar-history-button").all()
     page.wait_for_function(
-        "() => { const plot = document.querySelector('.seurat-plot1d');"
+        "() => { const plot = document.querySelector('.pulsar-plot1d');"
         " const svg = plot && plot.querySelector('svg');"
-        " if (!plot || !svg || !plot.__seuratPlotMeta) return false;"
+        " if (!plot || !svg || !plot.__pulsarPlotMeta) return false;"
         " const bounds = plot.getBoundingClientRect();"
         " const viewBox = svg.viewBox.baseVal;"
         " return Math.abs(viewBox.width - Math.round(bounds.width)) < 1"
@@ -3384,11 +3384,11 @@ def test_grid_corner_resize_undo_redo_restores_both_axes(
     assert initial_plot_bounds is not None
 
     handle = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] .seurat-grid-corner-bottom-right'
+        '.pulsar-dropcell[data-cell-index="0"] .pulsar-grid-corner-bottom-right'
     )
     _drag(page, handle, delta_x=30, delta_y=25)
     page.wait_for_function(
-        "(() => { const grid = document.querySelector('.seurat-main-grid');"
+        "(() => { const grid = document.querySelector('.pulsar-main-grid');"
         " return Number(grid.dataset.gridColumnSizes.split(',')[0]) > 300"
         " && Number(grid.dataset.gridRowSizes.split(',')[0]) > 370; })()"
     )
@@ -3401,7 +3401,7 @@ def test_grid_corner_resize_undo_redo_restores_both_axes(
         for value in grid.get_attribute("data-grid-row-sizes").split(",")
     ]
     page.wait_for_function(
-        "initial => { const plot = document.querySelector('.seurat-plot1d');"
+        "initial => { const plot = document.querySelector('.pulsar-plot1d');"
         " const svg = plot && plot.querySelector('svg');"
         " if (!plot || !svg) return false;"
         " const bounds = plot.getBoundingClientRect();"
@@ -3415,7 +3415,7 @@ def test_grid_corner_resize_undo_redo_restores_both_axes(
 
     undo_button.click()
     page.wait_for_function(
-        "expected => { const grid = document.querySelector('.seurat-main-grid');"
+        "expected => { const grid = document.querySelector('.pulsar-main-grid');"
         " const columns = grid.dataset.gridColumnSizes.split(',').map(Number);"
         " const rows = grid.dataset.gridRowSizes.split(',').map(Number);"
         " return columns.every((value, i) => Math.abs(value - expected.columns[i]) < 0.01)"
@@ -3423,7 +3423,7 @@ def test_grid_corner_resize_undo_redo_restores_both_axes(
         arg={"columns": initial_columns, "rows": initial_rows},
     )
     page.wait_for_function(
-        "initial => { const plot = document.querySelector('.seurat-plot1d');"
+        "initial => { const plot = document.querySelector('.pulsar-plot1d');"
         " const svg = plot && plot.querySelector('svg');"
         " if (!plot || !svg) return false;"
         " const bounds = plot.getBoundingClientRect();"
@@ -3437,7 +3437,7 @@ def test_grid_corner_resize_undo_redo_restores_both_axes(
 
     redo_button.click()
     page.wait_for_function(
-        "expected => { const grid = document.querySelector('.seurat-main-grid');"
+        "expected => { const grid = document.querySelector('.pulsar-main-grid');"
         " const columns = grid.dataset.gridColumnSizes.split(',').map(Number);"
         " const rows = grid.dataset.gridRowSizes.split(',').map(Number);"
         " return columns.every((value, i) => Math.abs(value - expected.columns[i]) < 0.01)"
@@ -3449,16 +3449,16 @@ def test_grid_corner_resize_undo_redo_restores_both_axes(
     assert console_errors == [], response_errors
 
 
-def test_freeform_resize_undo_redo_restores_geometry_and_plot(page, seurat_server):
+def test_freeform_resize_undo_redo_restores_geometry_and_plot(page, pulsar_server):
     console_errors, page_errors, response_errors = _open_app(
-        page, seurat_server, "freeform-resize"
+        page, pulsar_server, "freeform-resize"
     )
-    canvas = page.locator(".seurat-freeform-canvas")
+    canvas = page.locator(".pulsar-freeform-canvas")
     tile = canvas.locator('[data-tile-id="tile-1"]')
-    plot = tile.locator(".seurat-plot1d")
-    undo_button, redo_button = page.locator(".seurat-history-button").all()
+    plot = tile.locator(".pulsar-plot1d")
+    undo_button, redo_button = page.locator(".pulsar-history-button").all()
     canvas_width = canvas.evaluate("element => element.clientWidth")
-    initial_plot_width = plot.evaluate("plot => plot.__seuratPlotMeta.plotW")
+    initial_plot_width = plot.evaluate("plot => plot.__pulsarPlotMeta.plotW")
 
     _drag(
         page,
@@ -3470,8 +3470,8 @@ def test_freeform_resize_undo_redo_restores_geometry_and_plot(page, seurat_serve
         ".getAttribute('data-canvas-w') === '10'"
     )
     page.wait_for_function(
-        "width => document.querySelector('.seurat-plot1d')"
-        ".__seuratPlotMeta.plotW > width",
+        "width => document.querySelector('.pulsar-plot1d')"
+        ".__pulsarPlotMeta.plotW > width",
         arg=initial_plot_width,
     )
     assert "Undo Move or resize plot" in undo_button.get_attribute("title")
@@ -3482,8 +3482,8 @@ def test_freeform_resize_undo_redo_restores_geometry_and_plot(page, seurat_serve
         ".getAttribute('data-canvas-w') === '8'"
     )
     page.wait_for_function(
-        "width => Math.abs(document.querySelector('.seurat-plot1d')"
-        ".__seuratPlotMeta.plotW - width) < 1",
+        "width => Math.abs(document.querySelector('.pulsar-plot1d')"
+        ".__pulsarPlotMeta.plotW - width) < 1",
         arg=initial_plot_width,
     )
 
@@ -3497,81 +3497,81 @@ def test_freeform_resize_undo_redo_restores_geometry_and_plot(page, seurat_serve
     assert console_errors == [], response_errors
 
 
-def test_resize_runtime_cleans_up_and_mount_is_idempotent(page, seurat_server):
-    _open_app(page, seurat_server)
+def test_resize_runtime_cleans_up_and_mount_is_idempotent(page, pulsar_server):
+    _open_app(page, pulsar_server)
 
     root = page.locator(".v-application")
-    grid = page.locator(".seurat-main-grid")
+    grid = page.locator(".pulsar-main-grid")
     variable_handle = page.locator("[data-variable-panel-resizer]")
 
     _drag(page, variable_handle, delta_x=25, release=False)
     assert page.locator("body").evaluate(
-        "body => body.classList.contains('seurat-variable-panel-resizing')"
+        "body => body.classList.contains('pulsar-variable-panel-resizing')"
     )
     assert variable_handle.evaluate(
         "handle => handle.hasPointerCapture(1)"
     )
-    root.evaluate("root => window.seuratResizeRuntime.unmount(root)")
-    assert root.get_attribute("data-seurat-resize-runtime-owner") is None
+    root.evaluate("root => window.pulsarResizeRuntime.unmount(root)")
+    assert root.get_attribute("data-pulsar-resize-runtime-owner") is None
     assert not page.locator("body").evaluate(
-        "body => body.classList.contains('seurat-variable-panel-resizing')"
+        "body => body.classList.contains('pulsar-variable-panel-resizing')"
     )
     assert not variable_handle.evaluate(
-        "handle => handle.classList.contains('seurat-variable-resizer-active')"
+        "handle => handle.classList.contains('pulsar-variable-resizer-active')"
     )
     assert not variable_handle.evaluate(
         "handle => handle.hasPointerCapture(1)"
     )
     page.mouse.up()
 
-    panel = page.locator("#seurat-variable-column")
+    panel = page.locator("#pulsar-variable-column")
     unmounted_width = panel.bounding_box()["width"]
     variable_handle.focus()
     variable_handle.press("ArrowRight")
     assert panel.bounding_box()["width"] == pytest.approx(unmounted_width, abs=1)
 
-    root.evaluate("root => window.seuratResizeRuntime.mount(root)")
-    root.evaluate("root => window.seuratResizeRuntime.mount(root)")
-    assert root.get_attribute("data-seurat-resize-runtime-owner") == "mounted"
+    root.evaluate("root => window.pulsarResizeRuntime.mount(root)")
+    root.evaluate("root => window.pulsarResizeRuntime.mount(root)")
+    assert root.get_attribute("data-pulsar-resize-runtime-owner") == "mounted"
     page.evaluate(
         """() => {
             const originalTrigger = window.trame.trigger.bind(window.trame);
-            window.__seuratResizeTriggerCounts = {};
-            window.__seuratResizeRenderCount = 0;
-            const originalRender = window.seuratGridRuntime.schedulePlotRender;
-            window.seuratGridRuntime.schedulePlotRender = (...args) => {
-                window.__seuratResizeRenderCount += 1;
+            window.__pulsarResizeTriggerCounts = {};
+            window.__pulsarResizeRenderCount = 0;
+            const originalRender = window.pulsarGridRuntime.schedulePlotRender;
+            window.pulsarGridRuntime.schedulePlotRender = (...args) => {
+                window.__pulsarResizeRenderCount += 1;
                 return originalRender(...args);
             };
             window.trame.trigger = (name, args) => {
-                const counts = window.__seuratResizeTriggerCounts;
+                const counts = window.__pulsarResizeTriggerCounts;
                 counts[name] = (counts[name] || 0) + 1;
                 return originalTrigger(name, args);
             };
         }"""
     )
     grid_handle = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+        '.pulsar-dropcell[data-cell-index="0"] '
+        '.pulsar-grid-col-resize-handle[data-resize-edge="right"]'
     )
     _drag(page, grid_handle, delta_x=20)
     assert page.evaluate(
-        "window.__seuratResizeTriggerCounts.commit_grid_track_resize_trigger"
+        "window.__pulsarResizeTriggerCounts.commit_grid_track_resize_trigger"
     ) == 1
     assert not grid.evaluate("grid => grid.classList.contains('is-resizing')")
     assert not page.locator("body").evaluate(
-        "body => body.classList.contains('seurat-grid-col-resizing')"
+        "body => body.classList.contains('pulsar-grid-col-resizing')"
     )
-    root.evaluate("root => window.seuratResizeRuntime.unmount(root)")
-    render_count_after_unmount = page.evaluate("window.__seuratResizeRenderCount")
+    root.evaluate("root => window.pulsarResizeRuntime.unmount(root)")
+    render_count_after_unmount = page.evaluate("window.__pulsarResizeRenderCount")
     page.wait_for_timeout(250)
-    assert page.evaluate("window.__seuratResizeRenderCount") == render_count_after_unmount
+    assert page.evaluate("window.__pulsarResizeRenderCount") == render_count_after_unmount
 
 
-def test_schema_less_timeline_uses_step_indices(page, seurat_server):
-    _open_app(page, seurat_server, mode="step")
+def test_schema_less_timeline_uses_step_indices(page, pulsar_server):
+    _open_app(page, pulsar_server, mode="step")
 
-    label = page.locator("#seurat-vcr-time-value")
+    label = page.locator("#pulsar-vcr-time-value")
     image = page.locator('img[data-grid-image-sequence="1"]')
     label.wait_for(state="visible")
     assert label.text_content() == "Step = 0"
@@ -3580,13 +3580,13 @@ def test_schema_less_timeline_uses_step_indices(page, seurat_server):
     page.get_by_title("Forward step").click()
 
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 1'"
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = 1'"
     )
     assert image.get_attribute("data-current-frame") == "1"
 
 
-def test_schema_less_timeline_play_advances_frames(page, seurat_server):
-    _open_app(page, seurat_server, mode="step")
+def test_schema_less_timeline_play_advances_frames(page, pulsar_server):
+    _open_app(page, pulsar_server, mode="step")
 
     image = page.locator('img[data-grid-image-sequence="1"]')
     play_toggle = page.locator('[data-vcr-action="toggle"]')
@@ -3612,15 +3612,15 @@ def test_schema_less_timeline_play_advances_frames(page, seurat_server):
 
 
 def test_schema_less_timeline_play_survives_media_attribute_updates(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server, mode="step")
+    _open_app(page, pulsar_server, mode="step")
 
     image = page.locator('img[data-grid-image-sequence="1"]')
     play_toggle = page.locator('[data-vcr-action="toggle"]')
     page.evaluate(
         """() => {
-            window.__seuratPlayMutationTimer = window.setInterval(() => {
+            window.__pulsarPlayMutationTimer = window.setInterval(() => {
                 const image = document.querySelector(
                     'img[data-grid-image-sequence="1"]'
                 );
@@ -3643,18 +3643,18 @@ def test_schema_less_timeline_play_survives_media_attribute_updates(
     finally:
         page.evaluate(
             """() => {
-                window.clearInterval(window.__seuratPlayMutationTimer);
-                delete window.__seuratPlayMutationTimer;
+                window.clearInterval(window.__pulsarPlayMutationTimer);
+                delete window.__pulsarPlayMutationTimer;
             }"""
         )
 
 
 def test_schema_less_timeline_cursor_uses_step_not_normalized_progress(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server, mode="step")
+    _open_app(page, pulsar_server, mode="step")
 
-    slider = page.locator("#seurat-vcr-step-slider")
+    slider = page.locator("#pulsar-vcr-step-slider")
     image = page.locator('img[data-grid-image-sequence="1"]')
     slider.evaluate(
         """element => {
@@ -3663,12 +3663,12 @@ def test_schema_less_timeline_cursor_uses_step_not_normalized_progress(
         }"""
     )
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 30'"
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = 30'"
     )
 
     assert image.get_attribute("data-current-frame") == "30"
-    frame = page.locator(".seurat-plot1d svg rect").first
-    cursor = page.locator(".seurat-plot1d-cursor-line")
+    frame = page.locator(".pulsar-plot1d svg rect").first
+    cursor = page.locator(".pulsar-plot1d-cursor-line")
     frame_x = float(frame.get_attribute("x"))
     frame_width = float(frame.get_attribute("width"))
     cursor_x = float(cursor.get_attribute("x1"))
@@ -3676,11 +3676,11 @@ def test_schema_less_timeline_cursor_uses_step_not_normalized_progress(
     assert cursor_progress == pytest.approx(30.0 / 79.0, abs=0.01)
 
 
-def test_physical_timeline_uses_declared_time_values(page, seurat_server):
-    _open_app(page, seurat_server, mode="physical")
+def test_physical_timeline_uses_declared_time_values(page, pulsar_server):
+    _open_app(page, pulsar_server, mode="physical")
 
-    label = page.locator("#seurat-vcr-time-value")
-    slider = page.locator("#seurat-vcr-step-slider")
+    label = page.locator("#pulsar-vcr-time-value")
+    slider = page.locator("#pulsar-vcr-step-slider")
     image = page.locator('img[data-grid-image-sequence="1"]')
     label.wait_for(state="visible")
     assert label.text_content() == "Time = 0"
@@ -3695,7 +3695,7 @@ def test_physical_timeline_uses_declared_time_values(page, seurat_server):
     page.get_by_title("Forward step").click()
 
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === 'Time = 0.25'"
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Time = 0.25'"
     )
     assert image.get_attribute("data-current-frame") == "1"
     label_box = label.bounding_box()
@@ -3707,14 +3707,14 @@ def test_physical_timeline_uses_declared_time_values(page, seurat_server):
 
 
 def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server, mode="multi-axis")
+    _open_app(page, pulsar_server, mode="multi-axis")
 
-    label = page.locator("#seurat-vcr-time-value")
-    slider = page.locator("#seurat-vcr-step-slider")
-    waveform = page.locator('.seurat-dropcell[data-cell-index="1"]')
-    incompatible = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    label = page.locator("#pulsar-vcr-time-value")
+    slider = page.locator("#pulsar-vcr-step-slider")
+    waveform = page.locator('.pulsar-dropcell[data-cell-index="1"]')
+    incompatible = page.locator('.pulsar-dropcell[data-cell-index="2"]')
     label.wait_for(state="visible")
     assert label.text_content() == "Shot number = 15"
     assert slider.get_attribute("max") == "2"
@@ -3722,18 +3722,18 @@ def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(
     page.get_by_title("Forward step").click()
 
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === "
+        "document.querySelector('#pulsar-vcr-time-value').textContent === "
         "'Shot number = 16'"
     )
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"1\"]')"
         ".getAttribute('data-selection-axis').includes('\"value\":16')"
     )
     assert waveform.get_attribute("data-axis-sync-status") == "synchronized"
 
     slider.press("ArrowRight")
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"1\"]')"
         ".getAttribute('data-selection-axis').includes('\"value\":17')"
     )
     assert incompatible.get_attribute("data-axis-sync-status") == "incompatible"
@@ -3741,18 +3741,18 @@ def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(
     incompatible.click()
 
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === "
+        "document.querySelector('#pulsar-vcr-time-value').textContent === "
         "'Time within shot = 0 s'"
     )
     assert slider.get_attribute("max") == "2"
 
 
-def test_multi_axis_slider_defers_server_update_until_change(page, seurat_server):
-    _open_app(page, seurat_server, mode="multi-axis")
+def test_multi_axis_slider_defers_server_update_until_change(page, pulsar_server):
+    _open_app(page, pulsar_server, mode="multi-axis")
 
-    label = page.locator("#seurat-vcr-time-value")
-    slider = page.locator("#seurat-vcr-step-slider")
-    waveform = page.locator('.seurat-dropcell[data-cell-index="1"]')
+    label = page.locator("#pulsar-vcr-time-value")
+    slider = page.locator("#pulsar-vcr-step-slider")
+    waveform = page.locator('.pulsar-dropcell[data-cell-index="1"]')
     label.wait_for(state="visible")
 
     slider.evaluate(
@@ -3762,7 +3762,7 @@ def test_multi_axis_slider_defers_server_update_until_change(page, seurat_server
         }"""
     )
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === "
+        "document.querySelector('#pulsar-vcr-time-value').textContent === "
         "'Shot number = 16'"
     )
     assert '"value":15' in waveform.get_attribute("data-selection-axis")
@@ -3771,26 +3771,26 @@ def test_multi_axis_slider_defers_server_update_until_change(page, seurat_server
         "element => element.dispatchEvent(new Event('change', { bubbles: true }))"
     )
     page.wait_for_function(
-        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"]')"
+        "document.querySelector('.pulsar-dropcell[data-cell-index=\"1\"]')"
         ".getAttribute('data-selection-axis').includes('\"value\":16')"
     )
     assert waveform.get_attribute("data-axis-sync-status") == "synchronized"
 
 
 def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
-    page, seurat_server
+    page, pulsar_server
 ):
-    _open_app(page, seurat_server, mode="mixed")
+    _open_app(page, pulsar_server, mode="mixed")
 
     first_bar = page.locator(
-        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
     _split_workspace_pane_by_drag(page, first_bar, "vertical")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
-    slider = page.locator("#seurat-vcr-step-slider")
+    slider = page.locator("#pulsar-vcr-step-slider")
     image = page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-1"] '
         'img[data-grid-image-sequence="1"]'
     )
     slider.evaluate(
@@ -3800,15 +3800,15 @@ def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
         }"""
     )
     page.wait_for_function(
-        "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 0.25'"
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = 0.25'"
     )
     assert image.get_attribute("data-current-frame") == "1"
 
     preview = page.locator(
-        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-grid-preview[data-pane-frame-id="pane-1"]'
     )
-    frame = preview.locator(".seurat-plot1d svg rect").first
-    cursor = preview.locator(".seurat-plot1d-cursor-line")
+    frame = preview.locator(".pulsar-plot1d svg rect").first
+    cursor = preview.locator(".pulsar-plot1d-cursor-line")
     frame_x = float(frame.get_attribute("x"))
     frame_width = float(frame.get_attribute("width"))
     cursor_progress = (float(cursor.get_attribute("x1")) - frame_x) / frame_width
@@ -3816,11 +3816,11 @@ def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
 
     page.get_by_role("tab", name="View 1").click()
     active = page.locator(
-        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+        '.pulsar-workspace-active-grid[data-pane-frame-id="pane-1"]'
     )
-    active_cursor = active.locator(".seurat-plot1d-cursor-line")
+    active_cursor = active.locator(".pulsar-plot1d-cursor-line")
     active_cursor.wait_for(state="attached")
-    active_frame = active.locator(".seurat-plot1d svg rect").first
+    active_frame = active.locator(".pulsar-plot1d svg rect").first
     active_progress = (
         float(active_cursor.get_attribute("x1"))
         - float(active_frame.get_attribute("x"))

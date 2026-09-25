@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from seurat.models.workspace_layout import (
+from pulsar.models.workspace_layout import (
     MAX_SPLIT_RATIO,
     MAX_WORKSPACE_PANES,
     MIN_SPLIT_RATIO,
@@ -22,8 +22,8 @@ from seurat.models.workspace_layout import (
     workspace_geometry,
     workspace_pane_ids,
 )
-from seurat.models.grid import empty_grid_cell
-from seurat.state import init_state
+from pulsar.models.grid import empty_grid_cell
+from pulsar.state import init_state
 
 
 class WorkspaceLayoutTests(unittest.TestCase):

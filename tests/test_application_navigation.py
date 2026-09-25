@@ -18,13 +18,13 @@ except ModuleNotFoundError:
     sys.modules["adios2"] = adios2
 
 
-from application import SeuratApplication
+from application import PulsarApplication
 from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
 from query_parser import python_query_to_filters, python_query_to_mongo
-from seurat.controllers.catalog import _filter_variable_groups
-from seurat.controllers.composer import CONTROLLER_TYPES
-from seurat.models.workspace_state import parse_workspace_document, workspace_json
+from pulsar.controllers.catalog import _filter_variable_groups
+from pulsar.controllers.composer import CONTROLLER_TYPES
+from pulsar.models.workspace_state import parse_workspace_document, workspace_json
 from sqlite_store import SQLiteCampaignCollection
 from state_init import init_state
 
@@ -1582,7 +1582,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "row_weights": "3,1",
         }
         with patch(
-            "seurat.controllers.workspace.choose_workspace_save_path",
+            "pulsar.controllers.workspace.choose_workspace_save_path",
             return_value=str(state_path),
         ):
             controller.actions["save_workspace_state"](live_grid_sizing)
@@ -1627,7 +1627,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "status": "ok",
         }
         with patch(
-            "seurat.controllers.workspace.choose_workspace_load_path",
+            "pulsar.controllers.workspace.choose_workspace_load_path",
             return_value=str(state_path),
         ), patch.object(
             owner.db,
@@ -1948,7 +1948,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "PNG_digitizer_Ch2_Trace",
         )
 
-        navigation = SeuratApplication(self.db).get_navigation(
+        navigation = PulsarApplication(self.db).get_navigation(
             {
                 "view": "variables",
                 "query": {"variable_id": variable_id},
@@ -2027,7 +2027,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(summary["num_sources"], 1)
         self.assertEqual(summary["sources"][0]["source_label"], "xgc.3d.*")
 
-        navigation = SeuratApplication(self.db).get_navigation(
+        navigation = PulsarApplication(self.db).get_navigation(
             {
                 "view": "files",
                 "query": {"producer": "xgc"},
@@ -2107,7 +2107,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
     def test_application_projection_round_trips_to_legacy_ui_payload(self):
         expected = self.db.grouped_variable_names()
-        application = SeuratApplication(self.db)
+        application = PulsarApplication(self.db)
 
         navigation = application.get_navigation(
             {
@@ -2124,7 +2124,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(navigation[1]["count"], 1)
 
     def test_application_forwards_catalog_filters(self):
-        application = SeuratApplication(self.db)
+        application = PulsarApplication(self.db)
 
         navigation = application.get_navigation(
             {
@@ -2143,7 +2143,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
 
     def test_literal_contains_query_executes_in_sqlite(self):
-        application = SeuratApplication(self.db)
+        application = PulsarApplication(self.db)
 
         navigation = application.get_navigation(
             {
@@ -2358,7 +2358,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
 
     def test_application_file_navigation_uses_file_nodes(self):
-        application = SeuratApplication(self.db)
+        application = PulsarApplication(self.db)
 
         navigation = application.get_navigation(
             {
@@ -2380,7 +2380,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
 
     def test_application_source_summary_and_lookup_share_source_identity(self):
-        application = SeuratApplication(self.db)
+        application = PulsarApplication(self.db)
 
         summary = application.get_source_summary(
             {"variable_id": "density", "query": {}}
@@ -2647,7 +2647,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         state.variableLabelsById["internal_energy"] = "internal_energy"
 
         with patch(
-            "seurat.controllers.visualization.render_plugin_tile",
+            "pulsar.controllers.visualization.render_plugin_tile",
             side_effect=render_plugin,
         ):
             owner.update_selected_var_panels("internal_energy")
@@ -3038,7 +3038,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
 
     def test_unimplemented_navigation_views_fail_explicitly(self):
-        application = SeuratApplication(self.db)
+        application = PulsarApplication(self.db)
 
         for view in ("objects", "campaign"):
             with self.subTest(view=view):

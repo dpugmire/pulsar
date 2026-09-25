@@ -11,22 +11,22 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from seurat import module as seurat_module  # noqa: E402
-from seurat.controllers.catalog import (  # noqa: E402
+from pulsar import module as pulsar_module  # noqa: E402
+from pulsar.controllers.catalog import (  # noqa: E402
     _apply_provenance_expansion,
     _apply_provenance_graph_expansion,
     _filter_variable_groups,
     _provenance_detail_node_ids,
     _provenance_graph_detail_node_ids,
 )
-from seurat.history import WorkspaceMutationCoordinator  # noqa: E402
-from seurat.models import canvas_layout  # noqa: E402
-from seurat.models.grid import (  # noqa: E402
+from pulsar.history import WorkspaceMutationCoordinator  # noqa: E402
+from pulsar.models import canvas_layout  # noqa: E402
+from pulsar.models.grid import (  # noqa: E402
     cell_has_content,
     empty_grid_cell,
     normalize_grid_cells,
 )
-from seurat.models.workspace_layout import (  # noqa: E402
+from pulsar.models.workspace_layout import (  # noqa: E402
     active_pane_and_tab,
     add_workspace_tab as add_workspace_tab_model,
     apply_grid_snapshot,
@@ -46,7 +46,7 @@ from seurat.models.workspace_layout import (  # noqa: E402
     split_workspace_tab as split_workspace_tab_model,
     workspace_geometry,
 )
-from seurat.state import init_state  # noqa: E402
+from pulsar.state import init_state  # noqa: E402
 from trame.app import get_server  # noqa: E402
 from ui import build_ui  # noqa: E402
 
@@ -296,8 +296,8 @@ def _scalar_field_cell(background):
 
 
 def build_fixture_server(mode):
-    server = get_server(f"seurat-browser-{mode}", client_type="vue3")
-    server.enable_module(seurat_module)
+    server = get_server(f"pulsar-browser-{mode}", client_type="vue3")
+    server.enable_module(pulsar_module)
     init_state(server.state, FixtureDb())
 
     state = server.state

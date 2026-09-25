@@ -7,7 +7,7 @@ is reevaluated. This document records the decisions that should be made before
 Phase 5B.2 defines a backend-neutral query contract or changes query behavior.
 
 The goal is not to preserve the current implementation automatically. The goal
-is to identify the campaign-analysis workflows Seurat must support, choose a
+is to identify the campaign-analysis workflows Pulsar must support, choose a
 clear user model, and only then encode that model in the UI and backend
 contracts.
 
@@ -26,7 +26,7 @@ questions have explicit answers.
 
 ## Current User Model
 
-Seurat currently exposes two query-like surfaces.
+Pulsar currently exposes two query-like surfaces.
 
 ### Global Query
 

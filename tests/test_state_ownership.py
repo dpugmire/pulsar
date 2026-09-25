@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 import state_init as compatibility_state
-from seurat.state import STATE_SECTIONS, clear_right_panes, init_state
+from pulsar.state import STATE_SECTIONS, clear_right_panes, init_state
 
 
 class StateOwnershipTests(unittest.TestCase):

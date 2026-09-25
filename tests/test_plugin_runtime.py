@@ -82,7 +82,7 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
                 plugin_runtime,
                 "DEFAULT_PERSONAL_PLUGIN_DIR",
                 missing_default_dir,
-            ), patch.dict(os.environ, {"SEURAT_PLUGIN_PATH": str(plugin_dir)}):
+            ), patch.dict(os.environ, {"PULSAR_PLUGIN_PATH": str(plugin_dir)}):
                 discovered = {
                     info.plugin_id: info
                     for info in plugin_runtime.discover_plugins()
@@ -117,7 +117,7 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
                 plugin_runtime,
                 "DEFAULT_PROFILE_PATH",
                 profile_path,
-            ), patch.dict(os.environ, {"SEURAT_PLUGIN_PATH": ""}):
+            ), patch.dict(os.environ, {"PULSAR_PLUGIN_PATH": ""}):
                 discovered = {
                     info.plugin_id: info
                     for info in plugin_runtime.discover_plugins()
@@ -135,7 +135,7 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
                 json.dumps(
                     {
                         "plugin_paths": [
-                            "$SEURAT_PROFILE_PLUGIN_DIR",
+                            "$PULSAR_PROFILE_PLUGIN_DIR",
                             str(profile_dir),
                         ]
                     }
@@ -154,8 +154,8 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
             ), patch.dict(
                 os.environ,
                 {
-                    "SEURAT_PROFILE_PLUGIN_DIR": str(profile_dir),
-                    "SEURAT_PLUGIN_PATH": os.pathsep.join(
+                    "PULSAR_PROFILE_PLUGIN_DIR": str(profile_dir),
+                    "PULSAR_PLUGIN_PATH": os.pathsep.join(
                         [str(profile_dir), str(env_dir)]
                     ),
                 },
@@ -181,7 +181,7 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
                 plugin_runtime,
                 "DEFAULT_PROFILE_PATH",
                 profile_path,
-            ), patch.dict(os.environ, {"SEURAT_PLUGIN_PATH": str(plugin_dir)}):
+            ), patch.dict(os.environ, {"PULSAR_PLUGIN_PATH": str(plugin_dir)}):
                 discovered = {
                     info.plugin_id: info
                     for info in plugin_runtime.discover_plugins()
