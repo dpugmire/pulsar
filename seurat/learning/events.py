@@ -16,6 +16,7 @@ EVENT_TYPES = frozenset(
         "visualization.assigned",
         "visualization.changed",
         "visualization.removed",
+        "plugin.executed",
         "workspace.tab_activated",
         "workspace.tab_created",
         "workspace.tab_renamed",

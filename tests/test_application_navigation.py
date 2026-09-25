@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+
 
 try:
     import adios2  # noqa: F401
@@ -228,6 +230,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             self.collection.insert_one(document)
 
         self.db = CampaignDb(self.collection)
+        self.addCleanup(self.db.close)
 
     def test_scalar_plot_uses_steps_without_explicit_time_values(self):
         class PlotReader:
@@ -306,6 +309,440 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(y.tolist(), [2.0, 4.0, 8.0])
         self.assertEqual(x_label, "time")
 
+    def test_rank_one_scalar_plot_uses_declared_shot_axis(self):
+        class PlotReader:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _path, **_kwargs):
+                return [3.5, 4.0, 4.5]
+
+        axes = {
+            "shot": {
+                "id": "shot",
+                "key": "lasernet:laser_runs:shot",
+                "kind": "shot",
+                "label": "Shot number",
+                "values": [15.0, 16.0, 17.0],
+            }
+        }
+        metadata = {"Shape": "3", "AvailableStepsCount": "1"}
+        with patch("db.FileReader", return_value=PlotReader()):
+            x, y, x_label = CampaignDb._read_plot_series(
+                "/campaign/example.aca",
+                "run.bp/data/meshes/scalars/energy/value",
+                metadata,
+                axes=axes,
+                plot_x_axis="shot",
+                selection_axis="shot",
+            )
+
+        self.assertEqual(x.tolist(), [15.0, 16.0, 17.0])
+        self.assertEqual(y.tolist(), [3.5, 4.0, 4.5])
+        self.assertEqual(x_label, "Shot number")
+
+    def test_rank_two_waveform_reads_selected_signal_and_coordinate_rows(self):
+        class PlotReader:
+            def __init__(self):
+                self.calls = []
+                self.values = {
+                    "run.bp/trace/signal": np.asarray(
+                        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+                    ),
+                    "run.bp/trace/time": np.asarray(
+                        [[0.0, 0.5, 1.0], [0.1, 0.6, 1.1]]
+                    ),
+                }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, path, **kwargs):
+                self.calls.append((path, kwargs))
+                values = self.values[path]
+                if "start" in kwargs:
+                    row = int(kwargs["start"][0])
+                    return values[row : row + 1]
+                return values
+
+        reader = PlotReader()
+        axes = {
+            "shot": {
+                "id": "shot",
+                "key": "lasernet:laser_runs:shot",
+                "kind": "shot",
+                "label": "Shot number",
+                "values": [15.0, 16.0],
+            },
+            "trace_time": {
+                "id": "trace_time",
+                "key": "lasernet:laser_runs:trace_time",
+                "kind": "within_shot_time",
+                "label": "Time within shot",
+                "unit": "s",
+                "layout": "per_selection",
+                "variable_path": "run.bp/trace/time",
+                "shape": [2, 3],
+            },
+        }
+        metadata = {"Shape": "2, 3", "AvailableStepsCount": "1"}
+        with patch("db.FileReader", return_value=reader):
+            x, y, x_label = CampaignDb._read_plot_series(
+                "/campaign/example.aca",
+                "run.bp/trace/signal",
+                metadata,
+                axes=axes,
+                plot_x_axis="trace_time",
+                selection_axis="shot",
+                selection_index=1,
+            )
+
+        self.assertEqual(x.tolist(), [0.1, 0.6, 1.1])
+        self.assertEqual(y.tolist(), [4.0, 5.0, 6.0])
+        self.assertEqual(x_label, "Time within shot (s)")
+        self.assertEqual(
+            reader.calls,
+            [
+                (
+                    "run.bp/trace/signal",
+                    {"start": [1, 0], "count": [1, 3]},
+                ),
+                (
+                    "run.bp/trace/time",
+                    {"start": [1, 0], "count": [1, 3]},
+                ),
+            ],
+        )
+
+    def test_generated_waveform_tile_preserves_selection_and_plot_axes(self):
+        class PlotReader:
+            def __init__(self):
+                self.calls = []
+                self.close_calls = 0
+                self.values = {
+                    "run.bp/trace/signal": np.asarray(
+                        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+                    ),
+                    "run.bp/trace/time": np.asarray(
+                        [[0.0, 0.5, 1.0], [0.1, 0.6, 1.1]]
+                    ),
+                }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def close(self):
+                self.close_calls += 1
+
+            def read(self, path, **kwargs):
+                self.calls.append((path, kwargs))
+                values = self.values[path]
+                row = int(kwargs["start"][0])
+                return values[row : row + 1]
+
+        shot_key = "lasernet:laser_runs:shot"
+        trace_time_key = "lasernet:laser_runs:trace_time"
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "trace/signal",
+                "variable_name": "trace/signal",
+                "display_name": "Trace",
+                "variable_type": "variable",
+                "source_dataset": "run.bp",
+                "variable_path": "run.bp/trace/signal",
+                "metadata": {"Shape": "2, 3", "AvailableStepsCount": "1"},
+                "axes": {
+                    "shot": {
+                        "id": "shot",
+                        "key": shot_key,
+                        "kind": "shot",
+                        "label": "Shot number",
+                        "values": [15.0, 16.0],
+                    },
+                    "trace_time": {
+                        "id": "trace_time",
+                        "key": trace_time_key,
+                        "kind": "within_shot_time",
+                        "label": "Time within shot",
+                        "unit": "s",
+                        "layout": "per_selection",
+                        "variable_path": "run.bp/trace/time",
+                        "shape": [2, 3],
+                    },
+                },
+                "dimension_axes": ["shot", "trace_time"],
+                "plot_x_axis": "trace_time",
+                "selection_axis": "shot",
+                "schema_default_axis": "shot",
+            }
+        )
+        reader = PlotReader()
+
+        with patch("db.FileReader", return_value=reader) as reader_factory:
+            tile = self.db.get_or_create_generated_scalar_plot_tile(
+                "/campaign/example.aca",
+                "trace/signal",
+                selection_index=1,
+            )
+            first_tile = self.db.get_or_create_generated_scalar_plot_tile(
+                "/campaign/example.aca",
+                "trace/signal",
+                selection_index=0,
+            )
+
+        reader_factory.assert_called_once_with("/campaign/example.aca")
+        self.assertEqual(tile["variable_name"], "Trace")
+        self.assertEqual(tile["display_title"], "Trace")
+        self.assertEqual(tile["plot"]["y_label"], "Trace")
+        self.assertEqual(tile["selection_axis"]["index"], 1)
+        self.assertEqual(tile["selection_axis"]["value"], 16.0)
+        self.assertEqual(tile["selection_axis"]["key"], shot_key)
+        self.assertTrue(tile["selection_axis"]["default"])
+        self.assertEqual(tile["plot_axis_key"], trace_time_key)
+        self.assertEqual(tile["plot"]["x_axis_key"], trace_time_key)
+        self.assertEqual(tile["plot"]["x_label"], "Time within shot (s)")
+        self.assertEqual(tile["plot"]["series"][0]["x"], [0.1, 0.6, 1.1])
+        self.assertEqual(tile["plot"]["series"][0]["y"], [4.0, 5.0, 6.0])
+        self.assertEqual(first_tile["plot"]["series"][0]["y"], [1.0, 2.0, 3.0])
+        self.assertEqual(
+            reader.calls,
+            [
+                ("run.bp/trace/signal", {"start": [1, 0], "count": [1, 3]}),
+                ("run.bp/trace/time", {"start": [1, 0], "count": [1, 3]}),
+                ("run.bp/trace/signal", {"start": [0, 0], "count": [1, 3]}),
+                ("run.bp/trace/time", {"start": [0, 0], "count": [1, 3]}),
+            ],
+        )
+        self.db.close()
+        self.assertEqual(reader.close_calls, 1)
+
+    def test_source_collection_maps_global_selection_across_members(self):
+        members = [
+            {
+                "source_dataset": "run-a.bp",
+                "length": 2,
+                "offset": 0,
+                "member_index": 0,
+                "partition_label": "Run 10",
+                "partition_value": 10.0,
+                "order_value": 10.0,
+            },
+            {
+                "source_dataset": "run-b.bp",
+                "length": 1,
+                "offset": 2,
+                "member_index": 1,
+                "partition_label": "Run 11",
+                "partition_value": 11.0,
+                "order_value": 11.0,
+            },
+        ]
+        for member in members:
+            dataset = member["source_dataset"]
+            length = member["length"]
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "trace/signal",
+                    "variable_name": "trace/signal",
+                    "display_name": "Trace",
+                    "variable_type": "variable",
+                    "source_dataset": dataset,
+                    "variable_path": f"{dataset}/trace/signal",
+                    "metadata": {"Shape": f"{length}, 3"},
+                    "axes": {
+                        "shot": {
+                            "id": "shot",
+                            "key": "demo:png:shot",
+                            "kind": "shot",
+                            "label": "Shot number",
+                            "variable": "shots/value",
+                            "variable_path": f"{dataset}/shots/value",
+                            "values": list(range(15, 15 + length)),
+                        },
+                        "trace_time": {
+                            "id": "trace_time",
+                            "key": "demo:runs:trace_time",
+                            "kind": "within_shot_time",
+                            "label": "Time within shot",
+                            "unit": "s",
+                            "layout": "per_selection",
+                            "variable_path": f"{dataset}/trace/time",
+                            "shape": [length, 3],
+                        },
+                    },
+                    "dimension_axes": ["shot", "trace_time"],
+                    "plot_x_axis": "trace_time",
+                    "selection_axis": "shot",
+                    "schema_default_axis": "shot",
+                    "source_collection_id": "png",
+                    "source_collection_label": "PNG",
+                    "source_collection_mode": "concatenate",
+                    "source_collection_axis": "shot",
+                    "source_collection_member_index": member["member_index"],
+                    "source_collection_member_count": 2,
+                    "source_collection_offset": member["offset"],
+                    "source_collection_length": length,
+                    "source_collection_total_length": 3,
+                    "source_collection_partition_label": member["partition_label"],
+                    "source_collection_partition_value": member["partition_value"],
+                }
+            )
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "delay",
+                    "variable_name": "delay",
+                    "display_name": "Delay",
+                    "variable_type": "variable",
+                    "source_dataset": dataset,
+                    "variable_path": f"{dataset}/delay",
+                    "metadata": {"Shape": str(length)},
+                    "axes": {
+                        "shot": {
+                            "id": "shot",
+                            "key": "demo:png:shot",
+                            "kind": "shot",
+                            "label": "Shot number",
+                            "variable": "shots/value",
+                            "variable_path": f"{dataset}/shots/value",
+                            "values": list(range(15, 15 + length)),
+                        },
+                    },
+                    "dimension_axes": ["shot"],
+                    "plot_x_axis": "shot",
+                    "selection_axis": "shot",
+                    "schema_default_axis": "shot",
+                    "source_collection_id": "png",
+                    "source_collection_label": "PNG",
+                    "source_collection_mode": "concatenate",
+                    "source_collection_axis": "shot",
+                    "source_collection_member_index": member["member_index"],
+                    "source_collection_member_count": 2,
+                    "source_collection_offset": member["offset"],
+                    "source_collection_length": length,
+                    "source_collection_total_length": 3,
+                    "source_collection_partition_label": member["partition_label"],
+                    "source_collection_partition_value": member["partition_value"],
+                }
+            )
+
+        class PlotReader:
+            def __init__(self):
+                self.values = {
+                    "run-a.bp/shots/value": np.asarray([15.0, 16.0]),
+                    "run-b.bp/shots/value": np.asarray([15.0]),
+                    "run-a.bp/trace/signal": np.asarray(
+                        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+                    ),
+                    "run-b.bp/trace/signal": np.asarray([[7.0, 8.0, 9.0]]),
+                    "run-a.bp/trace/time": np.asarray(
+                        [[0.0, 0.5, 1.0], [0.0, 0.5, 1.0]]
+                    ),
+                    "run-b.bp/trace/time": np.asarray([[0.0, 0.5, 1.0]]),
+                    "run-a.bp/delay": np.asarray([100.0, 101.0]),
+                    "run-b.bp/delay": np.asarray([200.0]),
+                }
+
+            def read(self, path, **kwargs):
+                values = self.values[path]
+                if "start" in kwargs:
+                    row = int(kwargs["start"][0])
+                    return values[row : row + 1]
+                return values
+
+            def close(self):
+                pass
+
+        reader = PlotReader()
+        with patch("db.FileReader", return_value=reader):
+            tile = self.db.get_or_create_generated_scalar_plot_tile(
+                "/campaign/example.aca",
+                "trace/signal",
+                source_filter={"source_collection_id": "png"},
+                selection_index=2,
+            )
+            scalar_tile = self.db.get_or_create_generated_scalar_plot_tile(
+                "/campaign/example.aca",
+                "delay",
+                source_filter={"source_collection_id": "png"},
+            )
+
+        self.assertEqual(tile["source_collection_id"], "png")
+        self.assertEqual(tile["plot"]["series"][0]["y"], [7.0, 8.0, 9.0])
+        self.assertEqual(tile["plot"]["series"][0]["source_label"], "Run 11")
+        self.assertEqual(tile["selection_axis"]["values"], [0.0, 1.0, 2.0])
+        self.assertEqual(
+            tile["selection_axis"]["labels"],
+            [
+                "1 / 3 · Run 10 · Shot number 15",
+                "2 / 3 · Run 10 · Shot number 16",
+                "3 / 3 · Run 11 · Shot number 15",
+            ],
+        )
+        self.assertEqual(tile["selection_axis"]["index"], 2)
+        self.assertEqual(len(scalar_tile["plot"]["series"]), 1)
+        self.assertEqual(scalar_tile["plot"]["series"][0]["x"], [0.0, 1.0, 2.0])
+        self.assertEqual(
+            scalar_tile["plot"]["series"][0]["y"],
+            [100.0, 101.0, 200.0],
+        )
+        self.assertEqual(scalar_tile["plot"]["series"][0]["source_label"], "PNG")
+        self.assertEqual(scalar_tile["plot"]["series"][0]["breaks"], [2])
+        self.assertEqual(
+            scalar_tile["plot"]["series"][0]["point_label_ranges"],
+            [
+                {"start": 0, "end": 2, "label": "Run 10"},
+                {"start": 2, "end": 3, "label": "Run 11"},
+            ],
+        )
+
+        summary = self.db.variable_min_max_summary("trace/signal")
+        self.assertEqual(summary["num_sources"], 1)
+        self.assertEqual(summary["sources"][0]["source_label"], "PNG")
+        self.assertEqual(summary["sources"][0]["num_timesteps"], 3)
+        self.assertEqual(
+            summary["sources"][0]["source_datasets"],
+            ["run-a.bp", "run-b.bp"],
+        )
+
+        state, controller = self.make_controller()
+        owner = controller.actions["toggle_sources"].__self__
+        state.variableLabelsById["trace/signal"] = "trace"
+        owner.update_selected_var_panels("trace/signal")
+        png_row = next(
+            row
+            for row in state.sourceRowsAll
+            if row.get("source_collection_id") == "png"
+        )
+        with patch("db.FileReader", return_value=reader):
+            cell = owner.generated_scalar_plot_cell_for_source_rows(
+                "trace/signal",
+                [png_row],
+                {},
+                allow_multi_sources=False,
+            )
+            regenerated = owner.regenerate_axis_selected_plot(cell, 2)
+
+        self.assertEqual(cell["source_collection_id"], "png")
+        self.assertEqual(len(cell["selection_axis"]["values"]), 3)
+        self.assertEqual(
+            cell["selection_axis"]["labels"][-1],
+            "3 / 3 · Run 11 · Shot number 15",
+        )
+        self.assertEqual(regenerated["source_collection_id"], "png")
+        self.assertEqual(regenerated["plot"]["series"][0]["y"], [7.0, 8.0, 9.0])
+
     def test_scalar_plot_candidate_preserves_declared_time_values(self):
         self.collection.insert_one(
             {
@@ -325,6 +762,43 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
         self.assertEqual(candidate["time_source"], "variable:time")
         self.assertEqual(candidate["time_values"], [0.0, 0.25, 1.0])
+
+    def test_waveform_plot_candidate_preserves_axis_descriptors(self):
+        axes = {
+            "shot": {
+                "id": "shot",
+                "key": "lasernet:laser_runs:shot",
+                "values": [15.0, 16.0],
+            },
+            "trace_time": {
+                "id": "trace_time",
+                "key": "lasernet:laser_runs:trace_time",
+                "variable_path": "run.bp/trace/time",
+                "shape": [2, 3],
+            },
+        }
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "trace/signal",
+                "variable_name": "trace/signal",
+                "variable_type": "variable",
+                "source_dataset": "run.bp",
+                "variable_path": "run.bp/trace/signal",
+                "metadata": {"Shape": "2, 3", "AvailableStepsCount": "1"},
+                "axes": axes,
+                "dimension_axes": ["shot", "trace_time"],
+                "plot_x_axis": "trace_time",
+                "selection_axis": "shot",
+            }
+        )
+
+        candidate = self.db.scalar_plot_candidate("trace/signal")
+
+        self.assertEqual(candidate["axes"], axes)
+        self.assertEqual(candidate["dimension_axes"], ["shot", "trace_time"])
+        self.assertEqual(candidate["plot_x_axis"], "trace_time")
+        self.assertEqual(candidate["selection_axis"], "shot")
 
     def make_controller(self, interaction_log=None):
         state = RecordingState()
@@ -446,6 +920,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "select_all_sources",
                 "select_source",
                 "select_var",
+                "set_active_axis_selection",
                 "set_active_grid_cell",
                 "set_canvas_nudge_others",
                 "set_canvas_columns",
@@ -514,6 +989,82 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "redo_workspace_trigger",
             },
         )
+
+    def test_active_axis_selection_synchronizes_only_matching_axis_keys(self):
+        state, controller = self.make_controller()
+
+        def axis_cell(axis_key, values):
+            return {
+                "variable_id": axis_key,
+                "variable_name": axis_key,
+                "media_type": "plot1d",
+                "status": "ok",
+                "plot_axis_key": axis_key,
+                "selection_axis": {
+                    "id": axis_key.rsplit(":", 1)[-1],
+                    "key": axis_key,
+                    "label": "Shot number",
+                    "values": values,
+                    "index": 0,
+                    "value": values[0],
+                },
+            }
+
+        shot_key = "lasernet:laser_runs:shot"
+        cells = [
+            axis_cell(shot_key, [15.0, 16.0]),
+            axis_cell(shot_key, [15.0, 16.0]),
+            axis_cell("lasernet:laser_runs:trace_time", [0.0, 0.5]),
+            {
+                "variable_id": "static",
+                "variable_name": "static",
+                "status": "ok",
+            },
+        ]
+        state.gridCells = cells
+        state.activeGridCell = 2
+        state.timelineDriverCell = 0
+
+        controller.actions["set_active_axis_selection"](1)
+
+        self.assertEqual(state.gridCells[0]["selection_axis"]["value"], 16.0)
+        self.assertEqual(state.gridCells[1]["selection_axis"]["index"], 1)
+        self.assertEqual(state.gridCells[1]["axis_sync_status"], "synchronized")
+        self.assertEqual(state.gridCells[2]["axis_sync_status"], "incompatible")
+        self.assertEqual(state.gridCells[3]["axis_sync_status"], "static")
+
+    def test_active_axis_selection_marks_missing_numeric_value_unavailable(self):
+        state, controller = self.make_controller()
+        shot_key = "lasernet:laser_runs:shot"
+        state.gridCells = [
+            {
+                "variable_id": "driver",
+                "variable_name": "driver",
+                "status": "ok",
+                "selection_axis": {
+                    "id": "shot",
+                    "key": shot_key,
+                    "values": [15.0, 16.0],
+                },
+            },
+            {
+                "variable_id": "sparse",
+                "variable_name": "sparse",
+                "status": "ok",
+                "selection_axis": {
+                    "id": "shot",
+                    "key": shot_key,
+                    "values": [15.0, 17.0],
+                },
+            },
+        ]
+        state.activeGridCell = 0
+        state.timelineDriverCell = -1
+
+        controller.actions["set_active_axis_selection"](1)
+
+        self.assertEqual(state.gridCells[0]["selection_axis"]["value"], 16.0)
+        self.assertEqual(state.gridCells[1]["axis_sync_status"], "unavailable")
         self.assertEqual(
             set(state.change_callbacks),
             {
@@ -1357,6 +1908,60 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             groups[1]["variables"][0]["id"],
             "scalars/toroidal_current",
+        )
+
+    def test_schema_display_name_is_used_without_changing_variable_identity(self):
+        variable_id = "data/meshes/traces/PNG_digitizer_Ch2_Trace/signal"
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": variable_id,
+                "variable_name": variable_id,
+                "display_name": "PNG_digitizer_Ch2_Trace",
+                "variable_type": "variable",
+                "source_dataset": "run-a/laser.bp5",
+                "variable_path": f"run-a/laser.bp5/{variable_id}",
+                "variable_group": "waveforms",
+                "variable_group_order": 0,
+                "role": "waveform",
+                "metadata": {"Shape": "3,4", "AvailableStepsCount": "1"},
+            }
+        )
+
+        variable_group = next(
+            group
+            for group in self.db.grouped_variable_names()
+            if group["name"] == "waveforms"
+        )
+        variable = variable_group["variables"][0]
+        self.assertEqual(variable["id"], variable_id)
+        self.assertEqual(variable["name"], variable_id)
+        self.assertEqual(variable["label"], "PNG_digitizer_Ch2_Trace")
+
+        file_group = next(
+            group
+            for group in self.db.grouped_variables_by_source_dataset()
+            if group["name"] == "run-a/laser.bp5"
+        )
+        self.assertEqual(
+            file_group["variables"][0]["label"],
+            "PNG_digitizer_Ch2_Trace",
+        )
+
+        navigation = SeuratApplication(self.db).get_navigation(
+            {
+                "view": "variables",
+                "query": {"variable_id": variable_id},
+                "only_visualized": False,
+            }
+        )
+        self.assertEqual(
+            navigation[0]["children"][0]["label"],
+            "PNG_digitizer_Ch2_Trace",
+        )
+        self.assertEqual(
+            navigation[0]["children"][0]["resource"]["variable_id"],
+            variable_id,
         )
 
     def test_only_visualized_preserves_current_catalog_behavior(self):

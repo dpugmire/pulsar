@@ -395,6 +395,12 @@ class GridControllerMixin:
             "variable_id": str(variable_id or ""),
             "source_label": str(row.get("source_label", "") or ""),
             "source_dataset": str(row.get("source_dataset", "") or ""),
+            "source_collection_id": str(
+                row.get("source_collection_id", "") or ""
+            ),
+            "source_collection_label": str(
+                row.get("source_collection_label", "") or ""
+            ),
             "schema_file_group": str(row.get("schema_file_group", "") or ""),
             "schema_pattern": str(row.get("schema_pattern", "") or ""),
             "schema_mode": str(row.get("schema_mode", "") or ""),
@@ -1335,6 +1341,7 @@ class GridControllerMixin:
                         or cells[idx].get("visualization_name", "")
                         or ""
                     ),
+                    provenance_tile=dict(cells[idx] or {}),
                 )
             return
 
@@ -1358,6 +1365,7 @@ class GridControllerMixin:
                     or cells[idx].get("visualization_name", "")
                     or ""
                 ),
+                provenance_tile=dict(cells[idx] or {}),
             )
             return
 
@@ -2089,6 +2097,7 @@ class GridControllerMixin:
                 or current_cell.get("visualization_name", "")
                 or ""
             ),
+            provenance_tile=current_cell,
         )
         previous_visualization = str(
             previous_cell.get("selected_visualization", "")

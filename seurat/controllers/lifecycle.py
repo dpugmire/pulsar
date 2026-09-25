@@ -27,6 +27,9 @@ class LifecycleControllerMixin:
             )
             self.state.dbStatus = f"Loading {self.campaign_path}{schema_note}..."
 
+            close_db = getattr(self.db, "close", None)
+            if callable(close_db):
+                close_db()
             self.collection.drop()
             self.parse_campaign(
                 self.campaign_path,

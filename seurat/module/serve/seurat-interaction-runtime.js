@@ -17,10 +17,30 @@
 
   function createHandlers(root) {
     let floatingDrag = null;
+    let floatingResize = null;
     let workspaceSplitDrag = null;
     let workspaceTabDrag = null;
     let tabOverflowFrame = 0;
     let tabOverflowMutationObserver = null;
+    const floatingPanelResizeObserver =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              const panel = entry.target;
+              if (!panel.offsetWidth || !panel.offsetHeight) continue;
+              if (
+                panel.classList.contains("seurat-provenance-panel") &&
+                (panel.style.width || panel.style.height)
+              ) {
+                panel.classList.add("is-user-resized");
+              }
+              const rect = panel.getBoundingClientRect();
+              const position = clampFloatingPanel(panel, rect.left, rect.top);
+              panel.style.left = position.left + "px";
+              panel.style.top = position.top + "px";
+            }
+          })
+        : null;
     const visibleWorkspaceTabs = new WeakMap();
     const tabOverflowResizeObserver =
       typeof ResizeObserver === "function"
@@ -118,6 +138,14 @@
       const current = floatingDrag;
       floatingDrag = null;
       current.panel.classList.remove("is-dragging");
+      releasePointerCapture(current);
+    }
+
+    function finishFloatingResize() {
+      if (!floatingResize) return;
+      const current = floatingResize;
+      floatingResize = null;
+      current.panel.classList.remove("is-resizing");
       releasePointerCapture(current);
     }
 
@@ -315,6 +343,44 @@
 
     function onPointerDown(event) {
       if (event.button !== undefined && event.button !== 0) return;
+      const resizeHandle = closestWithinRoot(
+        event && event.target,
+        ".seurat-provenance-resize-handle",
+        root
+      );
+      if (resizeHandle) {
+        const panel = closestWithinRoot(
+          resizeHandle,
+          ".seurat-provenance-panel",
+          root
+        );
+        if (!panel) return;
+        finishFloatingDrag();
+        finishFloatingResize();
+        const rect = panel.getBoundingClientRect();
+        const style = window.getComputedStyle(panel);
+        floatingResize = {
+          panel,
+          handle: resizeHandle,
+          pointerId: event.pointerId,
+          startX: Number(event.clientX) || 0,
+          startY: Number(event.clientY) || 0,
+          width: rect.width,
+          height: rect.height,
+          minWidth: parseFloat(style.minWidth) || 0,
+          minHeight: parseFloat(style.minHeight) || 0,
+          maxWidth: parseFloat(style.maxWidth) || window.innerWidth,
+          maxHeight: parseFloat(style.maxHeight) || window.innerHeight,
+        };
+        panel.classList.add("is-resizing", "is-user-resized");
+        try {
+          resizeHandle.setPointerCapture(event.pointerId);
+        } catch (_) {
+          // Pointer capture is best-effort for older browser implementations.
+        }
+        event.preventDefault();
+        return;
+      }
       const splitHandle = closestWithinRoot(
         event && event.target,
         ".seurat-workspace-splitter",
@@ -386,6 +452,39 @@
     }
 
     function onPointerMove(event) {
+      if (floatingResize) {
+        if (
+          floatingResize.pointerId !== undefined &&
+          event.pointerId !== floatingResize.pointerId
+        ) {
+          return;
+        }
+        const dx = (Number(event.clientX) || 0) - floatingResize.startX;
+        const dy = (Number(event.clientY) || 0) - floatingResize.startY;
+        const rect = floatingResize.panel.getBoundingClientRect();
+        const availableWidth = window.innerWidth - rect.left - 8;
+        const availableHeight = window.innerHeight - rect.top - 8;
+        const maximumWidth = Math.min(
+          floatingResize.maxWidth,
+          availableWidth
+        );
+        const maximumHeight = Math.min(
+          floatingResize.maxHeight,
+          availableHeight
+        );
+        floatingResize.panel.style.width =
+          Math.max(
+            floatingResize.minWidth,
+            Math.min(maximumWidth, floatingResize.width + dx)
+          ) + "px";
+        floatingResize.panel.style.height =
+          Math.max(
+            floatingResize.minHeight,
+            Math.min(maximumHeight, floatingResize.height + dy)
+          ) + "px";
+        event.preventDefault();
+        return;
+      }
       if (workspaceSplitDrag) {
         if (
           workspaceSplitDrag.pointerId !== undefined &&
@@ -444,6 +543,14 @@
 
     function onPointerEnd(event) {
       if (
+        floatingResize &&
+        (floatingResize.pointerId === undefined ||
+          event.pointerId === floatingResize.pointerId)
+      ) {
+        finishFloatingResize();
+        return;
+      }
+      if (
         workspaceSplitDrag &&
         (workspaceSplitDrag.pointerId === undefined ||
           event.pointerId === workspaceSplitDrag.pointerId)
@@ -461,6 +568,10 @@
     }
 
     function onLostPointerCapture(event) {
+      if (floatingResize && event.target === floatingResize.handle) {
+        finishFloatingResize();
+        return;
+      }
       if (workspaceSplitDrag && event.target === workspaceSplitDrag.handle) {
         finishWorkspaceSplitDrag(true);
         return;
@@ -976,6 +1087,7 @@
       },
       cleanup() {
         finishFloatingDrag();
+        finishFloatingResize();
         finishWorkspaceSplitDrag(false);
         finishWorkspaceTabDrag();
         clearWorkspaceGridDropTargets();
@@ -986,6 +1098,9 @@
         if (tabOverflowMutationObserver) {
           tabOverflowMutationObserver.disconnect();
           tabOverflowMutationObserver = null;
+        }
+        if (floatingPanelResizeObserver) {
+          floatingPanelResizeObserver.disconnect();
         }
         if (tabOverflowResizeObserver) tabOverflowResizeObserver.disconnect();
         for (const panel of root.querySelectorAll(
@@ -1006,6 +1121,11 @@
         childList: true,
         subtree: true,
       });
+    }
+    if (floatingPanelResizeObserver) {
+      for (const panel of root.querySelectorAll(".seurat-provenance-panel")) {
+        floatingPanelResizeObserver.observe(panel);
+      }
     }
     scheduleWorkspaceTabOverflowUpdate();
 

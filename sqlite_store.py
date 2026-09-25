@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-SIDECAR_SCHEMA_VERSION = 2
+SIDECAR_SCHEMA_VERSION = 3
 
 INDEXED_FIELDS = {
     "campaign_path": "campaign_path",
@@ -16,6 +16,7 @@ INDEXED_FIELDS = {
     "variable_name": "variable_name",
     "variable_type": "variable_type",
     "source_dataset": "source_dataset",
+    "source_collection_id": "source_collection_id",
     "producer": "producer",
     "casename": "casename",
     "file": "file",
@@ -45,6 +46,7 @@ TEXT_FIELDS = {
     "variable_name",
     "variable_type",
     "source_dataset",
+    "source_collection_id",
     "producer",
     "casename",
     "file",
@@ -72,6 +74,7 @@ NUMERIC_FIELDS = {
 }
 
 ADDED_COLUMNS = {
+    "source_collection_id": "text",
     "schema_name": "text",
     "schema_file_group": "text",
     "schema_role": "text",
@@ -277,6 +280,7 @@ class SQLiteCampaignCollection:
               variable_name text,
               variable_type text,
               source_dataset text,
+              source_collection_id text,
               producer text,
               casename text,
               file text,
@@ -321,6 +325,12 @@ class SQLiteCampaignCollection:
         for column, ddl_type in ADDED_COLUMNS.items():
             if column not in existing:
                 self._con.execute(f"alter table campaign_entries add column {column} {ddl_type}")
+        self._con.execute(
+            """
+            create index if not exists idx_campaign_entries_source_collection
+              on campaign_entries(source_collection_id, variable_id, variable_type)
+            """
+        )
         self._con.execute(
             """
             create index if not exists idx_campaign_entries_schema_group
@@ -384,6 +394,7 @@ class SQLiteCampaignCollection:
             "variable_name": _text_value(doc.get("variable_name")),
             "variable_type": _text_value(doc.get("variable_type")),
             "source_dataset": _text_value(doc.get("source_dataset")),
+            "source_collection_id": _text_value(doc.get("source_collection_id")),
             "producer": _text_value(doc.get("producer")),
             "casename": _text_value(doc.get("casename")),
             "file": _text_value(doc.get("file")),

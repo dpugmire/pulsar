@@ -1,5 +1,6 @@
 """Catalog, query, and variable-selection controller behavior."""
 
+import json
 from typing import Any, Dict, List, Optional
 
 from application import NavigationNode
@@ -328,6 +329,16 @@ def _activity_label(kind: Any, operation: Any = "") -> str:
 
 
 def _visualization_operation(tile: Dict[str, Any], row: Dict[str, Any]) -> str:
+    visualization_provenance = _dict_value(
+        tile.get("visualization_activity_provenance")
+        or row.get("visualization_activity_provenance")
+    )
+    provenance_operation = _first_text(
+        visualization_provenance,
+        "activity_operation",
+    )
+    if provenance_operation:
+        return provenance_operation
     sequence_metadata = _dict_value(
         tile.get("visualization_sequence_metadata")
         or row.get("visualization_sequence_metadata")
@@ -350,6 +361,57 @@ def _visualization_operation(tile: Dict[str, Any], row: Dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _visualization_artifact_labels(
+    tile: Dict[str, Any],
+    row: Dict[str, Any],
+    visualization_name: str,
+) -> tuple[str, str]:
+    technical_name = _text(visualization_name)
+    if not technical_name.startswith("plugin:"):
+        return technical_name, ""
+    media_type = _first_text(tile, "media_type") or _first_text(row, "media_type")
+    artifact_labels = {
+        "plot1d": "1D plot",
+        "image": "Image",
+        "video": "Movie",
+    }
+    artifact_label = artifact_labels.get(media_type.casefold(), "Visualization")
+    title = _first_text(tile, "display_title") or _first_text(
+        row,
+        "display_title",
+    )
+    return artifact_label, title or technical_name
+
+
+def _visualization_artifact_node(
+    tile: Dict[str, Any],
+    row: Dict[str, Any],
+    visualization_name: str,
+    visualization_operation: str,
+) -> Dict[str, Any]:
+    artifact_label, artifact_title = _visualization_artifact_labels(
+        tile,
+        row,
+        visualization_name,
+    )
+    node = _provenance_node(
+        "visualization",
+        "visualization",
+        visualization_name,
+        "box",
+        details=_detail_rows(
+            ("Visualization", visualization_name),
+            ("Artifact", artifact_label),
+            ("Title", artifact_title),
+            ("Operation", visualization_operation),
+        ),
+    )
+    if artifact_label and artifact_label != visualization_name:
+        node["display_label"] = artifact_label
+        node["secondary_label"] = artifact_title or visualization_name
+    return node
 
 
 def _chain(*parts: Any) -> str:
@@ -619,11 +681,84 @@ def _activity_details(
     return details
 
 
+def _provenance_detail_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(", ", ": "),
+            )
+        except (TypeError, ValueError):
+            pass
+    return _text(value)
+
+
+def _workflow_plan_node(
+    activity_provenance: Dict[str, Any],
+    node_prefix: str,
+) -> Optional[Dict[str, Any]]:
+    plan = _dict_value(activity_provenance.get("workflow_plan", {}))
+    if not plan:
+        return None
+    plan_details = _dict_value(plan.get("details", {}))
+    label = _first_text(plan, "label") or _first_text(
+        plan_details,
+        "workflow",
+    )
+    details = _detail_rows(
+        ("Workflow", plan_details.get("workflow", "")),
+        ("Implementation", plan_details.get("implementation_dataset", "")),
+        ("Location", plan.get("location", "")),
+        (
+            "Selection",
+            _provenance_detail_value(plan_details.get("selection", "")),
+        ),
+        (
+            "Parameters",
+            _provenance_detail_value(plan_details.get("parameters", "")),
+        ),
+        (
+            "Output policy",
+            _provenance_detail_value(plan_details.get("output_policy", "")),
+        ),
+    )
+    return _provenance_node(
+        f"{node_prefix}-plan",
+        "plan",
+        label or "Workflow plan",
+        "box",
+        details=details,
+    )
+
+
+def _activity_agent_node(
+    activity_provenance: Dict[str, Any],
+    node_prefix: str,
+) -> Optional[Dict[str, Any]]:
+    agent = _dict_value(activity_provenance.get("activity_agent", {}))
+    if not agent:
+        return None
+    label = _first_text(agent, "label") or "Agent"
+    return _provenance_node(
+        f"{node_prefix}-agent",
+        "agent",
+        label,
+        "box",
+        details=_detail_rows(
+            ("Type", agent.get("type", "")),
+            ("Version", agent.get("version", "")),
+        ),
+    )
+
+
 def _visualization_details(
     visualization_label: str,
     operation: str,
     input_items: List[Dict[str, Any]],
     input_source: str = "",
+    activity_provenance: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     details: List[Dict[str, Any]] = _detail_rows(
         ("Kind", "visualization"),
@@ -631,6 +766,48 @@ def _visualization_details(
         ("Output", visualization_label),
     )
     details.extend(_input_table_detail(input_items))
+    metadata = _activity_metadata(dict(activity_provenance or {}))
+    plugin = _dict_value(metadata.get("plugin", {}))
+    execution = _dict_value(metadata.get("execution", {}))
+    scientific_context = _dict_value(metadata.get("scientific_context", {}))
+    additional_scientific_context = {
+        key: value
+        for key, value in scientific_context.items()
+        if key
+        not in {"intent", "hypothesis", "observations", "conclusion", "outcome"}
+    }
+    details.extend(
+        _detail_rows(
+            ("Plugin", plugin.get("id", "")),
+            ("Plugin module", plugin.get("module", "")),
+            ("Plugin version", plugin.get("version", "")),
+            ("Steps", _provenance_detail_value(metadata.get("steps", ""))),
+            (
+                "Rendering",
+                _provenance_detail_value(metadata.get("rendering_parameters", "")),
+            ),
+            (
+                "Execution",
+                _provenance_detail_value(execution) if execution else "",
+            ),
+            ("Intent", scientific_context.get("intent", "")),
+            ("Hypothesis", scientific_context.get("hypothesis", "")),
+            (
+                "Observations",
+                _provenance_detail_value(
+                    scientific_context.get("observations", "")
+                ),
+            ),
+            ("Conclusion", scientific_context.get("conclusion", "")),
+            ("Outcome", scientific_context.get("outcome", "")),
+            (
+                "Scientific context",
+                _provenance_detail_value(additional_scientific_context)
+                if additional_scientific_context
+                else "",
+            ),
+        )
+    )
     return details
 
 
@@ -642,12 +819,24 @@ def _provenance_node(
     items: Optional[List[Dict[str, Any]]] = None,
     details: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    node_kind = str(kind or "")
+    node_label = _text(label)
     node = {
         "id": str(node_id or ""),
-        "kind": str(kind or ""),
-        "label": _text(label),
+        "kind": node_kind,
+        "label": node_label,
         "shape": str(shape or ""),
     }
+    if node_kind == "activity" and node_label:
+        operation = node_label.split(":", 1)[-1].strip()
+        display_label = operation.replace("_", " ").replace("-", " ").capitalize()
+        if display_label and display_label != node_label:
+            node["display_label"] = display_label
+            node["secondary_label"] = node_label
+    elif node_kind == "visualization" and "_" in node_label:
+        display_label = node_label.replace("_", " ").capitalize()
+        node["display_label"] = display_label
+        node["secondary_label"] = node_label
     if items:
         node["items"] = items
     if details:
@@ -706,6 +895,51 @@ def _apply_provenance_graph_expansion(
         segment = dict(raw_segment)
         if segment.get("type") == "node" and isinstance(segment.get("node"), dict):
             segment["node"] = _apply_node_expansion(segment["node"], expanded)
+        elif segment.get("type") == "entity_source":
+            for key in ("entity", "source"):
+                if isinstance(segment.get(key), dict):
+                    segment[key] = _apply_node_expansion(
+                        segment[key],
+                        expanded,
+                    )
+        elif segment.get("type") == "activity_context":
+            if isinstance(segment.get("node"), dict):
+                segment["node"] = _apply_node_expansion(
+                    segment["node"],
+                    expanded,
+                )
+            contexts: List[Dict[str, Any]] = []
+            for raw_context in segment.get("contexts", []) or []:
+                if not isinstance(raw_context, dict):
+                    continue
+                context = dict(raw_context)
+                if isinstance(context.get("node"), dict):
+                    context["node"] = _apply_node_expansion(
+                        context["node"],
+                        expanded,
+                    )
+                contexts.append(context)
+            segment["contexts"] = contexts
+        elif segment.get("type") == "plan_group":
+            if isinstance(segment.get("plan"), dict):
+                segment["plan"] = _apply_node_expansion(
+                    segment["plan"],
+                    expanded,
+                )
+            raw_action = segment.get("selected_action")
+            if isinstance(raw_action, dict):
+                action = dict(raw_action)
+                if isinstance(action.get("node"), dict):
+                    action["node"] = _apply_node_expansion(
+                        action["node"],
+                        expanded,
+                    )
+                if isinstance(action.get("agent"), dict):
+                    action["agent"] = _apply_node_expansion(
+                        action["agent"],
+                        expanded,
+                    )
+                segment["selected_action"] = action
         elif segment.get("type") == "branches":
             branches: List[Dict[str, Any]] = []
             for raw_branch in segment.get("branches", []) or []:
@@ -754,6 +988,31 @@ def _provenance_graph_detail_node_ids(graph: List[Dict[str, Any]]) -> set[str]:
             node = segment.get("node")
             if isinstance(node, dict):
                 node_ids.update(_provenance_detail_node_ids([node]))
+        elif segment.get("type") == "entity_source":
+            for key in ("entity", "source"):
+                node = segment.get(key)
+                if isinstance(node, dict):
+                    node_ids.update(_provenance_detail_node_ids([node]))
+        elif segment.get("type") == "activity_context":
+            node = segment.get("node")
+            if isinstance(node, dict):
+                node_ids.update(_provenance_detail_node_ids([node]))
+            for context in segment.get("contexts", []) or []:
+                if not isinstance(context, dict):
+                    continue
+                node = context.get("node")
+                if isinstance(node, dict):
+                    node_ids.update(_provenance_detail_node_ids([node]))
+        elif segment.get("type") == "plan_group":
+            plan = segment.get("plan")
+            if isinstance(plan, dict):
+                node_ids.update(_provenance_detail_node_ids([plan]))
+            action = segment.get("selected_action")
+            if isinstance(action, dict):
+                for key in ("node", "agent"):
+                    node = action.get(key)
+                    if isinstance(node, dict):
+                        node_ids.update(_provenance_detail_node_ids([node]))
         elif segment.get("type") == "branches":
             for branch in segment.get("branches", []) or []:
                 if not isinstance(branch, dict):
@@ -784,6 +1043,46 @@ def _activity_provenance_node(
     return _provenance_node(node_id, "activity", label, "box", details=details)
 
 
+def _activity_graph_item(
+    activity_node: Dict[str, Any],
+    activity_provenance: Dict[str, Any],
+    node_prefix: str,
+) -> Dict[str, Any]:
+    plan_node = _workflow_plan_node(activity_provenance, node_prefix)
+    if plan_node:
+        return {
+            "id": f"plan-group-{node_prefix}",
+            "type": "plan_group",
+            "plan": plan_node,
+            "selected_action": {
+                "id": f"{node_prefix}-selected-action",
+                "node": activity_node,
+                "agent": (
+                    _activity_agent_node(activity_provenance, node_prefix) or {}
+                ),
+            },
+        }
+
+    contexts: List[Dict[str, Any]] = []
+    agent_node = _activity_agent_node(activity_provenance, node_prefix)
+    if agent_node:
+        contexts.append(
+            {
+                "id": f"{node_prefix}-agent-context",
+                "relation": "Agent",
+                "node": agent_node,
+            }
+        )
+    if not contexts:
+        return activity_node
+    return {
+        "id": f"context-{node_prefix}",
+        "type": "activity_context",
+        "node": activity_node,
+        "contexts": contexts,
+    }
+
+
 def _source_provenance_node(
     label: Any,
     details: Optional[List[Dict[str, Any]]] = None,
@@ -800,27 +1099,92 @@ def _graph_node_segment(node: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _graph_arrow_segment(index: int) -> Dict[str, Any]:
-    return {"id": f"arrow-{index}", "type": "arrow"}
+def _graph_arrow_segment(index: int, relation: str = "") -> Dict[str, Any]:
+    return {
+        "id": f"arrow-{index}",
+        "type": "arrow",
+        "relation": relation,
+    }
+
+
+def _graph_item_kind(item: Dict[str, Any]) -> str:
+    item_type = _text(item.get("type", ""))
+    if item_type:
+        return item_type
+    return _text(item.get("kind", ""))
+
+
+def _graph_relation(
+    previous: Dict[str, Any],
+    current: Dict[str, Any],
+) -> str:
+    previous_kind = _graph_item_kind(previous)
+    current_kind = _graph_item_kind(current)
+    activity_kinds = {"activity", "activity_context", "plan_group"}
+    if current_kind in activity_kinds:
+        return ""
+    if previous_kind in activity_kinds:
+        return "uses"
+    if current_kind == "source":
+        return "stored in"
+    return ""
 
 
 def _provenance_graph_segments(*items: Dict[str, Any]) -> List[Dict[str, Any]]:
-    segments: List[Dict[str, Any]] = []
-    previous_was_node = False
-    arrow_index = 0
-    for item in items:
-        if not item:
+    normalized: List[Dict[str, Any]] = []
+    index = 0
+    raw_items = [item for item in items if item]
+    while index < len(raw_items):
+        item = raw_items[index]
+        following = raw_items[index + 1] if index + 1 < len(raw_items) else {}
+        if (
+            not item.get("type")
+            and item.get("kind") == "variable"
+            and not following.get("type")
+            and following.get("kind") == "source"
+        ):
+            normalized.append(
+                {
+                    "id": f"entity-source-{item.get('id', index)}",
+                    "type": "entity_source",
+                    "entity": item,
+                    "source": following,
+                }
+            )
+            index += 2
             continue
+        normalized.append(item)
+        index += 1
+
+    segments: List[Dict[str, Any]] = []
+    previous: Optional[Dict[str, Any]] = None
+    arrow_index = 0
+    for item in normalized:
         if item.get("type") == "branches":
             if item.get("branches"):
-                segments.append(item)
-            previous_was_node = False
+                branch_segment = dict(item)
+                if previous:
+                    branch_segment["relation"] = _graph_relation(previous, item)
+                segments.append(branch_segment)
+            previous = None
             continue
-        if previous_was_node:
+        if previous:
             arrow_index += 1
-            segments.append(_graph_arrow_segment(arrow_index))
-        segments.append(_graph_node_segment(item))
-        previous_was_node = True
+            segments.append(
+                _graph_arrow_segment(
+                    arrow_index,
+                    _graph_relation(previous, item),
+                )
+            )
+        if item.get("type") in {
+            "activity_context",
+            "entity_source",
+            "plan_group",
+        }:
+            segments.append(item)
+        else:
+            segments.append(_graph_node_segment(item))
+        previous = item
     return segments
 
 
@@ -1030,6 +1394,18 @@ def _details_provenance_summary(
 
     if visualization_name:
         visualization_operation = _visualization_operation(tile, row)
+        visualization_artifact, visualization_title = (
+            _visualization_artifact_labels(
+                tile,
+                row,
+                visualization_name,
+            )
+        )
+        visualization_output = visualization_title or visualization_artifact
+        visualization_activity_provenance = _dict_value(
+            tile.get("visualization_activity_provenance")
+            or row.get("visualization_activity_provenance")
+        )
         activity = _activity_label("visualization", visualization_operation)
         input_items = _provenance_input_items(
             tile.get("visualization_variables")
@@ -1070,7 +1446,7 @@ def _details_provenance_summary(
                 activity_provenance.get("activity_operation", "") or ""
             )
             chain = _chain(
-                visualization_name,
+                visualization_artifact,
                 activity,
                 input_label,
                 derived_activity,
@@ -1078,24 +1454,21 @@ def _details_provenance_summary(
                 derived_source_label,
             )
             nodes = [
-                _provenance_node(
-                    "visualization",
-                    "visualization",
+                _visualization_artifact_node(
+                    tile,
+                    row,
                     visualization_name,
-                    "box",
-                    details=_detail_rows(
-                        ("Visualization", visualization_name),
-                        ("Kind", visualization_operation),
-                    ),
+                    visualization_operation,
                 ),
                 _activity_provenance_node(
                     activity,
                     "visualization-activity",
                     details=_visualization_details(
-                        visualization_name,
+                        visualization_output,
                         visualization_operation,
                         input_items,
                         visualization_input_source_label,
+                        visualization_activity_provenance,
                     ),
                 ),
                 _variable_provenance_node(
@@ -1141,7 +1514,26 @@ def _details_provenance_summary(
                 )
                 nodes[3:3] = [stored_source_node]
 
-            graph_main_nodes = nodes[:5] if stored_source_node else nodes[:4]
+            graph_main_nodes = [
+                nodes[0],
+                _activity_graph_item(
+                    nodes[1],
+                    visualization_activity_provenance,
+                    "visualization-activity",
+                ),
+                nodes[2],
+            ]
+            derived_activity_index = 3
+            if stored_source_node:
+                graph_main_nodes.append(nodes[3])
+                derived_activity_index = 4
+            graph_main_nodes.append(
+                _activity_graph_item(
+                    nodes[derived_activity_index],
+                    activity_provenance,
+                    "derived-activity",
+                )
+            )
             derived_input_branches = _input_branch_segment(
                 derived_input_items,
                 derived_source_label,
@@ -1155,7 +1547,7 @@ def _details_provenance_summary(
                 "kind": "visualization",
                 "chain": chain,
                 "compact": _compact_visualization_breadcrumb(
-                    visualization_name,
+                    visualization_artifact,
                     visualization_operation,
                     input_label,
                     input_items,
@@ -1171,25 +1563,27 @@ def _details_provenance_summary(
                 ),
             }
         input_label = " + ".join(inputs) if inputs else variable_name
-        chain = _chain(visualization_name, activity, input_label, source_label)
+        chain = _chain(
+            visualization_artifact,
+            activity,
+            input_label,
+            source_label,
+        )
         nodes = [
-            _provenance_node(
-                "visualization",
-                "visualization",
+            _visualization_artifact_node(
+                tile,
+                row,
                 visualization_name,
-                "box",
-                details=_detail_rows(
-                    ("Visualization", visualization_name),
-                    ("Kind", visualization_operation),
-                ),
+                visualization_operation,
             ),
             _activity_provenance_node(
                 activity,
                 details=_visualization_details(
-                    visualization_name,
+                    visualization_output,
                     visualization_operation,
                     input_items,
                     source_label,
+                    visualization_activity_provenance,
                 ),
             ),
             *(
@@ -1206,7 +1600,7 @@ def _details_provenance_summary(
             "kind": "visualization",
             "chain": chain,
             "compact": _compact_visualization_breadcrumb(
-                visualization_name,
+                visualization_artifact,
                 visualization_operation,
                 input_label,
                 input_items,
@@ -1215,7 +1609,11 @@ def _details_provenance_summary(
             "nodes": nodes,
             "graph": _provenance_graph_segments(
                 nodes[0],
-                nodes[1],
+                _activity_graph_item(
+                    nodes[1],
+                    visualization_activity_provenance,
+                    "visualization-activity",
+                ),
                 _input_branch_segment(input_items, source_label),
             ),
         }
@@ -1282,7 +1680,15 @@ def _details_provenance_summary(
                 activity_source_label,
             ),
             "nodes": nodes,
-            "graph": _provenance_graph_segments(nodes[0], nodes[1], graph_tail),
+            "graph": _provenance_graph_segments(
+                nodes[0],
+                _activity_graph_item(
+                    nodes[1],
+                    activity_provenance,
+                    "activity",
+                ),
+                graph_tail,
+            ),
         }
 
     chain = _chain(variable_name, source_label)
@@ -1509,6 +1915,7 @@ Notes:
         preferred_source_keys: Optional[List[str]] = None,
         include_visualization_provenance: bool = False,
         preferred_visualization: str = "",
+        provenance_tile: Optional[Dict[str, Any]] = None,
     ):
         var_id = str(variable_id or "").strip()
         if not var_id:
@@ -1524,6 +1931,27 @@ Notes:
         )
         qf = self.active_query_filter()
         preferred_vis = str(preferred_visualization or "").strip()
+        selected_provenance_tile = dict(provenance_tile or {})
+        if include_visualization_provenance and not selected_provenance_tile:
+            try:
+                active_cell = int(self.state.activeGridCell)
+            except Exception:
+                active_cell = -1
+            grid_cells = list(self.state.gridCells or [])
+            if 0 <= active_cell < len(grid_cells):
+                candidate_tile = dict(grid_cells[active_cell] or {})
+                candidate_variable = _first_text(
+                    candidate_tile,
+                    "variable_id",
+                    "variable_name",
+                )
+                candidate_visualization = _first_text(
+                    candidate_tile,
+                    "selected_visualization",
+                    "visualization_name",
+                )
+                if candidate_variable == var_id and candidate_visualization:
+                    selected_provenance_tile = candidate_tile
         summary = self.application.get_source_summary(
             {"variable_id": var_id, "query": qf or {}}
         )
@@ -1603,8 +2031,17 @@ Notes:
                 self.state.movieStatus = "No sources selected"
                 self.update_details_provenance(
                     label,
-                    selected_rows,
-                    [],
+                    selected_rows
+                    or (
+                        [selected_provenance_tile]
+                        if selected_provenance_tile
+                        else []
+                    ),
+                    (
+                        [selected_provenance_tile]
+                        if selected_provenance_tile
+                        else []
+                    ),
                     include_visualization=include_visualization_provenance,
                 )
                 return
@@ -1690,7 +2127,12 @@ Notes:
             self.update_details_provenance(
                 label,
                 selected_rows,
-                tiles,
+                (
+                    [selected_provenance_tile]
+                    if include_visualization_provenance
+                    and selected_provenance_tile
+                    else tiles
+                ),
                 include_visualization=include_visualization_provenance,
             )
         except Exception as e:
@@ -1702,8 +2144,18 @@ Notes:
             )
             self.update_details_provenance(
                 label,
-                selected_rows,
-                [],
+                selected_rows
+                or (
+                    [selected_provenance_tile]
+                    if selected_provenance_tile
+                    else []
+                ),
+                (
+                    [selected_provenance_tile]
+                    if include_visualization_provenance
+                    and selected_provenance_tile
+                    else []
+                ),
                 include_visualization=include_visualization_provenance,
             )
 

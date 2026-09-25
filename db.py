@@ -3,6 +3,7 @@ import json
 import math
 import sqlite3
 import statistics
+import threading
 import zlib
 from contextlib import ExitStack
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -619,12 +620,32 @@ class CampaignDb:
         self.collection = collection
         self.ok = True
         self.last_error = ""
+        self._campaign_readers: Dict[str, Any] = {}
+        self._source_collection_axis_cache: Dict[
+            Tuple[str, str, str, Tuple[str, ...]],
+            Tuple[List[float], List[str]],
+        ] = {}
+        self._campaign_reader_lock = threading.RLock()
 
         try:
             _ = self.collection.database.client.admin.command("ping")
         except Exception as e:
             self.ok = False
             self.last_error = f"{type(e).__name__}: {e}"
+
+    def close(self) -> None:
+        with self._campaign_reader_lock:
+            readers = list(self._campaign_readers.values())
+            self._campaign_readers.clear()
+            self._source_collection_axis_cache.clear()
+        for reader in readers:
+            close = getattr(reader, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception:
+                pass
 
     @staticmethod
     def _metadata_ndims(metadata: Any) -> Optional[int]:
@@ -668,6 +689,35 @@ class CampaignDb:
             return len(dims)
 
         return len(parts)
+
+    @staticmethod
+    def _metadata_shape(metadata: Any) -> List[int]:
+        if not isinstance(metadata, dict):
+            return []
+        raw_shape = metadata.get("Shape", metadata.get("shape", None))
+        if raw_shape is None:
+            return []
+        if isinstance(raw_shape, (list, tuple)):
+            parts = list(raw_shape)
+        else:
+            text = str(raw_shape).strip()
+            for char in "[](){}":
+                text = text.replace(char, "")
+            parts = [part.strip() for part in text.replace("x", ",").split(",")]
+            if len(parts) == 1 and " " in parts[0]:
+                parts = parts[0].split()
+        shape: List[int] = []
+        for part in parts:
+            if part in (None, ""):
+                continue
+            try:
+                value = int(float(str(part)))
+            except Exception:
+                return []
+            if value < 0:
+                return []
+            shape.append(value)
+        return shape
 
     @staticmethod
     def _variable_filter(variable_id: str, variable_type: Optional[str] = None) -> Dict[str, Any]:
@@ -729,6 +779,9 @@ class CampaignDb:
 
     @staticmethod
     def _plot_source_label(doc: Dict[str, Any]) -> str:
+        collection_label = str(doc.get("source_collection_label", "") or "")
+        if collection_label:
+            return collection_label
         source_dataset = str(doc.get("source_dataset", "") or "")
         if source_dataset:
             return source_dataset
@@ -752,6 +805,80 @@ class CampaignDb:
         schema_file_group = "" if doc.get("schema_file_group", None) is None else str(doc.get("schema_file_group"))
         schema_mode = "" if doc.get("schema_mode", None) is None else str(doc.get("schema_mode"))
         schema_pattern = "" if doc.get("schema_pattern", None) is None else str(doc.get("schema_pattern"))
+        source_collection_id = str(doc.get("source_collection_id", "") or "")
+        source_collection_label = str(
+            doc.get("source_collection_label", "") or source_collection_id
+        )
+
+        if source_collection_id:
+            return (
+                (
+                    "source_collection",
+                    str(doc.get("schema_name", "") or ""),
+                    schema_file_group,
+                    source_collection_id,
+                ),
+                {
+                    "source_dataset": "",
+                    "source_label": source_collection_label,
+                    "source_collection_id": source_collection_id,
+                    "source_collection_label": source_collection_label,
+                    "source_collection_mode": str(
+                        doc.get("source_collection_mode", "") or ""
+                    ),
+                    "source_collection_axis": str(
+                        doc.get("source_collection_axis", "") or ""
+                    ),
+                    "source_collection_member_count": doc.get(
+                        "source_collection_member_count", None
+                    ),
+                    "source_collection_total_length": doc.get(
+                        "source_collection_total_length", None
+                    ),
+                    "schema_file_group": schema_file_group,
+                    "schema_pattern": schema_pattern,
+                    "schema_mode": schema_mode,
+                    "schema_num_timesteps": doc.get("schema_num_timesteps", None),
+                    "schema_name": str(doc.get("schema_name", "") or ""),
+                    "schema_role": str(doc.get("schema_role", "") or ""),
+                    "variable_id": str(doc.get("variable_id", "") or ""),
+                    "variable_name": str(doc.get("variable_name", "") or ""),
+                    "variable_type": str(doc.get("variable_type", "") or ""),
+                    "producer": "",
+                    "casename": "",
+                    "file": "",
+                    "visualization_name": str(doc.get("visualization_name", "") or ""),
+                    "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+                    "visualization_source_dataset": "",
+                    "visualization_variables": _list_field(
+                        doc.get("visualization_variables", [])
+                    ),
+                    "visualization_roles": _list_field(
+                        doc.get("visualization_roles", [])
+                    ),
+                    "visualization_sequence_metadata": _dict_field(
+                        doc.get("visualization_sequence_metadata", {})
+                    ),
+                    "visualization_item_metadata": _dict_field(
+                        doc.get("visualization_item_metadata", {})
+                    ),
+                    "activity_provenance": _dict_field(
+                        doc.get("activity_provenance", {})
+                    ),
+                    "visualization_activity_provenance": _dict_field(
+                        doc.get("visualization_activity_provenance", {})
+                    ),
+                    "association_source": str(doc.get("association_source", "") or ""),
+                    "campaign_path": str(doc.get("campaign_path", "") or ""),
+                    "variable_location": str(doc.get("variable_location", "") or ""),
+                    "variable_path": "",
+                    "frame_index": None,
+                    "min": None,
+                    "max": None,
+                    "_files_seen": set(),
+                    "_source_datasets_seen": set(),
+                },
+            )
 
         if schema_file_group and schema_mode == "file_per_timestep":
             return (
@@ -788,6 +915,9 @@ class CampaignDb:
                     ),
                     "activity_provenance": _dict_field(
                         doc.get("activity_provenance", {})
+                    ),
+                    "visualization_activity_provenance": _dict_field(
+                        doc.get("visualization_activity_provenance", {})
                     ),
                     "association_source": str(doc.get("association_source", "") or ""),
                     "campaign_path": str(doc.get("campaign_path", "") or ""),
@@ -837,6 +967,9 @@ class CampaignDb:
                 "activity_provenance": _dict_field(
                     doc.get("activity_provenance", {})
                 ),
+                "visualization_activity_provenance": _dict_field(
+                    doc.get("visualization_activity_provenance", {})
+                ),
                 "association_source": str(doc.get("association_source", "") or ""),
                 "campaign_path": str(doc.get("campaign_path", "") or ""),
                 "variable_location": str(doc.get("variable_location", "") or ""),
@@ -868,7 +1001,21 @@ class CampaignDb:
             source_datasets = sorted(str(name) for name in datasets_seen if str(name))
             source["files"] = files
             source["source_datasets"] = source_datasets
-            if source.get("schema_mode") == "file_per_timestep":
+            if source.get("source_collection_id"):
+                try:
+                    total_length = int(
+                        source.get("source_collection_total_length", 0) or 0
+                    )
+                except Exception:
+                    total_length = 0
+                source["num_timesteps"] = total_length
+                try:
+                    source["num_partitions"] = int(
+                        source.get("source_collection_member_count", 0) or 0
+                    )
+                except Exception:
+                    source["num_partitions"] = len(source_datasets) or len(files)
+            elif source.get("schema_mode") == "file_per_timestep":
                 try:
                     num_timesteps = int(source.get("schema_num_timesteps", 0) or 0)
                 except Exception:
@@ -882,6 +1029,9 @@ class CampaignDb:
 
     @staticmethod
     def _source_restriction_identity(doc: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        source_collection_id = str(doc.get("source_collection_id", "") or "").strip()
+        if source_collection_id:
+            return ("source_collection", source_collection_id)
         schema_file_group = str(doc.get("schema_file_group", "") or "").strip()
         schema_mode = str(doc.get("schema_mode", "") or "").strip()
         if schema_file_group and schema_mode == "file_per_timestep":
@@ -1088,11 +1238,16 @@ class CampaignDb:
         schema_file_groups = sorted(
             value for kind, value in identities if kind == "schema_file_group"
         )
+        source_collections = sorted(
+            value for kind, value in identities if kind == "source_collection"
+        )
         producers = sorted(value for kind, value in identities if kind == "producer")
         source_datasets = sorted(value for kind, value in identities if kind == "source_dataset")
         legacy_sources = sorted(value for kind, value in identities if kind == "legacy_source")
 
         parts: List[Dict[str, Any]] = []
+        if source_collections:
+            parts.append({"source_collection_id": {"$in": source_collections}})
         if schema_file_groups:
             parts.append(
                 {
@@ -1155,6 +1310,7 @@ class CampaignDb:
             "metadata": 1,
             "schema_file_group": 1,
             "schema_mode": 1,
+            "source_collection_id": 1,
         }
 
         matched: Optional[Set[Tuple[str, str]]] = None
@@ -1243,6 +1399,7 @@ class CampaignDb:
                 "variable_group": 1,
                 "variable_group_order": 1,
                 "role": 1,
+                "display_name": 1,
                 "metadata": 1,
             }
 
@@ -1262,12 +1419,15 @@ class CampaignDb:
                     if not name:
                         physical = str(doc.get("variable_name_physical", "") or "").strip("/")
                         name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
+                    label = (
+                        str(doc.get("display_name", "") or "").strip() or name
+                    )
 
                     display_path = self._variable_display_path({**doc, "variable_id": variable_id})
                     item: Dict[str, Any] = {
                         "id": variable_id,
                         "name": name,
-                        "label": name,
+                        "label": label,
                         "path": display_path,
                         "source_dataset": str(doc.get("source_dataset", "") or ""),
                     }
@@ -1282,16 +1442,23 @@ class CampaignDb:
 
             counts: Dict[str, int] = {}
             for item in by_id.values():
-                counts[item["name"]] = counts.get(item["name"], 0) + 1
+                counts[item["label"]] = counts.get(item["label"], 0) + 1
 
             variables = list(by_id.values())
             for item in variables:
-                if counts.get(item["name"], 0) <= 1:
+                if counts.get(item["label"], 0) <= 1:
                     continue
                 parent = self._variable_parent_path(item.get("path", ""))
-                item["label"] = f"{item['name']} [{parent}]" if parent else item["name"]
+                if parent:
+                    item["label"] = f"{item['label']} [{parent}]"
 
-            variables.sort(key=lambda item: (item["name"].lower(), item["label"].lower(), item["id"]))
+            variables.sort(
+                key=lambda item: (
+                    item["label"].lower(),
+                    item["name"].lower(),
+                    item["id"],
+                )
+            )
             return variables
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
@@ -1403,7 +1570,12 @@ class CampaignDb:
                 "schema_mode": 1,
                 "schema_pattern": 1,
                 "schema_num_timesteps": 1,
+                "source_collection_id": 1,
+                "source_collection_label": 1,
+                "source_collection_member_count": 1,
+                "source_collection_total_length": 1,
                 "variable_type": 1,
+                "display_name": 1,
                 "metadata": 1,
             }
 
@@ -1425,6 +1597,13 @@ class CampaignDb:
                     schema_file_group = str(doc.get("schema_file_group", "") or "").strip()
                     schema_mode = str(doc.get("schema_mode", "") or "").strip()
                     schema_pattern = str(doc.get("schema_pattern", "") or "").strip()
+                    source_collection_id = str(
+                        doc.get("source_collection_id", "") or ""
+                    ).strip()
+                    source_collection_label = str(
+                        doc.get("source_collection_label", "")
+                        or source_collection_id
+                    ).strip()
                     try:
                         schema_num_timesteps = int(doc.get("schema_num_timesteps", 0) or 0)
                     except Exception:
@@ -1433,7 +1612,11 @@ class CampaignDb:
                     casename = str(doc.get("casename", "") or "").strip()
                     file_name = str(doc.get("file", "") or "").strip()
 
-                    if schema_file_group and schema_mode == "file_per_timestep":
+                    if source_collection_id:
+                        source_key = ("source_collection", source_collection_id)
+                        source_label = source_collection_label
+                        group_source_dataset = ""
+                    elif schema_file_group and schema_mode == "file_per_timestep":
                         source_key = ("schema_file_group", schema_file_group)
                         source_label = self._file_navigation_label(
                             schema_pattern or schema_file_group
@@ -1457,6 +1640,7 @@ class CampaignDb:
                             "variables": [],
                             "_source_files": set(),
                             "_schema_file_count": 0,
+                            "source_collection_id": source_collection_id,
                         },
                     )
                     source_file = source_dataset or file_name or source_label
@@ -1464,6 +1648,11 @@ class CampaignDb:
                         group["_schema_file_count"] = max(
                             int(group.get("_schema_file_count", 0) or 0),
                             schema_num_timesteps,
+                        )
+                    elif source_collection_id:
+                        group["_schema_file_count"] = max(
+                            int(group.get("_schema_file_count", 0) or 0),
+                            int(doc.get("source_collection_member_count", 0) or 0),
                         )
                     if source_file and source_file != schema_file_group:
                         group["_source_files"].add(source_file)
@@ -1477,12 +1666,15 @@ class CampaignDb:
                     if not name:
                         physical = str(doc.get("variable_name_physical", "") or "").strip("/")
                         name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
+                    label = (
+                        str(doc.get("display_name", "") or "").strip() or name
+                    )
 
                     group["variables"].append(
                         {
                             "id": variable_id,
                             "name": name,
-                            "label": name,
+                            "label": label,
                             "path": self._variable_display_path({**doc, "variable_id": variable_id}),
                             "source_dataset": source_dataset,
                         }
@@ -1498,18 +1690,19 @@ class CampaignDb:
                 variables = list(group.get("variables", []) or [])
                 counts: Dict[str, int] = {}
                 for item in variables:
-                    name = str(item.get("name", "") or "")
-                    counts[name] = counts.get(name, 0) + 1
+                    label = str(item.get("label", "") or "")
+                    counts[label] = counts.get(label, 0) + 1
                 for item in variables:
-                    name = str(item.get("name", "") or "")
-                    if counts.get(name, 0) <= 1:
+                    label = str(item.get("label", "") or "")
+                    if counts.get(label, 0) <= 1:
                         continue
                     parent = self._variable_parent_path(str(item.get("path", "") or ""))
-                    item["label"] = f"{name} [{parent}]" if parent else name
+                    if parent:
+                        item["label"] = f"{label} [{parent}]"
                 variables.sort(
                     key=lambda item: (
-                        str(item.get("name", "")).lower(),
                         str(item.get("label", "")).lower(),
+                        str(item.get("name", "")).lower(),
                         str(item.get("id", "")),
                     )
                 )
@@ -1562,6 +1755,12 @@ class CampaignDb:
             "schema_role": 1,
             "schema_mode": 1,
             "schema_num_timesteps": 1,
+            "source_collection_id": 1,
+            "source_collection_label": 1,
+            "source_collection_mode": 1,
+            "source_collection_axis": 1,
+            "source_collection_member_count": 1,
+            "source_collection_total_length": 1,
         }
 
         cursor = self.collection.find(query, proj).sort(
@@ -1648,6 +1847,7 @@ class CampaignDb:
             "file": 1,
             "variable_id": 1,
             "variable_name": 1,
+            "display_name": 1,
             "variable_name_physical": 1,
             "variable_path": 1,
             "source_dataset": 1,
@@ -1657,6 +1857,22 @@ class CampaignDb:
             "schema_mode": 1,
             "time_source": 1,
             "time_values": 1,
+            "axes": 1,
+            "dimension_axes": 1,
+            "plot_x_axis": 1,
+            "selection_axis": 1,
+            "schema_default_axis": 1,
+            "source_collection_id": 1,
+            "source_collection_label": 1,
+            "source_collection_mode": 1,
+            "source_collection_axis": 1,
+            "source_collection_member_index": 1,
+            "source_collection_member_count": 1,
+            "source_collection_offset": 1,
+            "source_collection_length": 1,
+            "source_collection_total_length": 1,
+            "source_collection_partition_value": 1,
+            "source_collection_partition_label": 1,
             "metadata": 1,
             "min": 1,
             "max": 1,
@@ -1674,7 +1890,18 @@ class CampaignDb:
 
         metadata = doc.get("metadata", {})
         ndims = self._metadata_ndims(metadata)
-        if ndims is None or ndims > 1:
+        axes = doc.get("axes", {})
+        if not isinstance(axes, dict):
+            axes = {}
+        plot_x_axis = str(doc.get("plot_x_axis", "") or "")
+        selection_axis = str(doc.get("selection_axis", "") or "")
+        is_axis_selected_waveform = (
+            ndims == 2
+            and plot_x_axis in axes
+            and selection_axis in axes
+            and plot_x_axis != selection_axis
+        )
+        if ndims is None or (ndims > 1 and not is_axis_selected_waveform):
             return {}
 
         read_path = self._adios_variable_read_path(doc)
@@ -1683,6 +1910,9 @@ class CampaignDb:
 
         source_fields = {
             "source_dataset": str(doc.get("source_dataset", "") or ""),
+            "source_collection_id": str(
+                doc.get("source_collection_id", "") or ""
+            ),
             "schema_file_group": str(doc.get("schema_file_group", "") or ""),
             "schema_mode": str(doc.get("schema_mode", "") or ""),
             "producer": str(doc.get("producer", "") or ""),
@@ -1690,7 +1920,11 @@ class CampaignDb:
             "file": str(doc.get("file", "") or ""),
         }
         source_filter_out: Dict[str, str] = {"variable_id": variable_id}
-        if source_fields["schema_file_group"] and source_fields["schema_mode"] == "file_per_timestep":
+        if source_fields["source_collection_id"]:
+            source_filter_out["source_collection_id"] = source_fields[
+                "source_collection_id"
+            ]
+        elif source_fields["schema_file_group"] and source_fields["schema_mode"] == "file_per_timestep":
             source_filter_out["schema_file_group"] = source_fields["schema_file_group"]
             source_filter_out["schema_mode"] = source_fields["schema_mode"]
         elif source_fields["source_dataset"]:
@@ -1703,6 +1937,7 @@ class CampaignDb:
         return {
             "variable_id": variable_id,
             "variable_name": str(doc.get("variable_name", "") or variable_id),
+            "display_name": str(doc.get("display_name", "") or ""),
             "variable_path": read_path,
             "metadata": metadata,
             "source_fields": source_fields,
@@ -1710,6 +1945,44 @@ class CampaignDb:
             "source_label": self._plot_source_label(doc),
             "time_source": str(doc.get("time_source", "") or ""),
             "time_values": doc.get("time_values", []),
+            "axes": axes,
+            "dimension_axes": list(doc.get("dimension_axes", []) or []),
+            "plot_x_axis": plot_x_axis,
+            "selection_axis": selection_axis,
+            "schema_default_axis": str(doc.get("schema_default_axis", "") or ""),
+            "source_collection_id": str(
+                doc.get("source_collection_id", "") or ""
+            ),
+            "source_collection_label": str(
+                doc.get("source_collection_label", "") or ""
+            ),
+            "source_collection_mode": str(
+                doc.get("source_collection_mode", "") or ""
+            ),
+            "source_collection_axis": str(
+                doc.get("source_collection_axis", "") or ""
+            ),
+            "source_collection_member_index": int(
+                doc.get("source_collection_member_index", 0) or 0
+            ),
+            "source_collection_member_count": int(
+                doc.get("source_collection_member_count", 0) or 0
+            ),
+            "source_collection_offset": int(
+                doc.get("source_collection_offset", 0) or 0
+            ),
+            "source_collection_length": int(
+                doc.get("source_collection_length", 0) or 0
+            ),
+            "source_collection_total_length": int(
+                doc.get("source_collection_total_length", 0) or 0
+            ),
+            "source_collection_partition_value": doc.get(
+                "source_collection_partition_value", None
+            ),
+            "source_collection_partition_label": str(
+                doc.get("source_collection_partition_label", "") or ""
+            ),
             "min": doc.get("min", None),
             "max": doc.get("max", None),
         }
@@ -1901,37 +2174,236 @@ class CampaignDb:
         return times, "time"
 
     @staticmethod
+    def _plot_axis_label(axis: Any, fallback: str = "x") -> str:
+        if not isinstance(axis, dict):
+            return str(fallback or "x")
+        label = str(axis.get("label", "") or fallback or "x")
+        unit = str(axis.get("unit", "") or "").strip()
+        return f"{label} ({unit})" if unit else label
+
+    @staticmethod
+    def _plot_axis_values(axis: Any) -> Optional[np.ndarray]:
+        if not isinstance(axis, dict):
+            return None
+        raw_values = axis.get("values", None)
+        if not isinstance(raw_values, (list, tuple, np.ndarray)):
+            return None
+        try:
+            values = np.asarray(raw_values, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        return values if np.all(np.isfinite(values)) else None
+
+    @staticmethod
+    def _read_selected_array_row(
+        fr: FileReader,
+        variable_path: str,
+        shape: List[int],
+        selection_index: int,
+    ) -> np.ndarray:
+        if len(shape) != 2 or min(shape) <= 0:
+            raise ValueError(
+                f"Axis-selected plots require a non-empty rank-2 array: {shape}"
+            )
+        index = max(0, min(int(selection_index), shape[0] - 1))
+        raw = np.asarray(
+            fr.read(
+                variable_path,
+                start=[index, 0],
+                count=[1, shape[1]],
+            ),
+            dtype=float,
+        )
+        if raw.ndim >= 2 and raw.shape[0] == shape[0] and shape[0] > 1:
+            raw = raw[index]
+        return raw.reshape(-1)
+
+    @staticmethod
+    def _read_plot_axis_values(
+        fr: FileReader,
+        axis: Dict[str, Any],
+        selection_index: int,
+    ) -> np.ndarray:
+        cached = CampaignDb._plot_axis_values(axis)
+        if cached is not None:
+            return cached
+        variable_path = str(axis.get("variable_path", "") or "")
+        if not variable_path:
+            raise ValueError("Plot axis has no coordinate variable path")
+        raw_shape = axis.get("shape", [])
+        shape = [int(value) for value in raw_shape] if isinstance(raw_shape, list) else []
+        if len(shape) == 1:
+            return np.asarray(fr.read(variable_path), dtype=float).reshape(-1)
+        if len(shape) == 2:
+            return CampaignDb._read_selected_array_row(
+                fr,
+                variable_path,
+                shape,
+                selection_index,
+            )
+        raise ValueError(
+            f"Plot axis coordinate must be rank 1 or 2, got shape {shape}"
+        )
+
+    @staticmethod
     def _read_plot_series(
         campaign_path: str,
         variable_path: str,
         metadata: Any,
         explicit_time_values: Any = None,
+        axes: Any = None,
+        plot_x_axis: str = "",
+        selection_axis: str = "",
+        selection_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray, str]:
+        with FileReader(campaign_path) as fr:
+            return CampaignDb._read_plot_series_from_reader(
+                fr,
+                variable_path,
+                metadata,
+                explicit_time_values,
+                axes,
+                plot_x_axis,
+                selection_axis,
+                selection_index,
+            )
+
+    @staticmethod
+    def _read_plot_series_from_reader(
+        fr: FileReader,
+        variable_path: str,
+        metadata: Any,
+        explicit_time_values: Any = None,
+        axes: Any = None,
+        plot_x_axis: str = "",
+        selection_axis: str = "",
+        selection_index: int = 0,
     ) -> Tuple[np.ndarray, np.ndarray, str]:
         steps_count = CampaignDb._metadata_steps_count(metadata)
         ndims = CampaignDb._metadata_ndims(metadata)
-        with FileReader(campaign_path) as fr:
-            kwargs = {"step_selection": [0, steps_count]} if steps_count > 1 else {}
-            y_raw = np.asarray(fr.read(variable_path, **kwargs), dtype=float)
-
-            if ndims == 0:
-                y = y_raw.reshape(-1)
-                x, x_label = CampaignDb._plot_timeline_values(y.size, explicit_time_values)
-                return x, y, x_label
-
-            if ndims == 1:
-                y = y_raw.reshape(-1)
-                x, x_label = CampaignDb._plot_timeline_values(
-                    y.size,
-                    explicit_time_values,
+        axis_descriptors = axes if isinstance(axes, dict) else {}
+        plot_axis = axis_descriptors.get(str(plot_x_axis or ""), {})
+        if ndims == 2 and plot_axis and selection_axis:
+            shape = CampaignDb._metadata_shape(metadata)
+            y = CampaignDb._read_selected_array_row(
+                fr,
+                variable_path,
+                shape,
+                selection_index,
+            )
+            x = CampaignDb._read_plot_axis_values(
+                fr,
+                dict(plot_axis),
+                selection_index,
+            )
+            if x.size != y.size:
+                raise ValueError(
+                    f"Plot axis has {x.size} values but selected data row has "
+                    f"{y.size} values"
                 )
-                return x, y, x_label
+            return x, y, CampaignDb._plot_axis_label(plot_axis)
 
-            if y_raw.ndim >= 2:
-                y = np.asarray(y_raw[-1], dtype=float).reshape(-1)
-            else:
-                y = y_raw.reshape(-1)
-            x = np.arange(y.size, dtype=float)
-            return x, y, "index"
+        kwargs = {"step_selection": [0, steps_count]} if steps_count > 1 else {}
+        y_raw = np.asarray(fr.read(variable_path, **kwargs), dtype=float)
+
+        if ndims == 0:
+            y = y_raw.reshape(-1)
+            x, x_label = CampaignDb._plot_timeline_values(
+                y.size,
+                explicit_time_values,
+            )
+            return x, y, x_label
+
+        if ndims == 1:
+            y = y_raw.reshape(-1)
+            axis_values = CampaignDb._plot_axis_values(plot_axis)
+            if axis_values is not None and axis_values.size == y.size:
+                return (
+                    axis_values,
+                    y,
+                    CampaignDb._plot_axis_label(plot_axis),
+                )
+            x, x_label = CampaignDb._plot_timeline_values(
+                y.size,
+                explicit_time_values,
+            )
+            return x, y, x_label
+
+        if y_raw.ndim >= 2:
+            y = np.asarray(y_raw[-1], dtype=float).reshape(-1)
+        else:
+            y = y_raw.reshape(-1)
+        x = np.arange(y.size, dtype=float)
+        return x, y, "index"
+
+    def _read_plot_series_cached(
+        self,
+        campaign_path: str,
+        variable_path: str,
+        metadata: Any,
+        explicit_time_values: Any = None,
+        axes: Any = None,
+        plot_x_axis: str = "",
+        selection_axis: str = "",
+        selection_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray, str]:
+        path = str(campaign_path or "")
+        with self._campaign_reader_lock:
+            reader = self._campaign_readers.get(path)
+            if reader is None:
+                reader = FileReader(path)
+                self._campaign_readers[path] = reader
+            return self._read_plot_series_from_reader(
+                reader,
+                variable_path,
+                metadata,
+                explicit_time_values,
+                axes,
+                plot_x_axis,
+                selection_axis,
+                selection_index,
+            )
+
+    @staticmethod
+    def _axis_tile_fields(
+        candidate: Dict[str, Any],
+        selection_index: int,
+    ) -> Dict[str, Any]:
+        axes = candidate.get("axes", {})
+        if not isinstance(axes, dict) or not axes:
+            return {}
+        selection_axis_name = str(candidate.get("selection_axis", "") or "")
+        plot_axis_name = str(candidate.get("plot_x_axis", "") or "")
+        selection_axis = axes.get(selection_axis_name, {})
+        plot_axis = axes.get(plot_axis_name, {})
+        if not isinstance(selection_axis, dict):
+            selection_axis = {}
+        if not isinstance(plot_axis, dict):
+            plot_axis = {}
+
+        result: Dict[str, Any] = {
+            "axes": axes,
+            "dimension_axes": list(candidate.get("dimension_axes", []) or []),
+            "plot_x_axis": plot_axis_name,
+            "plot_axis_key": str(plot_axis.get("key", "") or ""),
+            "schema_default_axis": str(
+                candidate.get("schema_default_axis", "") or ""
+            ),
+        }
+        if selection_axis:
+            descriptor = dict(selection_axis)
+            descriptor["default"] = bool(
+                selection_axis_name
+                and selection_axis_name
+                == str(candidate.get("schema_default_axis", "") or "")
+            )
+            values = descriptor.get("values", [])
+            if isinstance(values, list) and values:
+                index = max(0, min(int(selection_index), len(values) - 1))
+                descriptor["index"] = index
+                descriptor["value"] = values[index]
+            result["selection_axis"] = descriptor
+        return result
 
     @staticmethod
     def _clean_plot_series(x_values: Any, y_values: Any) -> Tuple[np.ndarray, np.ndarray]:
@@ -1974,6 +2446,28 @@ class CampaignDb:
                     "source_label": str(item.get("source_label", "") or ""),
                     "source_key": str(item.get("source_key", "") or ""),
                     "color": colors[(len(series)) % len(colors)],
+                    **(
+                        {
+                            "breaks": [
+                                int(value)
+                                for value in item.get("breaks", []) or []
+                                if 0 < int(value) < int(x.size)
+                            ]
+                        }
+                        if item.get("breaks")
+                        else {}
+                    ),
+                    **(
+                        {
+                            "point_label_ranges": [
+                                dict(value)
+                                for value in item.get("point_label_ranges", []) or []
+                                if isinstance(value, dict)
+                            ]
+                        }
+                        if item.get("point_label_ranges")
+                        else {}
+                    ),
                 }
             )
 
@@ -2018,25 +2512,470 @@ class CampaignDb:
             "series": series,
         }
 
+    def _source_collection_plot_candidates(
+        self,
+        variable_id: str,
+        source_filter: Dict[str, Any],
+        extra_filter: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        collection_id = str(source_filter.get("source_collection_id", "") or "")
+        if not collection_id:
+            return []
+        query = and_filter(
+            self._variable_filter(variable_id, "variable"),
+            source_filter,
+        )
+        query = and_filter(query, extra_filter)
+        projection = {
+            "_id": 0,
+            "source_dataset": 1,
+            "source_collection_member_index": 1,
+        }
+        docs = list(self.collection.find(query, projection))
+        docs.sort(
+            key=lambda doc: (
+                int(doc.get("source_collection_member_index", 0) or 0),
+                str(doc.get("source_dataset", "") or ""),
+            )
+        )
+        candidates: List[Dict[str, Any]] = []
+        for doc in docs:
+            source_dataset = str(doc.get("source_dataset", "") or "")
+            if not source_dataset:
+                continue
+            candidate = self.scalar_plot_candidate(
+                variable_id,
+                source_filter={"source_dataset": source_dataset},
+                extra_filter=extra_filter,
+            )
+            if (
+                candidate
+                and str(candidate.get("source_collection_id", "") or "")
+                == collection_id
+            ):
+                candidates.append(candidate)
+        return candidates
+
+    def _source_collection_members_for_candidate(
+        self,
+        candidate: Dict[str, Any],
+        fallback_candidates: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        collection_id = str(candidate.get("source_collection_id", "") or "")
+        selection_axis_name = str(candidate.get("selection_axis", "") or "")
+        selection_axis = dict(
+            (candidate.get("axes", {}) or {}).get(selection_axis_name, {}) or {}
+        )
+        coordinate_variable = str(selection_axis.get("variable", "") or "").strip("/")
+        docs: List[Dict[str, Any]] = []
+        if collection_id and coordinate_variable:
+            docs = list(
+                self.collection.find(
+                    {
+                        "variable_id": coordinate_variable,
+                        "variable_type": "variable",
+                        "source_collection_id": collection_id,
+                    },
+                    {
+                        "_id": 0,
+                        "source_dataset": 1,
+                        "source_collection_member_index": 1,
+                        "source_collection_offset": 1,
+                        "source_collection_length": 1,
+                        "source_collection_partition_value": 1,
+                        "source_collection_partition_label": 1,
+                    },
+                )
+            )
+
+        if not docs:
+            for item in fallback_candidates or [candidate]:
+                source_fields = dict(item.get("source_fields", {}) or {})
+                docs.append(
+                    {
+                        "source_dataset": str(
+                            source_fields.get("source_dataset", "") or ""
+                        ),
+                        "source_collection_member_index": item.get(
+                            "source_collection_member_index", 0
+                        ),
+                        "source_collection_offset": item.get(
+                            "source_collection_offset", 0
+                        ),
+                        "source_collection_length": item.get(
+                            "source_collection_length", 0
+                        ),
+                        "source_collection_partition_value": item.get(
+                            "source_collection_partition_value", None
+                        ),
+                        "source_collection_partition_label": item.get(
+                            "source_collection_partition_label", ""
+                        ),
+                    }
+                )
+
+        members: List[Dict[str, Any]] = []
+        seen = set()
+        for doc in docs:
+            source_dataset = str(doc.get("source_dataset", "") or "")
+            if not source_dataset or source_dataset in seen:
+                continue
+            seen.add(source_dataset)
+            members.append(
+                {
+                    "source_dataset": source_dataset,
+                    "member_index": int(
+                        doc.get("source_collection_member_index", 0) or 0
+                    ),
+                    "offset": int(
+                        doc.get("source_collection_offset", 0) or 0
+                    ),
+                    "length": int(
+                        doc.get("source_collection_length", 0) or 0
+                    ),
+                    "partition_value": doc.get(
+                        "source_collection_partition_value", None
+                    ),
+                    "partition_label": str(
+                        doc.get("source_collection_partition_label", "") or ""
+                    ),
+                }
+            )
+        members.sort(
+            key=lambda item: (
+                int(item.get("member_index", 0) or 0),
+                str(item.get("source_dataset", "") or ""),
+            )
+        )
+        return members
+
+    def _source_collection_axis_values(
+        self,
+        campaign_path: str,
+        candidate: Dict[str, Any],
+        members: List[Dict[str, Any]],
+    ) -> Tuple[List[float], List[str]]:
+        selection_axis_name = str(candidate.get("selection_axis", "") or "")
+        selection_axis = dict(
+            (candidate.get("axes", {}) or {}).get(selection_axis_name, {}) or {}
+        )
+        coordinate_variable = str(selection_axis.get("variable", "") or "").strip("/")
+        collection_id = str(candidate.get("source_collection_id", "") or "")
+        member_names = tuple(
+            str(member.get("source_dataset", "") or "") for member in members
+        )
+        cache_key = (
+            str(campaign_path or ""),
+            collection_id,
+            coordinate_variable,
+            member_names,
+        )
+        with self._campaign_reader_lock:
+            cached = self._source_collection_axis_cache.get(cache_key)
+            if cached is not None:
+                return list(cached[0]), list(cached[1])
+
+            reader = self._campaign_readers.get(str(campaign_path or ""))
+            if reader is None:
+                reader = FileReader(campaign_path)
+                self._campaign_readers[str(campaign_path or "")] = reader
+
+            coordinates: List[float] = []
+            labels: List[str] = []
+            axis_label = str(selection_axis.get("label", "") or "Selection")
+            total_length = sum(
+                int(member.get("length", 0) or 0) for member in members
+            )
+            for member in members:
+                source_dataset = str(member.get("source_dataset", "") or "").strip("/")
+                expected_length = int(member.get("length", 0) or 0)
+                if not source_dataset or not coordinate_variable:
+                    raise ValueError(
+                        f"Source collection {collection_id!r} has no coordinate variable"
+                    )
+                path = f"{source_dataset}/{coordinate_variable}"
+                values = np.asarray(reader.read(path), dtype=float).reshape(-1)
+                if int(values.size) != expected_length:
+                    raise ValueError(
+                        f"Source collection {collection_id!r} member "
+                        f"{source_dataset!r} has {values.size} axis values; "
+                        f"expected {expected_length}"
+                    )
+                partition_label = str(member.get("partition_label", "") or source_dataset)
+                for value in values:
+                    coordinate = float(value)
+                    coordinates.append(coordinate)
+                    value_label = (
+                        str(int(coordinate))
+                        if coordinate.is_integer()
+                        else f"{coordinate:g}"
+                    )
+                    labels.append(
+                        f"{len(coordinates)} / {total_length} · "
+                        f"{partition_label} · {axis_label} {value_label}"
+                    )
+
+            cached_value = (list(coordinates), list(labels))
+            self._source_collection_axis_cache[cache_key] = cached_value
+            return coordinates, labels
+
+    @staticmethod
+    def _source_collection_member_for_index(
+        members: List[Dict[str, Any]],
+        selection_index: int,
+    ) -> Tuple[Dict[str, Any], int]:
+        for member in members:
+            offset = int(member.get("offset", 0) or 0)
+            length = int(member.get("length", 0) or 0)
+            if offset <= selection_index < offset + length:
+                return member, selection_index - offset
+        raise ValueError(
+            f"Collection selection index {selection_index} is outside the available range"
+        )
+
+    def _source_collection_axis_fields(
+        self,
+        campaign_path: str,
+        candidate: Dict[str, Any],
+        members: List[Dict[str, Any]],
+        selection_index: int,
+    ) -> Dict[str, Any]:
+        fields = self._axis_tile_fields(candidate, 0)
+        selection_axis_name = str(candidate.get("selection_axis", "") or "")
+        axes = dict(fields.get("axes", {}) or {})
+        descriptor = dict(axes.get(selection_axis_name, {}) or {})
+        coordinates, labels = self._source_collection_axis_values(
+            campaign_path,
+            candidate,
+            members,
+        )
+        values = [float(index) for index in range(len(coordinates))]
+        index = max(0, min(int(selection_index), max(0, len(values) - 1)))
+        descriptor.update(
+            {
+                "values": values,
+                "labels": labels,
+                "index": index,
+                "value": values[index] if values else 0.0,
+                "coordinate_value": coordinates[index] if coordinates else None,
+                "collection_total_length": len(values),
+            }
+        )
+        axes[selection_axis_name] = descriptor
+        fields["axes"] = axes
+        fields["selection_axis"] = descriptor
+        if str(candidate.get("plot_x_axis", "") or "") == selection_axis_name:
+            fields["plot_axis_key"] = str(descriptor.get("key", "") or "")
+        return fields
+
+    def _get_source_collection_plot_tile(
+        self,
+        campaign_path: str,
+        variable_id: str,
+        source_filter: Dict[str, Any],
+        extra_filter: Optional[Dict[str, Any]],
+        selection_index: int,
+    ) -> Dict[str, Any]:
+        candidates = self._source_collection_plot_candidates(
+            variable_id,
+            source_filter,
+            extra_filter,
+        )
+        if not candidates:
+            return {}
+
+        first = candidates[0]
+        members = self._source_collection_members_for_candidate(
+            first,
+            fallback_candidates=candidates,
+        )
+        if not members:
+            return {}
+        total_length = sum(int(member.get("length", 0) or 0) for member in members)
+        selection_index = max(0, min(int(selection_index), max(0, total_length - 1)))
+        by_dataset = {
+            str(candidate.get("source_fields", {}).get("source_dataset", "") or ""): candidate
+            for candidate in candidates
+        }
+        selected = first
+        series_values: List[Dict[str, Any]] = []
+        x_label = "Collection position"
+        collection_id = str(first.get("source_collection_id", "") or "")
+        collection_label = str(
+            first.get("source_collection_label", "") or collection_id
+        )
+        selection_axis_name = str(first.get("selection_axis", "") or "")
+        plot_axis_name = str(first.get("plot_x_axis", "") or "")
+        ndims = self._metadata_ndims(first.get("metadata", {}))
+
+        if ndims == 2 and selection_axis_name and plot_axis_name != selection_axis_name:
+            member, local_index = self._source_collection_member_for_index(
+                members,
+                selection_index,
+            )
+            source_dataset = str(member.get("source_dataset", "") or "")
+            selected = by_dataset.get(source_dataset, {})
+            if not selected:
+                raise ValueError(
+                    f"{variable_id} is unavailable for "
+                    f"{member.get('partition_label', source_dataset)}"
+                )
+            x, y, x_label = self._read_plot_series_cached(
+                campaign_path,
+                str(selected.get("variable_path", "") or ""),
+                selected.get("metadata", {}),
+                selected.get("time_values", []),
+                selected.get("axes", {}),
+                str(selected.get("plot_x_axis", "") or ""),
+                str(selected.get("selection_axis", "") or ""),
+                local_index,
+            )
+            series_values.append(
+                {
+                    "x": x,
+                    "y": y,
+                    "source_label": str(member.get("partition_label", "") or ""),
+                }
+            )
+        else:
+            selection_axis = dict(
+                (first.get("axes", {}) or {}).get(selection_axis_name, {}) or {}
+            )
+            axis_label = str(selection_axis.get("label", "") or "Selection")
+            x_label = f"{axis_label} sequence"
+            collection_x: List[float] = []
+            collection_y: List[float] = []
+            collection_point_label_ranges: List[Dict[str, Any]] = []
+            collection_breaks: List[int] = []
+            for member in members:
+                source_dataset = str(member.get("source_dataset", "") or "")
+                candidate = by_dataset.get(source_dataset)
+                if not candidate:
+                    continue
+                _local_x, y, _local_label = self._read_plot_series_cached(
+                    campaign_path,
+                    str(candidate.get("variable_path", "") or ""),
+                    candidate.get("metadata", {}),
+                    candidate.get("time_values", []),
+                    candidate.get("axes", {}),
+                    str(candidate.get("plot_x_axis", "") or ""),
+                    str(candidate.get("selection_axis", "") or ""),
+                    0,
+                )
+                values = np.asarray(y, dtype=float).reshape(-1)
+                length = min(int(member.get("length", 0) or 0), int(values.size))
+                offset = int(member.get("offset", 0) or 0)
+                segment_x, segment_y = self._clean_plot_series(
+                    np.arange(offset, offset + length, dtype=float),
+                    values[:length],
+                )
+                if not segment_x.size:
+                    continue
+                if collection_x:
+                    collection_breaks.append(len(collection_x))
+                partition_label = str(
+                    member.get("partition_label", "") or source_dataset
+                )
+                label_start = len(collection_x)
+                collection_x.extend(float(value) for value in segment_x)
+                collection_y.extend(float(value) for value in segment_y)
+                collection_point_label_ranges.append(
+                    {
+                        "start": label_start,
+                        "end": len(collection_x),
+                        "label": partition_label,
+                    }
+                )
+            if collection_x:
+                series_values.append(
+                    {
+                        "x": collection_x,
+                        "y": collection_y,
+                        "source_label": collection_label,
+                        "breaks": collection_breaks,
+                        "point_label_ranges": collection_point_label_ranges,
+                    }
+                )
+
+        variable_name = str(selected.get("variable_name", "") or variable_id)
+        display_name = str(selected.get("display_name", "") or variable_name)
+        plot = self._plot1d_payload(series_values, x_label, display_name)
+        plot_axis = dict(
+            (selected.get("axes", {}) or {}).get(
+                str(selected.get("plot_x_axis", "") or ""),
+                {},
+            )
+            or {}
+        )
+        if plot_axis:
+            plot["x_axis_key"] = str(plot_axis.get("key", "") or "")
+
+        tile = {
+            "variable_name": display_name,
+            "display_title": display_name,
+            "variable_id": variable_id,
+            "visualization_name": GENERATED_SCALAR_PLOT_VIS,
+            "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
+            "visualization_options": [GENERATED_SCALAR_PLOT_VIS],
+            "source_dataset": "",
+            "source_collection_id": collection_id,
+            "source_collection_label": collection_label,
+            "producer": "",
+            "casename": "",
+            "file": "",
+            "src": "",
+            "media_type": "plot1d",
+            "plot": plot,
+            "status": "ok",
+            "note": (
+                f"generated collection plot ({len(members)} "
+                f"partition{'s' if len(members) != 1 else ''})"
+            ),
+            "source_count": 1,
+        }
+        tile.update(
+            self._source_collection_axis_fields(
+                campaign_path,
+                selected,
+                members,
+                selection_index,
+            )
+        )
+        return tile
+
     def get_or_create_generated_scalar_plot_tile(
         self,
         campaign_path: str,
         variable_id: str,
         source_filter: Optional[Dict[str, Any]] = None,
         extra_filter: Optional[Dict[str, Any]] = None,
+        selection_index: int = 0,
     ) -> Dict[str, Any]:
+        if source_filter and source_filter.get("source_collection_id"):
+            return self._get_source_collection_plot_tile(
+                campaign_path,
+                variable_id,
+                dict(source_filter),
+                extra_filter,
+                selection_index,
+            )
         candidate = self.scalar_plot_candidate(variable_id, source_filter=source_filter, extra_filter=extra_filter)
         if not candidate:
             return {}
 
         source_fields = dict(candidate.get("source_fields", {}) or {})
-        x, y, x_label = self._read_plot_series(
+        x, y, x_label = self._read_plot_series_cached(
             campaign_path,
             str(candidate.get("variable_path", "") or ""),
             candidate.get("metadata", {}),
             candidate.get("time_values", []),
+            candidate.get("axes", {}),
+            str(candidate.get("plot_x_axis", "") or ""),
+            str(candidate.get("selection_axis", "") or ""),
+            selection_index,
         )
         variable_name = str(candidate.get("variable_name", "") or variable_id)
+        display_name = str(candidate.get("display_name", "") or variable_name)
         plot = self._plot1d_payload(
             [
                 {
@@ -2046,11 +2985,21 @@ class CampaignDb:
                 }
             ],
             x_label,
-            variable_name,
+            display_name,
         )
+        plot_axis = dict(
+            (candidate.get("axes", {}) or {}).get(
+                str(candidate.get("plot_x_axis", "") or ""),
+                {},
+            )
+            or {}
+        )
+        if plot_axis:
+            plot["x_axis_key"] = str(plot_axis.get("key", "") or "")
 
-        return {
-            "variable_name": variable_name,
+        tile = {
+            "variable_name": display_name,
+            "display_title": display_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
             "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
@@ -2066,6 +3015,8 @@ class CampaignDb:
             "note": "generated scalar plot",
             "source_count": 1,
         }
+        tile.update(self._axis_tile_fields(candidate, selection_index))
+        return tile
 
     def get_generated_scalar_plot_tile_for_sources(
         self,
@@ -2073,9 +3024,28 @@ class CampaignDb:
         variable_id: str,
         source_filters: List[Dict[str, Any]],
         extra_filter: Optional[Dict[str, Any]] = None,
+        selection_index: int = 0,
     ) -> Dict[str, Any]:
         if not source_filters:
             return {}
+        collection_filters = [
+            source_filter
+            for source_filter in source_filters
+            if source_filter.get("source_collection_id")
+        ]
+        if collection_filters:
+            if len(source_filters) == 1:
+                return self._get_source_collection_plot_tile(
+                    campaign_path,
+                    variable_id,
+                    dict(collection_filters[0]),
+                    extra_filter,
+                    selection_index,
+                )
+            raise ValueError(
+                "Source collections have independent selection axes and cannot "
+                "be combined into one synchronized plot"
+            )
 
         candidates: List[Dict[str, Any]] = []
         series: List[Dict[str, Any]] = []
@@ -2104,11 +3074,15 @@ class CampaignDb:
             seen.add(key)
 
             try:
-                x, y, x_label = self._read_plot_series(
+                x, y, x_label = self._read_plot_series_cached(
                     campaign_path,
                     str(candidate.get("variable_path", "") or ""),
                     candidate.get("metadata", {}),
                     candidate.get("time_values", []),
+                    candidate.get("axes", {}),
+                    str(candidate.get("plot_x_axis", "") or ""),
+                    str(candidate.get("selection_axis", "") or ""),
+                    selection_index,
                 )
             except Exception:
                 continue
@@ -2126,19 +3100,59 @@ class CampaignDb:
         if not candidates or not series:
             return {}
 
+        selection_axis_keys = {
+            str(
+                ((candidate.get("axes", {}) or {}).get(
+                    str(candidate.get("selection_axis", "") or ""),
+                    {},
+                ) or {}).get("key", "")
+                or ""
+            )
+            for candidate in candidates
+        }
+        selection_axis_keys.discard("")
+        if len(selection_axis_keys) > 1:
+            raise ValueError(
+                "Cannot combine sources with incompatible selection axes"
+            )
+        plot_axis_keys = {
+            str(
+                ((candidate.get("axes", {}) or {}).get(
+                    str(candidate.get("plot_x_axis", "") or ""),
+                    {},
+                ) or {}).get("key", "")
+                or ""
+            )
+            for candidate in candidates
+        }
+        plot_axis_keys.discard("")
+        if len(plot_axis_keys) > 1:
+            raise ValueError("Cannot combine sources with incompatible plot axes")
+
         x_label_values = {label for label in x_labels if label}
         x_label = x_labels[0] if len(x_label_values) <= 1 else "x"
         first = candidates[0]
         first_source_fields = dict(first.get("source_fields", {}) or {})
         variable_name = str(first.get("variable_name", "") or variable_id)
+        display_name = str(first.get("display_name", "") or variable_name)
         plot = self._plot1d_payload(
             series,
             x_label,
-            variable_name,
+            display_name,
         )
+        first_plot_axis = dict(
+            (first.get("axes", {}) or {}).get(
+                str(first.get("plot_x_axis", "") or ""),
+                {},
+            )
+            or {}
+        )
+        if first_plot_axis:
+            plot["x_axis_key"] = str(first_plot_axis.get("key", "") or "")
 
-        return {
-            "variable_name": variable_name,
+        tile = {
+            "variable_name": display_name,
+            "display_title": display_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
             "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
@@ -2154,6 +3168,8 @@ class CampaignDb:
             "note": f"generated scalar plot ({len(series)} source{'s' if len(series) != 1 else ''})",
             "source_count": len(series),
         }
+        tile.update(self._axis_tile_fields(first, selection_index))
+        return tile
 
     @staticmethod
     def _representation_shape(metadata: Any) -> str:
@@ -2396,6 +3412,7 @@ class CampaignDb:
             "variable_location": 1,
             "metadata": 1,
             "activity_provenance": 1,
+            "visualization_activity_provenance": 1,
             "Min": 1,
             "Max": 1,
             "min": 1,
@@ -2406,6 +3423,12 @@ class CampaignDb:
             "schema_role": 1,
             "schema_mode": 1,
             "schema_num_timesteps": 1,
+            "source_collection_id": 1,
+            "source_collection_label": 1,
+            "source_collection_mode": 1,
+            "source_collection_axis": 1,
+            "source_collection_member_count": 1,
+            "source_collection_total_length": 1,
             "data_model": 1,
         }
 
@@ -2544,6 +3567,8 @@ class CampaignDb:
             "frame_index": 1,
             "time_index": 1,
             "physical_time": 1,
+            "axes": 1,
+            "selection_axis": 1,
             "scalar_field_metadata": 1,
             "visualization_item_uuid": 1,
         }
@@ -2555,6 +3580,17 @@ class CampaignDb:
                 .sort([("frame_index", 1), ("_id", 1)])
             )
             docs = list(cursor)
+
+            selection_axis_values: List[Any] = []
+            if docs:
+                first_axes = docs[0].get("axes", {})
+                selection_axis_name = str(docs[0].get("selection_axis", "") or "")
+                if isinstance(first_axes, dict):
+                    first_axis = first_axes.get(selection_axis_name, {})
+                    if isinstance(first_axis, dict) and isinstance(
+                        first_axis.get("values", []), list
+                    ):
+                        selection_axis_values = list(first_axis.get("values", []))
 
             frames: List[bytes] = []
             frame_indices: List[int] = []
@@ -2644,6 +3680,10 @@ class CampaignDb:
                     except Exception:
                         continue
 
+            if selection_axis_values and len(selection_axis_values) >= len(frames):
+                time_values = selection_axis_values[: len(frames)]
+                has_physical_time = True
+
             return (
                 frames,
                 len(frames) if frames else total,
@@ -2698,8 +3738,14 @@ class CampaignDb:
             "visualization_roles": 1,
             "visualization_sequence_metadata": 1,
             "visualization_item_metadata": 1,
+            "visualization_activity_provenance": 1,
             "min": 1,
             "max": 1,
+            "axes": 1,
+            "dimension_axes": 1,
+            "plot_x_axis": 1,
+            "selection_axis": 1,
+            "schema_default_axis": 1,
         }
 
         try:
@@ -2763,8 +3809,7 @@ class CampaignDb:
                     media_type = "image_sequence"
                     note = f"{len(frames)} of {total} frames" if total > len(frames) else f"{len(frames)} frames"
 
-                tiles.append(
-                    {
+                tile = {
                         "variable_name": str(doc.get("variable_name", "") or variable_id),
                         "variable_id": variable_id,
                         "visualization_name": vis,
@@ -2794,6 +3839,9 @@ class CampaignDb:
                         "visualization_item_metadata": _dict_field(
                             doc.get("visualization_item_metadata", {})
                         ),
+                        "visualization_activity_provenance": _dict_field(
+                            doc.get("visualization_activity_provenance", {})
+                        ),
                         "scalar_field_axes": scalar_field_axis_spec(
                             doc.get("scalar_field_metadata", {})
                         ),
@@ -2808,7 +3856,8 @@ class CampaignDb:
                         "time_mode": time_mode,
                         "frame_sources": frame_sources,
                     }
-                )
+                tile.update(self._axis_tile_fields(doc, 0))
+                tiles.append(tile)
 
                 if len(tiles) >= int(limit):
                     break

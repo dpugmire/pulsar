@@ -536,6 +536,8 @@ def _build_inactive_workspace_grids(ctrl):
                                     ':data-pane-id="pane.id"',
                                     ':data-tab-id="tab.id"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
+                                    ':data-selection-axis="JSON.stringify((tile && tile.selection_axis) || {})"',
+                                    ':data-axis-sync-status="(tile && tile.axis_sync_status) || \'\'"',
                                     ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
                                     ':data-tile-type="(tile && tile.tile_type) || \'plot\'"',
                                     ':data-canvas-x="Number((tile && tile.canvas_x) || 0)"',
@@ -563,6 +565,7 @@ def _build_inactive_workspace_grids(ctrl):
                                                 raw_attrs=[
                                                     ':data-plot="JSON.stringify(tile.plot || {})"',
                                                     ':data-plot-settings="JSON.stringify(tile.plot_settings || {})"',
+                                                    ':data-plot-axis-key="tile.plot_axis_key || \'\'"',
                                                 ],
                                             )
                                         with vuetify.Template(
@@ -783,6 +786,10 @@ class GridWorkspace(TrameComponent):
                                 type="range",
                                 id="seurat-vcr-step-slider",
                                 classes="seurat-vcr-slider",
+                                change=(
+                                    ctrl.set_active_axis_selection,
+                                    "[$event.target.value]",
+                                ),
                                 raw_attrs=[
                                     'min="0"',
                                     'max="20"',
@@ -956,6 +963,8 @@ class GridWorkspace(TrameComponent):
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
+                                    ':data-selection-axis="JSON.stringify((tile && tile.selection_axis) || {})"',
+                                    ':data-axis-sync-status="(tile && tile.axis_sync_status) || \'\'"',
                                     ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
                                     ':data-tile-type="(tile && tile.tile_type) || \'plot\'"',
                                     ':data-canvas-x="Number((tile && tile.canvas_x) || 0)"',
@@ -1144,7 +1153,9 @@ class GridWorkspace(TrameComponent):
                                         )
                                         with html.Button(
                                             v_if=(
-                                                "(tile.time_values && tile.time_values.length)"
+                                                "(tile.selection_axis && tile.selection_axis.values"
+                                                " && tile.selection_axis.values.length)"
+                                                " || (tile.time_values && tile.time_values.length)"
                                                 " || (tile.plot && tile.plot.series && tile.plot.series.length"
                                                 " && (String(tile.plot.x_label || '').toLowerCase() === 'time'"
                                                 " || String(tile.plot.x_label || '').toLowerCase() === 'physical time'))"
@@ -1191,6 +1202,7 @@ class GridWorkspace(TrameComponent):
                                                 raw_attrs=[
                                                     ':data-plot="JSON.stringify(tile.plot || {})"',
                                                     ':data-plot-settings="JSON.stringify(tile.plot_settings || {})"',
+                                                    ':data-plot-axis-key="tile.plot_axis_key || \'\'"',
                                                 ],
                                                 style=(
                                                     "display:block;"

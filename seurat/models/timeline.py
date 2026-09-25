@@ -1,7 +1,7 @@
 """Pure timeline-driver selection rules."""
 
 import math
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 
 def _finite_float(value: Any):
@@ -17,7 +17,57 @@ def _finite_float(value: Any):
     return number if math.isfinite(number) else None
 
 
+def selection_axis_descriptor(cell: Dict[str, Any]) -> Dict[str, Any]:
+    axis = cell.get("selection_axis", {})
+    if isinstance(axis, dict):
+        return dict(axis)
+    axis_name = str(axis or "").strip()
+    axes = cell.get("axes", {})
+    if axis_name and isinstance(axes, dict):
+        descriptor = axes.get(axis_name, {})
+        if isinstance(descriptor, dict):
+            return dict(descriptor)
+    return {}
+
+
+def selection_axis_values(cell: Dict[str, Any]) -> List[float]:
+    descriptor = selection_axis_descriptor(cell)
+    raw_values = descriptor.get("values", [])
+    if not isinstance(raw_values, list):
+        return []
+    values: List[float] = []
+    for raw_value in raw_values:
+        value = _finite_float(raw_value)
+        if value is None:
+            return []
+        values.append(value)
+    return values
+
+
+def selection_axis_key(cell: Dict[str, Any]) -> str:
+    descriptor = selection_axis_descriptor(cell)
+    return str(descriptor.get("key", "") or descriptor.get("id", "") or "").strip()
+
+
+def selection_axis_index_for_value(
+    cell: Dict[str, Any],
+    value: Any,
+) -> Optional[int]:
+    target = _finite_float(value)
+    values = selection_axis_values(cell)
+    if target is None or not values:
+        return None
+    for index, candidate in enumerate(values):
+        tolerance = max(1e-12, 1e-9 * max(1.0, abs(target), abs(candidate)))
+        if abs(candidate - target) <= tolerance:
+            return index
+    return None
+
+
 def cell_has_timeline_samples(cell: Dict[str, Any]) -> bool:
+    if selection_axis_values(cell):
+        return True
+
     time_values = cell.get("time_values", [])
     if isinstance(time_values, list) and any(
         _finite_float(value) is not None for value in time_values

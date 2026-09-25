@@ -171,6 +171,10 @@ python app.py --demo 12
 # Optional: supply a campaign schema when schema.yaml is not embedded
 python app.py campaign.aca --campaign-schema schema.yaml
 
+# Lasernet currently needs its checked-in external schema
+python app.py /path/to/lasernet.aca \
+  --campaign-schema examples/lasernet-schema.yaml
+
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
@@ -354,6 +358,164 @@ This permits one M3D-C1 BP dataset, for example, to use
 `pellet/*`, and no timeline for static `equilibrium/fields/*`. The canonical
 M3D-C1 example is `data/schema_examples/code_m3dc1.yaml` in hpc-campaign.
 
+### Multiple coordinate axes
+
+An axis-aware variable group may declare the coordinate associated with each
+array dimension separately from the coordinate shown on a plot and the
+coordinate controlled by the workspace slider. This is useful for acquisition
+data in which an ADIOS dataset contains one step but its arrays contain many
+shots:
+
+```yaml
+schema_version: 1
+name: lasernet
+
+files:
+  laser_runs:
+    role: static
+    pattern: "data/*.bp5"
+
+source_collections:
+  alignment:
+    label: Alignment
+    file: laser_runs
+    pattern: "data/alignment-*.bp5"
+    combine:
+      mode: concatenate
+      axis: shot
+      order_by:
+        variable: data/meshes/shots/run_number/value
+        reduce: first
+      partition_label:
+        variable: data/meshes/shots/run_number/value
+        template: "Run {value}"
+
+  png:
+    label: PNG
+    file: laser_runs
+    pattern: "data/png-*.bp5"
+    combine:
+      mode: concatenate
+      axis: shot
+      order_by:
+        variable: data/meshes/shots/run_number/value
+        reduce: first
+      partition_label:
+        variable: data/meshes/shots/run_number/value
+        template: "Run {value}"
+
+axes:
+  shot:
+    file: laser_runs
+    variable: data/meshes/shots/shot_number/value
+    kind: shot
+    label: Shot number
+    dimension: 0
+
+  trace_time:
+    file: laser_runs
+    variable_template: "{variable_parent}/time"
+    kind: within_shot_time
+    label: Time within shot
+    unit: s
+    dimension: 1
+    layout: per_selection
+
+timeline:
+  default_axis: shot
+
+variable_groups:
+  shot_scalars:
+    file: laser_runs
+    pattern: data/meshes/scalars/*/value
+    display_name_template: "{variable_parent_name}"
+    role: scalar_trace
+    dimension_axes: [shot]
+    plot_x_axis: shot
+    selection_axis: shot
+
+  waveforms:
+    file: laser_runs
+    pattern: data/meshes/traces/*_Trace/signal
+    display_name_template: "{variable_parent_name}"
+    role: waveform
+    dimension_axes: [shot, trace_time]
+    plot_x_axis: trace_time
+    selection_axis: shot
+```
+
+`dimension_axes` must have one entry per data-array dimension. An axis-level
+`dimension`, when present, must agree with that position. `plot_x_axis` controls
+the plot coordinates; `selection_axis` controls the slider. Selection-axis
+coordinates must be one-dimensional numeric values. Plot coordinates may be a
+shared one-dimensional vector or, with `layout: per_selection`, a rank-two
+array whose matching row is loaded with the selected data row.
+
+#### Axis-selected waveform performance
+
+An axis-selected waveform reads one signal row and, for a per-selection plot
+axis, one coordinate row for the selected shot. Seurat reuses one synchronized
+ACA reader instead of reopening the archive for every selection. The reader is
+closed before campaign re-ingestion and when the application exits.
+
+Range-slider `input` events update the displayed shot value locally while the
+user drags. The server reads and renders the selected waveform on the committed
+`change` event when the drag ends. Step buttons, keyboard changes, and playback
+remain immediate. The first waveform access still pays the archive-open cost;
+in a local Lasernet measurement, subsequent warm row updates improved from
+about 459 ms to about 0.38 ms. These values are illustrative and depend on the
+archive and storage system.
+
+Possible future improvements, if live drag previews or larger traces require
+them, include:
+
+- Apply a 150–250 ms trailing debounce so a paused drag previews its current
+  shot before release.
+- Use time-based throttling with a guaranteed trailing update. Updating every
+  nth event is not preferred because event rates vary by input device and the
+  final position can otherwise be skipped.
+- Coalesce outstanding requests so only the latest selection is rendered when
+  a newer selection arrives.
+- Add a bounded LRU row cache or prefetch neighboring shots when access is
+  predictably sequential.
+- Transfer a selected variable's waveform matrix in a compact binary format and
+  switch rows in the browser. This offers the fastest scrubbing but increases
+  memory use, initial transfer cost, and client-side complexity.
+- Downsample before transfer or rendering when traces become substantially
+  longer than the current 1024-sample Lasernet waveforms.
+
+`variable_template` supports `{variable}`, `{variable_parent}`, and
+`{variable_name}` placeholders. It allows each matched waveform to resolve a
+sibling coordinate such as `time` without listing every trace explicitly.
+
+An optional variable-group `display_name_template` controls the viewer label
+without changing the raw variable name or stable variable identity. It supports
+the same placeholders plus `{variable_parent_name}`, the final component of the
+variable's parent path. For example, a variable named
+`data/meshes/traces/PNG_digitizer_Trace/signal` can be displayed as
+`PNG_digitizer_Trace` with `display_name_template: "{variable_parent_name}"`.
+
+Axis identity is based on the schema name, axis name, and either its file group
+or source collection. Tiles with the same selection-axis identity synchronize
+by coordinate value. Tiles with a different axis, or without the selected
+coordinate value, remain static and are marked as incompatible or unavailable.
+Schemas using the existing `x_axis`, `time_axis`, and `time_values` fields
+retain their previous behavior.
+
+`source_collections` can expose several physical datasets as one logical source
+without copying or rewriting their arrays. Each collection selects a subset of
+one file group, orders its members by the first value of a schema-declared
+variable, and concatenates them along a named axis. The viewer uses a unique
+collection position internally while retaining the partition label and local
+axis coordinate for display. Timeline labels show both the one-based collection
+position and the original identity, for example
+`710 / 768 · Run 14378 · Shot number 15`. This is useful when shot numbers or
+other local coordinates restart in every member file. Collection members remain
+lazy: selecting a waveform row opens the member dataset that owns that position
+and reads only its local row. Concatenated scalar variables render as one
+logical series with gaps at member boundaries; hover details retain the member
+label without adding one legend entry per physical file.
+
 Visualization association notes:
 
 - Unified hpc-campaign image and scalar-field representations are associated
@@ -363,7 +525,7 @@ Visualization association notes:
 - Seurat treats `variable_id` as a source-independent variable identity. Different source datasets for that same variable remain separate through the `source_dataset` field.
 - For visualization API images, `variable_id` comes from `visualization_variable.variable_name`.
 - Legacy image path parsing is still used as a fallback for older campaigns.
-- Longer term, the viewer should use an explicit display/grouping schema that separates the raw source variable name, the viewer display label, the variable grouping id, and the source dataset. Until that exists, the campaign variable name is used directly for both grouping and display.
+- A campaign schema may assign a display-only label through a variable group's `display_name_template`; the raw variable name, variable identity, and source dataset remain unchanged.
 
 Schema notes (`image_variable_map.yaml`):
 
@@ -454,6 +616,33 @@ def render(ctx):
     # Return a Seurat tile dict, for example media_type="plot1d".
     ...
 ```
+
+Every plugin render automatically adds visualization provenance for the plugin
+workflow, action, software agent, normalized options, inputs, output type,
+execution timing, and success status. Seurat shows that record in the
+provenance viewer and, when interaction logging is enabled, writes a
+`plugin.executed` event for successful and failed attempts.
+
+Plugins may optionally provide scientific context without constructing the
+full provenance record themselves:
+
+```python
+PLUGIN_VERSION = "1.0"
+
+def provenance(ctx, tile):
+    return {
+        "intent": "Compare the observed profile with the expected decay.",
+        "hypothesis": "The edge profile follows an exponential decay.",
+        "observations": ["The outer points depart from the fitted curve."],
+        "conclusion": "A single exponential is insufficient.",
+        "outcome": "rejected",
+    }
+```
+
+The hook is optional and does not affect rendering. If it raises an exception,
+Seurat keeps the plot and records the annotation error type. A plugin may still
+return `visualization_activity_provenance` directly when it needs to override
+the automatically generated workflow, action, agent, or input description.
 
 Minimal source/run plugin:
 

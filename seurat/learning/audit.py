@@ -112,6 +112,7 @@ def format_audit(summary: Dict[str, Any]) -> str:
         f"Queries applied: {int(counts.get('query.applied', 0) or 0)}",
         f"Visualizations assigned: {int(counts.get('visualization.assigned', 0) or 0)}",
         f"Manual visualization changes: {int(counts.get('visualization.changed', 0) or 0)}",
+        f"Plugin executions: {int(counts.get('plugin.executed', 0) or 0)}",
         f"Saved workspace snapshots: {int(counts.get('workspace.saved', 0) or 0)}",
         "",
         "Most common visualization changes:",

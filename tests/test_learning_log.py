@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from seurat.controllers.base import ControllerBase
 from seurat.controllers.context import ControllerContext
+from seurat.controllers.visualization import VisualizationControllerMixin
 from seurat.learning.audit import audit_logs, format_audit
 from seurat.learning.context import sanitized_workspace_snapshot
 from seurat.learning.events import validate_event
@@ -165,6 +166,15 @@ class InteractionLogTests(unittest.TestCase):
                 },
             )
             recorder.record(
+                "plugin.executed",
+                source="plugin_runtime",
+                payload={
+                    "plugin_id": "density-heatmap",
+                    "status": "success",
+                    "normalized_options": {"colormap": "plasma"},
+                },
+            )
+            recorder.record(
                 "workspace.saved",
                 source="workspace_menu",
                 payload={
@@ -206,9 +216,88 @@ class InteractionLogTests(unittest.TestCase):
             )
             self.assertIn("heatmap -> contour: 1", report)
             self.assertIn("pressure + temperature: 1", report)
+            self.assertIn("Plugin executions: 1", report)
 
 
 class ControllerLearningContextTests(unittest.TestCase):
+    def test_plugin_execution_records_success_with_reproducible_context(self):
+        events = []
+        controller = SimpleNamespace(
+            _interaction_query_id="query:plugin",
+            record_interaction=lambda event_type, **kwargs: events.append(
+                {
+                    "event_type": event_type,
+                    **kwargs,
+                }
+            ),
+        )
+        tile = {
+            "plugin_execution_provenance": {
+                "plugin_id": "density-heatmap",
+                "plugin_label": "Density heatmap",
+                "plugin_module": "plugins.density",
+                "plugin_version": "2.1",
+                "plugin_scope": "variable",
+                "status": "success",
+                "normalized_options": {"colormap": "plasma"},
+                "input_variables": ["rho"],
+                "source_datasets": ["private/run/output.bp"],
+                "output": {"media_type": "image", "status": "ok"},
+                "scientific_context": {"outcome": "supported"},
+            }
+        }
+
+        result = VisualizationControllerMixin.execute_plugin_render(
+            controller,
+            plugin_id="density-heatmap",
+            plugin_scope_name="variable",
+            variable_id="rho",
+            source_dataset="private/run/output.bp",
+            options={"colormap": "plasma"},
+            renderer=lambda: tile,
+        )
+
+        self.assertIs(result, tile)
+        self.assertEqual(events[0]["event_type"], "plugin.executed")
+        payload = events[0]["payload"]
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["normalized_options"], {"colormap": "plasma"})
+        self.assertEqual(payload["input_variables"], ["rho"])
+        self.assertEqual(payload["query_id"], "query:plugin")
+        self.assertTrue(payload["source_ids"][0].startswith("source:sha256:"))
+        self.assertNotIn("private/run/output.bp", json.dumps(payload))
+
+    def test_plugin_execution_records_failed_attempt(self):
+        events = []
+        controller = SimpleNamespace(
+            _interaction_query_id="",
+            record_interaction=lambda event_type, **kwargs: events.append(
+                {
+                    "event_type": event_type,
+                    **kwargs,
+                }
+            ),
+        )
+
+        def fail_render():
+            raise ValueError("bad input")
+
+        with self.assertRaisesRegex(ValueError, "bad input"):
+            VisualizationControllerMixin.execute_plugin_render(
+                controller,
+                plugin_id="density-heatmap",
+                plugin_scope_name="variable",
+                variable_id="rho",
+                source_dataset="run/output.bp",
+                options={"colormap": "plasma"},
+                renderer=fail_render,
+            )
+
+        payload = events[0]["payload"]
+        self.assertEqual(payload["status"], "failure")
+        self.assertEqual(payload["error_type"], "ValueError")
+        self.assertEqual(payload["plugin_id"], "density-heatmap")
+
     def test_assignment_records_candidates_query_and_workspace_location(self):
         state_values = grid_state.defaults()
         state_values.update(workspace_state.defaults())

@@ -583,8 +583,42 @@
       const lineStyle = normalizeLineStyle(seriesStyle.line_style || "solid");
       const color = String(seriesStyle.color || settings.series_colors[seriesKey] || item.color || "#1565c0");
       const sourceLabel = String(item.source_label || item.source_key || ("Series " + (i + 1))).trim();
+      const pointLabelRanges = (Array.isArray(item.point_label_ranges) ? item.point_label_ranges : [])
+        .map(function(value) {
+          return {
+            start: Number(value && value.start),
+            end: Number(value && value.end),
+            label: String((value && value.label) || "").trim(),
+          };
+        })
+        .filter(function(value) {
+          return Number.isInteger(value.start) && Number.isInteger(value.end)
+            && value.start >= 0 && value.end > value.start && value.label;
+        })
+        .sort(function(a, b) { return a.start - b.start; });
+      const breaks = new Set(
+        (Array.isArray(item.breaks) ? item.breaks : [])
+          .map(function(value) { return Number(value); })
+          .filter(function(value) { return Number.isInteger(value) && value > 0; })
+      );
       const points = [];
+      let pointLabelRangeIndex = 0;
       for (let j = 0; j < n; j += 1) {
+        while (
+          pointLabelRangeIndex + 1 < pointLabelRanges.length
+          && pointLabelRanges[pointLabelRangeIndex + 1].start <= j
+        ) {
+          pointLabelRangeIndex += 1;
+        }
+        const pointLabelRange = pointLabelRanges[pointLabelRangeIndex];
+        const pointLabel = pointLabelRange
+          && pointLabelRange.start <= j
+          && j < pointLabelRange.end
+          ? pointLabelRange.label
+          : "";
+        if (breaks.has(j)) {
+          moveNext = true;
+        }
         const xv = Number(xs[j]);
         const yv = Number(ys[j]);
         if (!Number.isFinite(xv) || !Number.isFinite(yv)) {
@@ -597,7 +631,15 @@
           moveNext = true;
           continue;
         }
-        points.push({ x: xv, y: yv, px, py, sourceLabel, color });
+        points.push({
+          x: xv,
+          y: yv,
+          px,
+          py,
+          sourceLabel,
+          pointLabel,
+          color,
+        });
         d += (moveNext ? " M " : " L ") + px.toFixed(2) + " " + py.toFixed(2);
         moveNext = false;
       }
@@ -726,7 +768,7 @@
     if (Math.abs(end - start) <= 1e-12) end = start + 1;
     return { start, end };
   }
-  function updatePlotCursors(rawTime, progress) {
+  function updatePlotCursors(rawTime, progress, activeAxisKey) {
     const plots = renderAllPlot1d();
     if (!plots.length) return;
     const t = Number.isFinite(Number(rawTime)) ? Number(rawTime) : 0;
@@ -740,6 +782,11 @@
     for (const el of plots) {
       const meta = el.__seuratPlotMeta;
       if (!meta || !meta.cursor) continue;
+      const plotAxisKey = String(el.getAttribute("data-plot-axis-key") || "");
+      if (activeAxisKey && plotAxisKey !== String(activeAxisKey)) {
+        meta.cursor.setAttribute("display", "none");
+        continue;
+      }
       const cursorValue = normalizedProgress === null
         ? t
         : meta.dataXMin + normalizedProgress * (meta.dataXMax - meta.dataXMin);
@@ -853,7 +900,9 @@
     meta.hoverGroup.removeAttribute("display");
 
     const lines = [];
-    if ((meta.hoverSeries || []).length > 1 && point.sourceLabel) {
+    if (point.pointLabel) {
+      lines.push(point.pointLabel);
+    } else if ((meta.hoverSeries || []).length > 1 && point.sourceLabel) {
       lines.push(point.sourceLabel);
     }
     lines.push("x: " + formatPlotHoverValue(point.x));

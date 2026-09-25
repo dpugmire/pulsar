@@ -117,6 +117,9 @@ class SourcesControllerMixin:
                         "source_id": str(raw_item.get("source_id", "") or ""),
                         "_source_key": str(raw_item.get("_source_key", "") or ""),
                         "source_dataset": str(raw_item.get("source_dataset", "") or ""),
+                        "source_collection_id": str(
+                            raw_item.get("source_collection_id", "") or ""
+                        ),
                         "schema_file_group": str(
                             raw_item.get("schema_file_group", "") or ""
                         ),
@@ -139,6 +142,9 @@ class SourcesControllerMixin:
                 "source_id": str(cell.get("source_id", "") or ""),
                 "_source_key": str(cell.get("_source_key", "") or ""),
                 "source_dataset": str(cell.get("source_dataset", "") or ""),
+                "source_collection_id": str(
+                    cell.get("source_collection_id", "") or ""
+                ),
                 "schema_file_group": str(cell.get("schema_file_group", "") or ""),
                 "schema_mode": str(cell.get("schema_mode", "") or ""),
                 "producer": str(cell.get("producer", "") or ""),
@@ -150,6 +156,14 @@ class SourcesControllerMixin:
         return fields_list
 
     def source_filter_from_cell(self, cell: Dict[str, Any]) -> Dict[str, str]:
+        source_collection_id = str(cell.get("source_collection_id", "") or "")
+        if source_collection_id:
+            filt = {"source_collection_id": source_collection_id}
+            variable_id = str(cell.get("variable_id", "") or "")
+            if variable_id:
+                filt["variable_id"] = variable_id
+            return filt
+
         schema_file_group = str(cell.get("schema_file_group", "") or "")
         schema_mode = str(cell.get("schema_mode", "") or "")
         if schema_file_group and schema_mode == "file_per_timestep":
@@ -184,6 +198,9 @@ class SourcesControllerMixin:
             if row:
                 return row
 
+        source_collection_id = str(
+            cell.get("source_collection_id", "") or ""
+        )
         source_dataset = str(cell.get("source_dataset", "") or "")
         schema_file_group = str(cell.get("schema_file_group", "") or "")
         schema_mode = str(cell.get("schema_mode", "") or "")
@@ -191,6 +208,12 @@ class SourcesControllerMixin:
         casename = str(cell.get("casename", "") or "")
         file_name = str(cell.get("file", "") or "")
         for row in self.all_source_rows():
+            if (
+                source_collection_id
+                and str(row.get("source_collection_id", "") or "")
+                == source_collection_id
+            ):
+                return row
             if (
                 schema_file_group
                 and schema_mode
@@ -349,6 +372,24 @@ class SourcesControllerMixin:
     ) -> Dict[str, Any]:
         row = {
             "source_dataset": str(source.get("source_dataset", "") or ""),
+            "source_collection_id": str(
+                source.get("source_collection_id", "") or ""
+            ),
+            "source_collection_label": str(
+                source.get("source_collection_label", "") or ""
+            ),
+            "source_collection_mode": str(
+                source.get("source_collection_mode", "") or ""
+            ),
+            "source_collection_axis": str(
+                source.get("source_collection_axis", "") or ""
+            ),
+            "source_collection_member_count": int(
+                source.get("source_collection_member_count", 0) or 0
+            ),
+            "source_collection_total_length": int(
+                source.get("source_collection_total_length", 0) or 0
+            ),
             "source_label": str(source.get("label", "") or ""),
             "schema_name": str(source.get("schema_name", "") or ""),
             "schema_file_group": str(source.get("schema_file_group", "") or ""),
@@ -447,6 +488,12 @@ class SourcesControllerMixin:
             "variable_name": variable_name,
             "variable_type": str(row.get("variable_type", "") or "variable"),
             "source_dataset": source_dataset,
+            "source_collection_id": str(
+                row.get("source_collection_id", "") or ""
+            ),
+            "source_collection_label": str(
+                row.get("source_collection_label", "") or ""
+            ),
             "source_label": str(row.get("source_label", "") or ""),
             "sourceName": str(row.get("sourceName", "") or ""),
             "schema_name": str(row.get("schema_name", "") or ""),
@@ -618,6 +665,9 @@ class SourcesControllerMixin:
         source_filter = self.active_source_filter_for_variable(variable_id)
         return {
             "source_dataset": str(source_filter.get("source_dataset", "") or ""),
+            "source_collection_id": str(
+                source_filter.get("source_collection_id", "") or ""
+            ),
             "schema_file_group": str(source_filter.get("schema_file_group", "") or ""),
             "schema_mode": str(source_filter.get("schema_mode", "") or ""),
             "producer": str(source_filter.get("producer", "") or ""),

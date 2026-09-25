@@ -34,6 +34,8 @@ _CELL_FIELDS = (
     "_source_keys",
     "_source_fields_list",
     "source_dataset",
+    "source_collection_id",
+    "source_collection_label",
     "schema_name",
     "schema_file_group",
     "schema_role",
