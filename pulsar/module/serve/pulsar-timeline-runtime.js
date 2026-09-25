@@ -131,11 +131,6 @@
     return mode === "physical_time" && parseImageSequenceTimeValues(el).length > 0;
   }
 
-  function imageSequencesHavePhysicalTime(sequences) {
-    const values = sequences || [];
-    return values.length > 0 && values.every(imageSequenceHasPhysicalTime);
-  }
-
   function isVisibleGridCell(cell) {
     if (!cell) return false;
     try {
@@ -301,8 +296,6 @@
   function getActiveSelectionAxis(sequences, plots) {
     sequences = sequences || getGridImageSequencesSafe();
     plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
-    const hasIndexOnlySequence = sequences.length
-      && !imageSequencesHavePhysicalTime(sequences);
 
     const selected = selectedTimelineDriverCell();
     if (selected) {
@@ -311,7 +304,6 @@
         if (selectedTimeline.axis && selectedTimeline.axis.explicit) {
           return selectedTimeline.axis;
         }
-        if (hasIndexOnlySequence) return null;
         return selectedTimeline.axis;
       }
     }
@@ -323,7 +315,6 @@
         if (activeTimeline.axis && activeTimeline.axis.explicit) {
           return activeTimeline.axis;
         }
-        if (hasIndexOnlySequence) return null;
         return activeTimeline.axis;
       }
     }
@@ -331,11 +322,8 @@
     const auto = autoTimelineDriver();
     if (auto.values.length) {
       if (auto.axis && auto.axis.explicit) return auto.axis;
-      if (hasIndexOnlySequence) return null;
       return auto.axis;
     }
-
-    if (hasIndexOnlySequence) return null;
 
     const values = [];
     for (const el of (sequences || [])) {
@@ -424,12 +412,18 @@
     return values[index];
   }
 
-  function imageSequenceFrameForTime(el, rawTime) {
+  function imageSequenceFrameForTime(el, rawTime, activeTimeline) {
     const sources = parseImageSequenceSources(el);
     if (!sources.length) return 0;
 
     const times = imageSequenceHasPhysicalTime(el) ? parseImageSequenceTimeValues(el) : [];
     if (!times.length) {
+      if (activeTimeline && activeTimeline.length) {
+        return Math.max(
+          0,
+          Math.min(timelineIndexNearest(rawTime, activeTimeline), sources.length - 1)
+        );
+      }
       return Math.max(0, Math.min(Math.round(Number(rawTime) || 0), sources.length - 1));
     }
 
@@ -519,11 +513,14 @@
   function setImageSequencesForTime(rawTime, sequences) {
     const t = Number(rawTime);
     const activeAxis = getActiveSelectionAxis(sequences, getGridPlots());
+    const activeTimeline = activeAxis && Array.isArray(activeAxis.values)
+      ? activeAxis.values
+      : [];
     for (const el of (sequences || [])) {
       if (!elementMatchesActiveAxis(el, activeAxis)) continue;
       const sources = parseImageSequenceSources(el);
       if (!sources.length) continue;
-      const idx = imageSequenceFrameForTime(el, t);
+      const idx = imageSequenceFrameForTime(el, t, activeTimeline);
       if (el.getAttribute("src") !== sources[idx]) {
         el.setAttribute("src", sources[idx]);
       }

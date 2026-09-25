@@ -2026,6 +2026,81 @@ def _build_schema_time_context(
     return context
 
 
+def _propagate_provenance_time_context(
+    schema_context: Dict[str, Any],
+    activity_provenance_index: Dict[tuple[str, str], Dict[str, Any]],
+) -> None:
+    """Inherit an unambiguous source timeline across provenance derivations."""
+
+    if not schema_context or not activity_provenance_index:
+        return
+
+    dataset_metadata = schema_context.setdefault("dataset_metadata", {})
+    pending = dict(activity_provenance_index)
+    while pending:
+        inherited_any = False
+        candidates: Dict[str, List[tuple[str, Dict[str, Any]]]] = {}
+        unresolved: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+        for key, provenance in pending.items():
+            output_dataset = str(key[0] or "").strip("/")
+            if not output_dataset:
+                continue
+            output_metadata = dataset_metadata.get(output_dataset, {})
+            if isinstance(output_metadata, dict) and output_metadata.get("time_values"):
+                continue
+
+            source_candidates: List[tuple[str, Dict[str, Any]]] = []
+            for source in provenance.get("inputs", []) or []:
+                source_dataset = str(source.get("source_dataset", "") or "").strip("/")
+                source_metadata = dataset_metadata.get(source_dataset, {})
+                if not isinstance(source_metadata, dict) or not source_metadata.get("time_values"):
+                    continue
+                source_candidates.append((source_dataset, source_metadata))
+
+            if source_candidates:
+                candidates.setdefault(output_dataset, []).extend(source_candidates)
+            else:
+                unresolved[key] = provenance
+
+        for output_dataset, sources in candidates.items():
+            timelines = {
+                tuple(source_metadata.get("time_values", []))
+                for _, source_metadata in sources
+            }
+            if len(timelines) != 1:
+                continue
+
+            source_datasets = sorted({source_dataset for source_dataset, _ in sources})
+            source_metadata = sources[0][1]
+            time_values = list(next(iter(timelines)))
+            metadata = dict(dataset_metadata.get(output_dataset, {}) or {})
+            metadata.update(
+                {
+                    "schema_name": str(
+                        metadata.get("schema_name", "")
+                        or source_metadata.get("schema_name", "")
+                        or schema_context.get("schema_name", "")
+                    ),
+                    "schema_role": "time_series",
+                    "schema_mode": "append",
+                    "schema_num_timesteps": len(time_values),
+                    "schema_frame_index": 0,
+                    "time_index": 0,
+                    "time_values": time_values,
+                    "time_source": "provenance",
+                    "time_source_datasets": source_datasets,
+                    "time_source_detail": str(source_metadata.get("time_source", "") or ""),
+                }
+            )
+            dataset_metadata[output_dataset] = metadata
+            inherited_any = True
+
+        if not inherited_any:
+            break
+        pending = unresolved
+
+
 def _schema_metadata_for_frame(
     schema_context: Dict[str, Any],
     metadata: Dict[str, Any],
@@ -3713,6 +3788,10 @@ def parse_campaign(
         vars_dict = fr.available_variables()
         attrs_dict = fr.available_attributes()
         schema_context = _build_schema_time_context(campaign_schema, fr, vars_dict)
+        _propagate_provenance_time_context(
+            schema_context,
+            activity_provenance_index,
+        )
 
         for varname, varinfo in vars_dict.items():
             if any(

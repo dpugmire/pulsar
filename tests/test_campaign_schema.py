@@ -20,6 +20,7 @@ from ingest_campaign import (
     _build_schema_time_context,
     _interpret_campaign_schema,
     _load_campaign_schema,
+    _propagate_provenance_time_context,
     _read_campaign_schema_text,
     _schema_metadata_for_file,
     _schema_metadata_for_variable,
@@ -226,6 +227,53 @@ class CampaignSchemaTests(unittest.TestCase):
             {path for path, _ in reader.reads},
             set(values),
         )
+
+    def test_derived_dataset_inherits_time_from_provenance_input(self):
+        schema = {
+            "schema_version": 1,
+            "time": {"variable": "time"},
+            "files": {
+                "output": {
+                    "role": "time_series",
+                    "mode": "append",
+                    "path": self.simulation_a,
+                },
+            },
+        }
+        values = {f"{self.simulation_a}/time": [0.0, 0.25, 1.0]}
+        layout = _interpret_campaign_schema(schema, self.dataset_names, {})
+        context = _build_schema_time_context(
+            layout,
+            FakeReader(values),
+            {f"{self.simulation_a}/time": {"AvailableStepsCount": "3"}},
+        )
+
+        _propagate_provenance_time_context(
+            context,
+            {
+                (self.analysis_a, "grad_rho_abs"): {
+                    "inputs": [
+                        {
+                            "name": "rho",
+                            "source_dataset": self.simulation_a,
+                        }
+                    ]
+                }
+            },
+        )
+
+        metadata = _schema_metadata_for_variable(
+            context,
+            self.analysis_a,
+            "grad_rho_abs",
+            frame_index=1,
+            include_time_values=False,
+        )
+        self.assertEqual(metadata["physical_time"], 0.25)
+        self.assertEqual(metadata["time_index"], 1)
+        self.assertEqual(metadata["time_source"], "provenance")
+        self.assertEqual(metadata["time_source_datasets"], [self.simulation_a])
+        self.assertNotIn("time_values", metadata)
 
     def test_exact_append_path_remains_supported(self):
         schema = {
