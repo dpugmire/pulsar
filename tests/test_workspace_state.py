@@ -3,7 +3,7 @@ import math
 import unittest
 from types import SimpleNamespace
 
-from seurat.models.workspace_state import (
+from pulsar.models.workspace_state import (
     WORKSPACE_FORMAT,
     WORKSPACE_VERSION,
     WorkspaceStateError,
@@ -14,7 +14,7 @@ from seurat.models.workspace_state import (
     workspace_document,
     workspace_json,
 )
-from seurat.state import init_state
+from pulsar.state import init_state
 
 
 class WorkspaceStateTests(unittest.TestCase):
@@ -319,7 +319,7 @@ class WorkspaceStateTests(unittest.TestCase):
     def test_rejects_non_json_numbers_and_oversized_grid(self):
         with self.assertRaisesRegex(WorkspaceStateError, "Invalid JSON number"):
             parse_workspace_document(
-                '{"format":"seurat-workspace","version":1,'
+                '{"format":"pulsar-workspace","version":1,'
                 '"campaign":{"name":"example.aca"},'
                 '"state":{"catalog":{},"grid":{"cells":[NaN]},'
                 '"visualization":{}}}'

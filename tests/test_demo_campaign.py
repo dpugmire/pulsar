@@ -13,7 +13,7 @@ from ingest_campaign import (
     parse_campaign,
 )
 from plugin_runtime import render_plugin_tile
-from seurat.demo_campaign import (
+from pulsar.demo_campaign import (
     DEMO_SOURCES,
     DEMO_VARIABLES_1D,
     DEMO_VARIABLES_2D,

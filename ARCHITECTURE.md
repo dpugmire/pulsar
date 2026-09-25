@@ -1,4 +1,4 @@
-# Seurat Architecture
+# Pulsar Architecture
 
 This diagram shows the current local application path and the planned Phobos
 capability path. Solid arrows represent implemented relationships. Dashed
@@ -13,8 +13,8 @@ flowchart LR
   QueryAssistant["Optional Viewer Assistant<br/>Natural language to schema-v1 action proposal<br/>Capped catalog context · no direct viewer invocation<br/>Explicit review and Apply"]
   ViewerActions["Viewer Action contracts<br/>Allowlisted, validated operations<br/>catalog.query · visualization.add<br/>Extensible to additional viewer capabilities"]
   Models["Pure domain logic<br/>Deterministic grid, source, timeline, plot, and plugin rules<br/>No Trame, database, ACA, or Phobos dependencies<br/>Directly unit-testable"]
-  Facade["SeuratApplication facade<br/>Backend-neutral operations used by controllers<br/>Hides local documents, ACA paths, Django objects,<br/>and REST response formats"]
-  Capabilities["Backend capabilities<br/>Catalog: navigation and availability · Sources: descriptors and statistics<br/>Query: paused for redesign · Media and jobs: planned<br/>Contracts return normalized Seurat data-transfer objects"]
+  Facade["PulsarApplication facade<br/>Backend-neutral operations used by controllers<br/>Hides local documents, ACA paths, Django objects,<br/>and REST response formats"]
+  Capabilities["Backend capabilities<br/>Catalog: navigation and availability · Sources: descriptors and statistics<br/>Query: paused for redesign · Media and jobs: planned<br/>Contracts return normalized Pulsar data-transfer objects"]
 
   subgraph LOCAL_BRANCH["Current local implementation"]
     direction TB
@@ -65,9 +65,9 @@ flowchart LR
 - Freeform tabs store compact tiles with stable IDs and `{x, y, w, h}` in
   24-column canvas units. The collision, auto-fit, insertion, and push rules
   are pure model logic mirrored by the browser interaction runtime.
-- `SeuratApplication` is the facade through which controllers consume backend
+- `PulsarApplication` is the facade through which controllers consume backend
   capabilities.
-- Backend contracts return normalized Seurat DTOs. Local and Phobos adapters
+- Backend contracts return normalized Pulsar DTOs. Local and Phobos adapters
   implement the same application meaning using different storage and transport.
 - The local adapter may use ACA, ADIOS2, SQLite, and ffmpeg internally. Those
   details must not become requirements for the Phobos protocol.
@@ -80,7 +80,7 @@ flowchart LR
   schema-v1 Viewer Action envelope. The current contract accepts one validated
   `catalog.query` or `visualization.add` action.
 - Source ranking is deterministic application logic. The model identifies the
-  variable, statistic, and ordering; Seurat reads local per-source metadata and
+  variable, statistic, and ordering; Pulsar reads local per-source metadata and
   resolves the winning value. Numeric source statistics are not sent to the
   provider.
 - The resolved action must pass the existing parser and backend preview before
@@ -91,7 +91,7 @@ flowchart LR
   Sources dialog for its selected variable. Both produce a validated
   `catalog.query` proposal and retain explicit review and Apply steps.
 - The visualization target accepts one exact campaign variable and the active
-  grid cell. Seurat, not the model, captures the cell, applies the active query
+  grid cell. Pulsar, not the model, captures the cell, applies the active query
   and source selection, chooses the existing default visualization, and uses
   the current scalar-generation policy. Preview performs availability checks
   without mutating the grid; assignment occurs only after **Add to Grid**.

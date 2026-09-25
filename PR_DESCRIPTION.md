@@ -4,7 +4,7 @@ Add structured LLM query interface
 
 ## Summary
 
-This PR adds the first phase of an LLM interface to Seurat.
+This PR adds the first phase of an LLM interface to Pulsar.
 
 The Query Assistant translates natural-language requests into a versioned,
 validated Viewer Action. The application—not the model—resolves campaign
@@ -160,7 +160,7 @@ The model identifies:
 - The direction: descending.
 - The limit: one, including ties.
 
-Seurat then reads the actual per-source statistics locally and determines the
+Pulsar then reads the actual per-source statistics locally and determines the
 winning source or tied sources. Numeric ranking metadata is not sent to the
 LLM, and the model is not asked to guess the winning value.
 
@@ -183,7 +183,7 @@ Query representation used by the local backend.
 
 The generated expression is:
 
-- Produced by Seurat, not by the model.
+- Produced by Pulsar, not by the model.
 - Displayed read-only in the review dialog.
 - Revalidated by the existing parser.
 - Previewed against the backend before Apply.
@@ -203,18 +203,18 @@ Python's standard library, so this PR adds no Python dependencies.
 Example configuration for Ollama and `gpt-oss:20b`:
 
 ```bash
-export SEURAT_LLM_MODEL="gpt-oss:20b"
-export SEURAT_LLM_BASE_URL="http://localhost:11434/v1"
-export SEURAT_LLM_API_KEY="ollama"
-export SEURAT_LLM_TIMEOUT_SECONDS="30"
+export PULSAR_LLM_MODEL="gpt-oss:20b"
+export PULSAR_LLM_BASE_URL="http://localhost:11434/v1"
+export PULSAR_LLM_API_KEY="ollama"
+export PULSAR_LLM_TIMEOUT_SECONDS="30"
 ```
 
-`SEURAT_LLM_MODEL` enables the assistant. The base URL, API key, and timeout
+`PULSAR_LLM_MODEL` enables the assistant. The base URL, API key, and timeout
 have Ollama-compatible defaults.
 
 The provider request uses a JSON Schema response format. If an
 OpenAI-compatible provider explicitly rejects `response_format` with HTTP 400
-or 422, Seurat retries once without it. The returned content must still pass
+or 422, Pulsar retries once without it. The returned content must still pass
 strict JSON and Viewer Action validation; malformed output is never silently
 repaired.
 

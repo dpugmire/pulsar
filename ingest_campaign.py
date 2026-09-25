@@ -146,7 +146,7 @@ def _read_campaign_schema_text(campaign_path: str) -> Optional[str]:
 
         if int(row["keyid"] or 0) > 0:
             raise ValueError(
-                f"{row['dataset_name']} is encrypted; Seurat cannot read it without a keyfile"
+                f"{row['dataset_name']} is encrypted; Pulsar cannot read it without a keyfile"
             )
 
         data = bytes(row["data"])

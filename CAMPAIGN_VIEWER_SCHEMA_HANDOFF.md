@@ -5,7 +5,7 @@ Status: 2026-08-07
 ## Purpose of this document
 
 This document summarizes the current discussion and implementation state around
-semantic metadata for HPC campaign viewers, especially Seurat. It is intended
+semantic metadata for HPC campaign viewers, especially Pulsar. It is intended
 to be copied into a new chat as the starting context for a design discussion.
 
 The goal is to decide what additional information belongs in a campaign so that
@@ -37,7 +37,7 @@ as:
   that interpretation?
 - Is it a scalar trace, spatial field, distribution, moment, diagnostic, mesh
   resource, or some other code-defined kind of output?
-- Which analysis or Seurat plugins can operate on it or on its containing run?
+- Which analysis or Pulsar plugins can operate on it or on its containing run?
 - Which time coordinate and run/source does it belong to?
 
 A particularly important query is transitive visualization discovery. A search
@@ -60,7 +60,7 @@ A general variable derivation graph is still missing.
 | Direct relationship between a rendered artifact and its source variables | `hpc_campaign` visualization API | Stored in ACA `visualization_*` tables. |
 | Alternate representation and its source variable(s) | `hpc_campaign` representation API | Present on the current scalar-data-representations branch; not a complete general derivation DAG. |
 | Code/run classification, code-specific logical organization, derivation dependencies, and bindings to optional Fides documents | Proposed campaign/code semantic schema plus ACA associations | This is the main design gap. |
-| Browsing, search, rendering, plugin execution, UI state and caches | Seurat | Seurat should consume semantics, not become their only authoritative store. |
+| Browsing, search, rendering, plugin execution, UI state and caches | Pulsar | Pulsar should consume semantics, not become their only authoritative store. |
 
 This boundary is deliberately not absolute. For example, a schema may repeat a
 small data-source or time association when that makes a campaign self-contained
@@ -188,7 +188,7 @@ Fides does not provide:
 - code-specific product categories such as XGC moments or diagnostics;
 - general primary/derived dependency relationships;
 - associations between arbitrary rendered images and their inputs;
-- Seurat plugin discovery or viewer presentation policy.
+- Pulsar plugin discovery or viewer presentation policy.
 
 Fides is optional. A campaign can still contain non-spatial diagnostics,
 tables, scalar traces, images, or code outputs that have no Fides model.
@@ -237,16 +237,16 @@ The Python API is `Manager.set_schema(path)`, and
 `Manager.validate_schema()` validates the generic file layout against the
 campaign inventory without opening the original ADIOS data.
 
-Seurat reads `__campaign_schema.yaml` and accepts the earlier `schema.yaml`
+Pulsar reads `__campaign_schema.yaml` and accepts the earlier `schema.yaml`
 name as a fallback. It can also accept an external override with:
 
 ```bash
 python app.py campaign.aca --campaign-schema /path/to/schema.yaml
 ```
 
-### Richer Seurat interpretation
+### Richer Pulsar interpretation
 
-Seurat currently interprets optional schema sections beyond the generic
+Pulsar currently interprets optional schema sections beyond the generic
 `files` and `time` core:
 
 - `axes`;
@@ -257,7 +257,7 @@ Seurat currently interprets optional schema sections beyond the generic
 
 These were demonstrated with M3D-C1 so that fields, equilibrium fields,
 scalars, and pellet traces can have different axes and data models inside one
-BP dataset. Seurat validates referenced ADIOS variables and attaches the
+BP dataset. Pulsar validates referenced ADIOS variables and attaches the
 resolved grouping, role, data model, resource names, axes, static state, and
 visualization template references to ingested variable records.
 
@@ -283,12 +283,12 @@ of visualization data-model semantics.
 - The current richer model risks growing into a parallel visualization schema
   instead of referencing Fides.
 
-## What Seurat currently provides
+## What Pulsar currently provides
 
-The current Seurat repository is `/Users/dpn/proj/seurat`, on branch
+The current Pulsar repository is `/Users/dpn/proj/pulsar`, on branch
 `variable-catalog-search` at commit `8f748c4` when this handoff was written.
 
-Seurat currently provides:
+Pulsar currently provides:
 
 - ingestion of ACA/ADIOS metadata into a local SQLite sidecar;
 - variable browsing, grouping, search and source selection;
@@ -306,17 +306,17 @@ Seurat currently provides:
   divertor lambda-q time series, divertor load maps, and divertor target-total
   time series.
 
-Seurat normalizes direct visualization associations so each artifact can retain
+Pulsar normalizes direct visualization associations so each artifact can retain
 the physical variable name, logical display name, source dataset, visualization
 roles, sequence name, visualization kind, item order, and item metadata.
 
-Seurat does **not** currently have a Fides hook. It cannot generally consume a
+Pulsar does **not** currently have a Fides hook. It cannot generally consume a
 campaign-contained Fides document to construct and render arbitrary fields.
 It also does not have a general derivation graph, transitive dependency search,
 or robust multiple-code-schema assignment.
 
-Seurat-side caches, display labels, saved workspaces, panel state, chosen color
-maps, and other viewer preferences should remain Seurat concerns. Scientific
+Pulsar-side caches, display labels, saved workspaces, panel state, chosen color
+maps, and other viewer preferences should remain Pulsar concerns. Scientific
 identity and dependency facts that should be shared by other consumers should
 live in the campaign or referenced semantic documents.
 
@@ -490,7 +490,7 @@ Recommended scope:
    requiring a universal `product_family` enum.
 5. Allow a variable or group to refer to a Fides model/field, while leaving all
    mesh construction semantics in Fides.
-6. Teach Seurat ingestion to construct the dependency graph and expose both
+6. Teach Pulsar ingestion to construct the dependency graph and expose both
    direct and transitive artifact queries.
 7. Validate the design with examples from:
    - XGC: `dpot`, `eden`, distribution moments, and diagnostics;
@@ -511,7 +511,7 @@ possible without executing a specialized library. Examples include:
 - retaining a lightweight static/time-series or time-source declaration for
   catalog browsing even though Fides also has step information;
 - recording a direct Fides field name in the code schema;
-- caching normalized semantic facts in Seurat's sidecar while retaining the
+- caching normalized semantic facts in Pulsar's sidecar while retaining the
   campaign resources as the authority.
 
 Overlap is probably not justified for:
@@ -581,7 +581,7 @@ agreed upon.
 7. How should `hpc_campaign`'s generic alternate representations participate in
    the same dependency graph as derived ADIOS variables?
 8. Which component performs graph traversal and validation: `hpc_campaign`, a
-   reusable campaign-query library, Seurat ingestion, or a combination?
+   reusable campaign-query library, Pulsar ingestion, or a combination?
 9. How should the older singleton `__campaign_schema.yaml` be migrated or
    supported as a compatibility resource?
 10. Which two or three concrete campaign examples will serve as acceptance
@@ -590,7 +590,7 @@ agreed upon.
 ## Suggested next-chat prompt
 
 Use this document as context. First verify the current relevant branches and
-implementations in `hpc_campaign`, Fides, and Seurat. Then propose a focused
+implementations in `hpc_campaign`, Fides, and Pulsar. Then propose a focused
 design plan for the smallest campaign metadata extension that supports:
 
 - multiple code schemas and optional Fides documents;
@@ -601,6 +601,6 @@ design plan for the smallest campaign metadata extension that supports:
 - direct plus transitive variable-to-visualization queries.
 
 Keep ADIOS storage metadata, Fides visualization semantics, campaign lifecycle
-metadata, and Seurat presentation concerns separated where practical. Identify
+metadata, and Pulsar presentation concerns separated where practical. Identify
 every proposed overlap and explain what concrete simplification it provides.
 Do not implement the design until the plan has been reviewed and approved.

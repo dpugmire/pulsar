@@ -1,6 +1,6 @@
 import unittest
 
-from seurat.models.grid import (
+from pulsar.models.grid import (
     assign_cell,
     empty_grid_cell,
     normalize_grid_cells,
@@ -8,19 +8,19 @@ from seurat.models.grid import (
     range_selection,
     source_dialog_targets,
 )
-from seurat.models.grid_layout import (
+from pulsar.models.grid_layout import (
     grid_fit_template_from_weights,
     grid_template_from_sizes,
     normalize_size_list,
     normalize_weight_list,
 )
-from seurat.models.plot import (
+from pulsar.models.plot import (
     clean_plot_color,
     normalize_plot_settings,
     valid_extrema,
 )
-from seurat.models.plugin_options import plugin_option_rows, plugin_options_from_rows
-from seurat.models.source_selection import (
+from pulsar.models.plugin_options import plugin_option_rows, plugin_options_from_rows
+from pulsar.models.source_selection import (
     normalize_source_keys,
     select_single_source,
     select_visible_sources,
@@ -29,7 +29,7 @@ from seurat.models.source_selection import (
     source_key_for_fields,
     toggle_source_selection,
 )
-from seurat.models.timeline import (
+from pulsar.models.timeline import (
     cell_has_timeline_samples,
     clear_timeline_driver,
     selection_axis_descriptor,

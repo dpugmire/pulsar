@@ -3,7 +3,7 @@ from copy import deepcopy
 import math
 from types import SimpleNamespace
 
-from seurat.history import WorkspaceMutationCoordinator
+from pulsar.history import WorkspaceMutationCoordinator
 
 
 class WorkspaceMutationCoordinatorTests(unittest.TestCase):

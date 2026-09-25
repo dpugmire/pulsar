@@ -2,10 +2,10 @@ import copy
 import unittest
 from types import SimpleNamespace
 
-from application import SeuratApplication
-from seurat.backends import BackendStatus, LocalCampaignBackend
-from seurat.controllers import attach_controllers
-from seurat.state import init_state
+from application import PulsarApplication
+from pulsar.backends import BackendStatus, LocalCampaignBackend
+from pulsar.controllers import attach_controllers
+from pulsar.state import init_state
 
 VARIABLE_NAVIGATION = [
     {
@@ -488,7 +488,7 @@ class BackendInjectionTests(unittest.TestCase):
             source=source,
             source_restriction={"query": {"producer": "run"}, "count": 2},
         )
-        application = SeuratApplication(backend=backend)
+        application = PulsarApplication(backend=backend)
         request = {"view": "variables", "query": {}, "only_visualized": False}
 
         self.assertIs(application.get_navigation(request), VARIABLE_NAVIGATION)

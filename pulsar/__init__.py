@@ -1,0 +1,1 @@
+"""Pulsar Trame application package."""

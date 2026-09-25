@@ -1,7 +1,7 @@
 import unittest
 
 from query_parser import python_query_to_filters
-from seurat.viewer_actions import (
+from pulsar.viewer_actions import (
     CatalogCondition,
     CatalogQueryAction,
     SourceRank,

@@ -1,4 +1,4 @@
-# Seurat Migration Summary
+# Pulsar Migration Summary
 
 This repo was created by splitting the viewer code out of the original
 `campaign_viewer` repository.
@@ -8,13 +8,13 @@ This repo was created by splitting the viewer code out of the original
 New local repo:
 
 ```text
-/Users/dpn/proj/seurat
+/Users/dpn/proj/pulsar
 ```
 
 GitHub repo:
 
 ```text
-https://github.com/dpugmire/seurat
+https://github.com/dpugmire/pulsar
 ```
 
 Original repo:
@@ -29,7 +29,7 @@ The Trame rearchitecture work is on:
 
 ```text
 branch: rearchitect-trame-phase5a
-remote: origin -> https://github.com/dpugmire/seurat.git
+remote: origin -> https://github.com/dpugmire/pulsar.git
 ```
 
 Phase 1 was merged into `main` by GitHub PR #4 at merge commit
@@ -46,16 +46,16 @@ state, grid selection and assignment, layout controls, context menus, rendered
 plot output, and step-index versus physical-time timeline behavior.
 
 Phase 3B began the client-side lifecycle migration. A registered
-`seurat-grid-runtime` Vue component now owns grid timeline/VCR listeners and
+`pulsar-grid-runtime` Vue component now owns grid timeline/VCR listeners and
 the grid-media observer for the mounted workspace, including cleanup on
 unmount.
 
-Phase 3C.1 adds an app-scoped `seurat-interaction-runtime` Vue component for
+Phase 3C.1 adds an app-scoped `pulsar-interaction-runtime` Vue component for
 variable/grid drag-and-drop and context menus. The runtime owns listener
 registration and cleanup across the catalog and grid. It was merged by GitHub
 PR #7 at merge commit `fee56b6cd95dec9b6021ee54c03f49f191fe76e3`.
 
-Phase 3C.2 adds an app-scoped `seurat-resize-runtime` Vue component for
+Phase 3C.2 adds an app-scoped `pulsar-resize-runtime` Vue component for
 variable-panel and grid-track resizing. It preserves the existing grid sizing
 controller contracts while replacing document-global resize listeners with
 mounted ownership, pointer capture, idempotent registration, and complete
@@ -77,7 +77,7 @@ semantics. They were merged by GitHub PR #9 at merge commit
 Phase 4A begins the behavior-preserving client-runtime decomposition on
 `rearchitect-trame-phase4a`. Media pan/zoom, pointer interaction state, and
 reset-view observation are extracted from the remaining monolithic client
-script into `seurat-media-runtime.js`. The mounted grid runtime coordinates the
+script into `pulsar-media-runtime.js`. The mounted grid runtime coordinates the
 media lifecycle through a narrow `mount`, `unmount`, and
 `resetViewForCellIndex` interface while continuing to own combined media/plot
 reset semantics. It was merged by GitHub PR #10 at merge commit
@@ -87,7 +87,7 @@ Phase 4B continues the behavior-preserving decomposition on
 `rearchitect-trame-phase4b`. Plot-data parsing, settings normalization, SVG
 rendering, cursor drawing, hover/pan/zoom interaction, resize/mutation
 observation, render scheduling, and transient plot state are extracted into
-`seurat-plot-runtime.js`. Cross-media timeline policy remains in the grid
+`pulsar-plot-runtime.js`. Cross-media timeline policy remains in the grid
 client, which supplies the resolved time or normalized video progress through
 the plot runtime API and coordinates combined media/plot resets. It was merged
 by GitHub PR #11 at merge commit
@@ -96,9 +96,9 @@ by GitHub PR #11 at merge commit
 Phase 4C completes the planned client-runtime decomposition on
 `rearchitect-trame-phase4c`. Timeline selection, image/video synchronization,
 VCR actions, labels/sliders, timers, media mutation observation, and plot cursor
-coordination are extracted into `seurat-timeline-runtime.js`. The remaining
-`seurat.js` becomes a small grid coordinator. Runtime objects are registered
-under `window.seurat.runtimes`, while the existing top-level grid, interaction,
+coordination are extracted into `pulsar-timeline-runtime.js`. The remaining
+`pulsar.js` becomes a small grid coordinator. Runtime objects are registered
+under `window.pulsar.runtimes`, while the existing top-level grid, interaction,
 and resize aliases are retained for Trame Vue plugin compatibility. It was
 merged by GitHub PR #12 at merge commit
 `301b63e9aa6ba073c13e904ce292ef7d3e08d668`.
@@ -107,7 +107,7 @@ Phase 5A begins the backend-boundary work on `rearchitect-trame-phase5a`. A
 narrow catalog capability contract separates normalized navigation and backend
 availability from the local `CampaignDb` implementation. The existing ACA and
 SQLite behavior is retained by `LocalCampaignBackend`, while
-`SeuratApplication` and the catalog controller consume the injected contract.
+`PulsarApplication` and the catalog controller consume the injected contract.
 Contract/fake-backend tests characterize the seam. `PHOBOS_INTEGRATION.md`
 records the ownership boundary, current Phobos coverage, timeline requirements,
 API and asynchronous-job gaps, and the planned Phase 5B through 5E migration.
@@ -117,7 +117,7 @@ Phase 5B.1 continues the backend-boundary work on
 normalized source descriptors, aggregate statistics, stored-visualization
 source lookup, and source-restriction resolution. The local adapter assigns
 deterministic opaque source IDs, while controllers consume the capability
-through `SeuratApplication`. Query-language formalization, media transport,
+through `PulsarApplication`. Query-language formalization, media transport,
 generated plots, and plugin execution remain separate follow-on work.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
@@ -129,16 +129,16 @@ pre-rearchitect-trame-phase1 -> fe0926f7a7ccb5fe012816f9fc962edf0a8588f3
 The original repo still has the subtree split branch used to create this repo:
 
 ```text
-seurat-split
+pulsar-split
 ```
 
 ## What Was Done
 
 - Created a subtree split from the original viewer subdirectory.
-- Cloned that split history into `/Users/dpn/proj/seurat`.
+- Cloned that split history into `/Users/dpn/proj/pulsar`.
 - Renamed the new repo branch to `main`.
 - Removed the temporary local remote pointing back to the old repo.
-- Added a new GitHub remote for `dpugmire/seurat`.
+- Added a new GitHub remote for `dpugmire/pulsar`.
 - Created and pushed the public GitHub repository.
 - Added repo metadata:
   - `.gitignore`
@@ -163,7 +163,7 @@ including:
 
 Untracked prototypes, generated `.aca` files, data directories, simulation
 outputs, build directories, caches, and editor metadata from the original repo
-were not moved into `seurat`.
+were not moved into `pulsar`.
 
 Unsupported tracked prototype applications inherited by the initial split were
 removed before the Trame architecture work began.
@@ -175,14 +175,14 @@ The standard verification commands are:
 ```bash
 python -m py_compile app.py config.py controllers.py db.py ingest_campaign.py media_utils.py query_parser.py state_init.py ui.py
 python -m pytest -q
-SEURAT_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
+PULSAR_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
 python -m pip check
 ```
 
 Install the repo dependencies with:
 
 ```bash
-cd /Users/dpn/proj/seurat
+cd /Users/dpn/proj/pulsar
 python -m pip install -e ".[schema,test]"
 python -m playwright install chromium
 ```

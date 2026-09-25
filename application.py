@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from seurat.backends import (
+from pulsar.backends import (
     BackendStatus,
     CatalogBackend,
     LocalCampaignBackend,
@@ -8,7 +8,7 @@ from seurat.backends import (
     NavigationRequest,
     NavigationResource,
     NavigationView,
-    SeuratBackend,
+    PulsarBackend,
     SourceDescriptor,
     SourceLookupRequest,
     SourceRestrictionRequest,
@@ -18,18 +18,18 @@ from seurat.backends import (
 )
 
 
-class SeuratApplication:
+class PulsarApplication:
     """Backend application facade used by Trame controller adapters."""
 
     def __init__(
         self,
         campaign_db=None,
         *,
-        backend: Optional[SeuratBackend] = None,
+        backend: Optional[PulsarBackend] = None,
     ):
         if backend is None:
             if campaign_db is None:
-                raise TypeError("SeuratApplication requires a backend or campaign_db")
+                raise TypeError("PulsarApplication requires a backend or campaign_db")
             backend = LocalCampaignBackend(campaign_db)
         self._backend = backend
 
@@ -60,8 +60,8 @@ __all__ = (
     "NavigationRequest",
     "NavigationResource",
     "NavigationView",
-    "SeuratBackend",
-    "SeuratApplication",
+    "PulsarBackend",
+    "PulsarApplication",
     "SourceDescriptor",
     "SourceLookupRequest",
     "SourceRestrictionRequest",

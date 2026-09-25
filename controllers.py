@@ -1,15 +1,15 @@
-"""Compatibility exports for Seurat's packaged controller adapters."""
+"""Compatibility exports for Pulsar's packaged controller adapters."""
 
-from seurat.controllers import (
+from pulsar.controllers import (
     ControllerContext,
-    SeuratController,
+    PulsarController,
     _variable_groups_from_navigation,
     attach_controllers,
 )
 
 __all__ = (
     "ControllerContext",
-    "SeuratController",
+    "PulsarController",
     "_variable_groups_from_navigation",
     "attach_controllers",
 )

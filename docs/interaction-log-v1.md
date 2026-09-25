@@ -1,18 +1,18 @@
-# Seurat Interaction Log v1
+# Pulsar Interaction Log v1
 
-Seurat can write a local, append-only JSON Lines log of semantic user
+Pulsar can write a local, append-only JSON Lines log of semantic user
 interactions. The log supports usage auditing and future offline training for
 visualization ranking and workspace-organization recommendations. It does not
 change visualization selection behavior.
 
-Logging is disabled unless `SEURAT_INTERACTION_LOG_DIR` is set. Seurat creates
-the directory, a pseudonymous `.seurat-profile-id`, and one or more mode-0600
-session files. `SEURAT_INTERACTION_LOG_MAX_MB` controls segment rotation and
+Logging is disabled unless `PULSAR_INTERACTION_LOG_DIR` is set. Pulsar creates
+the directory, a pseudonymous `.pulsar-profile-id`, and one or more mode-0600
+session files. `PULSAR_INTERACTION_LOG_MAX_MB` controls segment rotation and
 defaults to 64 MiB. Rotation never deletes old segments.
 
 ```bash
-export SEURAT_INTERACTION_LOG_DIR=/path/to/private/seurat-logs
-export SEURAT_INTERACTION_LOG_MAX_MB=64
+export PULSAR_INTERACTION_LOG_DIR=/path/to/private/pulsar-logs
+export PULSAR_INTERACTION_LOG_MAX_MB=64
 python app.py campaign.aca
 ```
 
@@ -28,7 +28,7 @@ Every line is one JSON object with these required fields:
 | `timestamp_utc` | ISO-8601 UTC wall-clock time. |
 | `elapsed_session_ms` | Monotonic elapsed session time. |
 | `user_profile_id` | Pseudonymous ID stored in the log directory. |
-| `session_id` | Unique Seurat process-session identifier. |
+| `session_id` | Unique Pulsar process-session identifier. |
 | `campaign_version_id` | Hash of campaign path and file-version metadata. |
 | `event_type` | Versioned semantic event name. |
 | `source` | UI or controller path that caused the event. |
@@ -92,7 +92,7 @@ sanitization and consent process.
 Run the bundled audit over a file or directory:
 
 ```bash
-python -m seurat.learning.audit /path/to/private/seurat-logs
+python -m pulsar.learning.audit /path/to/private/pulsar-logs
 ```
 
 The audit validates envelopes, ignores an incomplete final line left by a

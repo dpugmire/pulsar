@@ -40,7 +40,7 @@ def _wait_for_server(process, url, timeout=15.0):
 
 
 @pytest.fixture
-def seurat_server():
+def pulsar_server():
     processes = []
 
     def start(mode="step"):

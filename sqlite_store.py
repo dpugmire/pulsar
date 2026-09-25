@@ -93,21 +93,21 @@ def _safe_filename(value: str) -> str:
 
 
 def sqlite_sidecar_path(campaign_path: str, db_path: Optional[str] = None) -> Path:
-    explicit = db_path or os.getenv("SEURAT_SQLITE_DB", "").strip()
+    explicit = db_path or os.getenv("PULSAR_SQLITE_DB", "").strip()
     campaign = Path(campaign_path or "campaign").expanduser()
     if explicit:
         path = Path(explicit).expanduser()
         if path.suffix == "":
-            path = path / f"{_safe_filename(str(campaign))}.seurat.sqlite"
+            path = path / f"{_safe_filename(str(campaign))}.pulsar.sqlite"
         return path
 
-    cache_dir = Path(os.getenv("SEURAT_CACHE_DIR", "~/.cache/seurat")).expanduser()
+    cache_dir = Path(os.getenv("PULSAR_CACHE_DIR", "~/.cache/pulsar")).expanduser()
     try:
         key_source = str(campaign.resolve())
     except Exception:
         key_source = str(campaign.absolute())
     digest = hashlib.sha256(key_source.encode("utf-8")).hexdigest()[:16]
-    return cache_dir / f"{_safe_filename(str(campaign))}.{digest}.seurat.sqlite"
+    return cache_dir / f"{_safe_filename(str(campaign))}.{digest}.pulsar.sqlite"
 
 
 def open_sqlite_collection(campaign_path: str, db_path: Optional[str] = None):
@@ -261,7 +261,7 @@ class SQLiteCampaignCollection:
             pragma journal_mode = wal;
             pragma synchronous = normal;
 
-            create table if not exists seurat_meta (
+            create table if not exists pulsar_meta (
               key text primary key,
               value text
             );
@@ -344,7 +344,7 @@ class SQLiteCampaignCollection:
             """
         )
         self._con.execute(
-            "insert or replace into seurat_meta(key, value) values (?, ?)",
+            "insert or replace into pulsar_meta(key, value) values (?, ?)",
             ("schema_version", str(SIDECAR_SCHEMA_VERSION)),
         )
         self._con.commit()

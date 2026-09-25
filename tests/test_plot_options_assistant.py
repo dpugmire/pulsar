@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from seurat.controllers.visualization import VisualizationControllerMixin
-from seurat.plot_options_assistant import (
+from pulsar.controllers.visualization import VisualizationControllerMixin
+from pulsar.plot_options_assistant import (
     Plot1dOptionsPatch,
     Plot1dSeriesOptionsPatch,
     PlotOptionsTranslationResult,
@@ -16,7 +16,7 @@ from seurat.plot_options_assistant import (
     plot1d_options_patch_to_dict,
     scalar_field_options_patch_to_dict,
 )
-from seurat.query_assistant import QueryAssistantError
+from pulsar.query_assistant import QueryAssistantError
 
 
 def empty_patch():

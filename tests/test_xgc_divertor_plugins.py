@@ -29,9 +29,9 @@ except ModuleNotFoundError:
 
 
 from plugin_runtime import discover_plugins, plugin_options_schema
-from seurat_plugins import divertor_lambda_q_timeseries as lambda_q
-from seurat_plugins import divertor_load_map as load_map
-from seurat_plugins import divertor_target_totals_timeseries as target_totals
+from pulsar_plugins import divertor_lambda_q_timeseries as lambda_q
+from pulsar_plugins import divertor_load_map as load_map
+from pulsar_plugins import divertor_target_totals_timeseries as target_totals
 
 
 class XgcDivertorPluginTests(unittest.TestCase):

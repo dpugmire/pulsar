@@ -14,8 +14,8 @@ from db import (
     scalar_field_contour_levels,
     scalar_field_to_png_bytes,
 )
-from seurat.controllers.sources import SourcesControllerMixin
-from seurat.controllers.visualization import VisualizationControllerMixin
+from pulsar.controllers.sources import SourcesControllerMixin
+from pulsar.controllers.visualization import VisualizationControllerMixin
 from sqlite_store import SQLiteCampaignCollection
 
 

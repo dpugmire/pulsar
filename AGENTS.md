@@ -1,4 +1,4 @@
-# Seurat
+# Pulsar
 
 This repository contains the active Trame/Vue3 campaign viewer for ADIOS
 campaign archives. Use `app.py` as the main entrypoint. Unsupported prototype
@@ -10,7 +10,7 @@ do not restore them as alternate application paths.
 Start from this repository:
 
 ```bash
-cd /Users/dpn/proj/seurat
+cd /Users/dpn/proj/pulsar
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -30,7 +30,7 @@ association schemas.
 
 The app needs `ffmpeg` in addition to the Python packages.
 
-- Seurat uses a local SQLite sidecar DB for viewer state/cache data.
+- Pulsar uses a local SQLite sidecar DB for viewer state/cache data.
 - `ffmpeg` must be available on `PATH` for movie preview tiles.
 - ADIOS2 must be importable as Python package `adios2`.
 - Image sequence bytes are loaded lazily from the ACA file when preview tiles
@@ -55,18 +55,18 @@ brew install ffmpeg
 The defaults are defined in `config.py`:
 
 ```bash
-export SEURAT_CACHE_DIR="~/.cache/seurat"
-export SEURAT_SQLITE_DB=""
+export PULSAR_CACHE_DIR="~/.cache/pulsar"
+export PULSAR_SQLITE_DB=""
 export MOVIE_FPS="2"
 export MAX_MOVIE_FRAMES="240"
 ```
 
-`SEURAT_CACHE_DIR` controls the default sidecar DB directory. `SEURAT_SQLITE_DB`
+`PULSAR_CACHE_DIR` controls the default sidecar DB directory. `PULSAR_SQLITE_DB`
 can point at a specific sidecar DB file or a directory where the generated
 sidecar DB should be stored.
 
-Current cache note: `app.py` still drops and re-ingests the Seurat sidecar each
-time the server starts. Do not point `SEURAT_SQLITE_DB` at data that should be
+Current cache note: `app.py` still drops and re-ingests the Pulsar sidecar each
+time the server starts. Do not point `PULSAR_SQLITE_DB` at data that should be
 preserved outside the viewer cache. The next cache phase should skip ingest
 when the ACA file is unchanged.
 
@@ -82,7 +82,7 @@ python app.py /path/to/campaign.aca
 If installed editably, the console script is also available:
 
 ```bash
-seurat /path/to/campaign.aca
+pulsar /path/to/campaign.aca
 ```
 
 If using an image association schema:
@@ -97,7 +97,7 @@ Trame prints the local browser URL when the server starts, commonly on port
 ## Data Model Notes
 
 Campaigns created with the hpc-campaign visualization API are associated through
-the ACA `visualization_*` metadata tables. Seurat treats `variable_id` as a
+the ACA `visualization_*` metadata tables. Pulsar treats `variable_id` as a
 source-independent variable identity, while source-specific datasets remain
 distinguished by `source_dataset`.
 

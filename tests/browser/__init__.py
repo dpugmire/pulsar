@@ -1,1 +1,1 @@
-"""Browser-level Seurat tests."""
+"""Browser-level Pulsar tests."""

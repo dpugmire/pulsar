@@ -1,4 +1,4 @@
-"""Runtime support for Seurat Python plotting plugins."""
+"""Runtime support for Pulsar Python plotting plugins."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ import numpy as np
 from adios2 import FileReader
 
 PLUGIN_VIS_PREFIX = "plugin:"
-PERSONAL_PLUGIN_ENV = "SEURAT_PLUGIN_PATH"
-DEFAULT_PERSONAL_PLUGIN_DIR = Path("~/.seurat/plugins")
-DEFAULT_PROFILE_PATH = Path("~/.seurat/profile.json")
+PERSONAL_PLUGIN_ENV = "PULSAR_PLUGIN_PATH"
+DEFAULT_PERSONAL_PLUGIN_DIR = Path("~/.pulsar/plugins")
+DEFAULT_PROFILE_PATH = Path("~/.pulsar/profile.json")
 PROFILE_PLUGIN_PATHS_KEY = "plugin_paths"
 
 
@@ -35,13 +35,13 @@ class PluginInfo:
 
 
 _BUILTIN_PLUGIN_MODULES = (
-    "seurat_plugins.profile_timeseries",
-    "seurat_plugins.paired_species_profile",
-    "seurat_plugins.radial_flux_corrected",
-    "seurat_plugins.divertor_eich_profile",
-    "seurat_plugins.divertor_lambda_q_timeseries",
-    "seurat_plugins.divertor_load_map",
-    "seurat_plugins.divertor_target_totals_timeseries",
+    "pulsar_plugins.profile_timeseries",
+    "pulsar_plugins.paired_species_profile",
+    "pulsar_plugins.radial_flux_corrected",
+    "pulsar_plugins.divertor_eich_profile",
+    "pulsar_plugins.divertor_lambda_q_timeseries",
+    "pulsar_plugins.divertor_load_map",
+    "pulsar_plugins.divertor_target_totals_timeseries",
 )
 _FAILED_BUILTIN_PLUGIN_IMPORTS: set[str] = set()
 _FAILED_PROFILE_WARNINGS: set[str] = set()
@@ -71,7 +71,7 @@ def discover_plugins() -> List[PluginInfo]:
         except ImportError as exc:
             if module_name not in _FAILED_BUILTIN_PLUGIN_IMPORTS:
                 print(
-                    f"Skipping unavailable Seurat plugin {module_name}: "
+                    f"Skipping unavailable Pulsar plugin {module_name}: "
                     f"{type(exc).__name__}: {exc}",
                     file=sys.stderr,
                 )
@@ -88,7 +88,7 @@ def discover_plugins() -> List[PluginInfo]:
         if info is None:
             continue
         if info.plugin_id in plugin_ids:
-            print(f"Skipping personal Seurat plugin with duplicate PLUGIN_ID: {info.plugin_id}", file=sys.stderr)
+            print(f"Skipping personal Pulsar plugin with duplicate PLUGIN_ID: {info.plugin_id}", file=sys.stderr)
             continue
         plugins.append(info)
         plugin_ids.add(info.plugin_id)
@@ -183,7 +183,7 @@ def _warn_profile(profile_path: Path, message: str) -> None:
     key = f"{profile_path}:{message}"
     if key in _FAILED_PROFILE_WARNINGS:
         return
-    print(f"Ignoring Seurat profile {profile_path}: {message}", file=sys.stderr)
+    print(f"Ignoring Pulsar profile {profile_path}: {message}", file=sys.stderr)
     _FAILED_PROFILE_WARNINGS.add(key)
 
 
@@ -199,7 +199,7 @@ def _load_personal_plugin_modules() -> List[Tuple[Any, str]]:
             try:
                 mod = _load_module_from_path(module_name, path)
             except Exception as exc:
-                print(f"Skipping personal Seurat plugin {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                print(f"Skipping personal Pulsar plugin {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
                 continue
             modules.append((mod, module_name))
     return modules
@@ -218,7 +218,7 @@ def _personal_plugin_package_name(plugin_dir: Path) -> str:
     resolved = plugin_dir.expanduser().resolve()
     stem = _module_name_token(resolved.name or "plugins")
     token = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
-    return f"_seurat_personal_plugins_{stem}_{token}"
+    return f"_pulsar_personal_plugins_{stem}_{token}"
 
 
 def _ensure_personal_plugin_package(package_name: str, plugin_dir: Path) -> None:

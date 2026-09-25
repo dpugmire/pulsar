@@ -6,9 +6,9 @@ import urllib.error
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from seurat.backends import BackendStatus
-from seurat.controllers import attach_controllers
-from seurat.query_assistant import (
+from pulsar.backends import BackendStatus
+from pulsar.controllers import attach_controllers
+from pulsar.query_assistant import (
     ChatCompletionsQueryTranslator,
     QueryAssistantError,
     QuerySourceFilterContext,
@@ -16,8 +16,8 @@ from seurat.query_assistant import (
     make_chat_completions_query_translator,
     parse_query_proposal,
 )
-from seurat.state import init_state
-from seurat.viewer_actions import (
+from pulsar.state import init_state
+from pulsar.viewer_actions import (
     CatalogCondition,
     CatalogQueryAction,
     SourceRank,
@@ -434,7 +434,7 @@ class QueryProposalTests(unittest.TestCase):
             ),
         )
         with patch(
-            "seurat.query_assistant.urllib.request.urlopen",
+            "pulsar.query_assistant.urllib.request.urlopen",
             return_value=FakeResponse(),
         ) as urlopen:
             proposal = translator.translate(request)
@@ -565,7 +565,7 @@ class QueryProposalTests(unittest.TestCase):
             None,
         )
         with patch(
-            "seurat.query_assistant.urllib.request.urlopen",
+            "pulsar.query_assistant.urllib.request.urlopen",
             side_effect=[unsupported_error, FakeResponse()],
         ) as urlopen:
             proposal = translator.translate(request)

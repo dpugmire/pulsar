@@ -2,7 +2,7 @@ import unittest
 import json
 from pathlib import Path
 
-from seurat.models.canvas_layout import (
+from pulsar.models.canvas_layout import (
     apply_column_insertion,
     column_insertion_size,
     connected_column_move_set,

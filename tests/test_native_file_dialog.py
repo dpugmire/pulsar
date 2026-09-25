@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from seurat.native_file_dialog import (
+from pulsar.native_file_dialog import (
     choose_workspace_load_path,
     choose_workspace_save_path,
 )
@@ -14,10 +14,10 @@ class NativeFileDialogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             selected = Path(temp_dir) / "chosen-name"
             with patch(
-                "seurat.native_file_dialog.platform.system",
+                "pulsar.native_file_dialog.platform.system",
                 return_value="Darwin",
             ), patch(
-                "seurat.native_file_dialog._macos_save_path",
+                "pulsar.native_file_dialog._macos_save_path",
                 return_value=str(selected),
             ) as dialog:
                 result = choose_workspace_save_path(
@@ -33,10 +33,10 @@ class NativeFileDialogTests(unittest.TestCase):
             selected = Path(temp_dir) / "chosen.json"
             selected.write_text("{}", encoding="utf-8")
             with patch(
-                "seurat.native_file_dialog.platform.system",
+                "pulsar.native_file_dialog.platform.system",
                 return_value="Darwin",
             ), patch(
-                "seurat.native_file_dialog._macos_load_path",
+                "pulsar.native_file_dialog._macos_load_path",
                 return_value=str(selected),
             ) as dialog:
                 result = choose_workspace_load_path(
@@ -48,10 +48,10 @@ class NativeFileDialogTests(unittest.TestCase):
 
     def test_canceled_dialog_returns_empty_path(self):
         with patch(
-            "seurat.native_file_dialog.platform.system",
+            "pulsar.native_file_dialog.platform.system",
             return_value="Darwin",
         ), patch(
-            "seurat.native_file_dialog._macos_save_path",
+            "pulsar.native_file_dialog._macos_save_path",
             return_value="",
         ):
             self.assertEqual(

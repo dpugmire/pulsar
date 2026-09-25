@@ -4,15 +4,15 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from seurat.controllers.base import ControllerBase
-from seurat.controllers.context import ControllerContext
-from seurat.controllers.visualization import VisualizationControllerMixin
-from seurat.learning.audit import audit_logs, format_audit
-from seurat.learning.context import sanitized_workspace_snapshot
-from seurat.learning.events import validate_event
-from seurat.learning.log import InteractionLog
-from seurat.state import grid as grid_state
-from seurat.state import workspace as workspace_state
+from pulsar.controllers.base import ControllerBase
+from pulsar.controllers.context import ControllerContext
+from pulsar.controllers.visualization import VisualizationControllerMixin
+from pulsar.learning.audit import audit_logs, format_audit
+from pulsar.learning.context import sanitized_workspace_snapshot
+from pulsar.learning.events import validate_event
+from pulsar.learning.log import InteractionLog
+from pulsar.state import grid as grid_state
+from pulsar.state import workspace as workspace_state
 
 
 class MemoryInteractionLog:
