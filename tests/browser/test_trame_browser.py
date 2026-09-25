@@ -3777,7 +3777,7 @@ def test_multi_axis_slider_defers_server_update_until_change(page, pulsar_server
     assert waveform.get_attribute("data-axis-sync-status") == "synchronized"
 
 
-def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
+def test_mixed_step_sequence_preserves_physical_time_for_split_plot_cursor(
     page, pulsar_server
 ):
     _open_app(page, pulsar_server, mode="mixed")
@@ -3800,8 +3800,9 @@ def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
         }"""
     )
     page.wait_for_function(
-        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Step = 0.25'"
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Time = 0.25'"
     )
+    assert slider.get_attribute("max") == "2"
     assert image.get_attribute("data-current-frame") == "1"
 
     preview = page.locator(
