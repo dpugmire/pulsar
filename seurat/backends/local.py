@@ -171,10 +171,17 @@ class LocalCampaignBackend:
 
     @classmethod
     def _source_id(cls, source: Dict[str, Any]) -> str:
+        source_collection_id = str(source.get("source_collection_id", "") or "")
         schema_file_group = str(source.get("schema_file_group", "") or "")
         schema_mode = str(source.get("schema_mode", "") or "")
         source_dataset = str(source.get("source_dataset", "") or "")
-        if schema_file_group and schema_mode == "file_per_timestep":
+        if source_collection_id:
+            identity = {
+                "kind": "source_collection",
+                "schema_name": str(source.get("schema_name", "") or ""),
+                "source_collection_id": source_collection_id,
+            }
+        elif schema_file_group and schema_mode == "file_per_timestep":
             identity = {
                 "kind": "schema_file_group",
                 "schema_file_group": schema_file_group,
@@ -222,6 +229,24 @@ class LocalCampaignBackend:
             "variable_type": str(source.get("variable_type", "variable") or "variable"),
             "variable_path": str(source.get("variable_path", "") or ""),
             "source_dataset": source_dataset,
+            "source_collection_id": str(
+                source.get("source_collection_id", "") or ""
+            ),
+            "source_collection_label": str(
+                source.get("source_collection_label", "") or ""
+            ),
+            "source_collection_mode": str(
+                source.get("source_collection_mode", "") or ""
+            ),
+            "source_collection_axis": str(
+                source.get("source_collection_axis", "") or ""
+            ),
+            "source_collection_member_count": int(
+                source.get("source_collection_member_count", 0) or 0
+            ),
+            "source_collection_total_length": int(
+                source.get("source_collection_total_length", 0) or 0
+            ),
             "source_datasets": [
                 str(item) for item in source.get("source_datasets", []) or []
             ],
@@ -238,6 +263,21 @@ class LocalCampaignBackend:
             "visualization_kind": str(source.get("visualization_kind", "") or ""),
             "visualization_source_dataset": str(
                 source.get("visualization_source_dataset", "") or ""
+            ),
+            "visualization_variables": list(
+                source.get("visualization_variables", []) or []
+            ),
+            "visualization_roles": [
+                str(item) for item in source.get("visualization_roles", []) or []
+            ],
+            "visualization_sequence_metadata": dict(
+                source.get("visualization_sequence_metadata", {}) or {}
+            ),
+            "visualization_item_metadata": dict(
+                source.get("visualization_item_metadata", {}) or {}
+            ),
+            "activity_provenance": dict(
+                source.get("activity_provenance", {}) or {}
             ),
             "association_source": str(source.get("association_source", "") or ""),
             "campaign_path": str(source.get("campaign_path", "") or ""),

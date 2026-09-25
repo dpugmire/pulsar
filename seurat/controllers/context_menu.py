@@ -243,6 +243,7 @@ class ContextMenuControllerMixin:
     def context_menu_item_select(self, **_):
         item = str(self.state.contextMenuItem or "").strip()
         if item:
+            self.set_details_provenance_context(False)
             self.state.selectedVar = item
             self.state.draggedVar = item
         self.hide_context_menu()
@@ -420,11 +421,13 @@ class ContextMenuControllerMixin:
 
         cells = self.normalize_grid_cells(self.state.gridCells)
         existing = dict(cells[idx] or {})
+        rendered_tile = {}
         try:
             tile = self.build_source_plugin_grid_cell(plugin, existing)
             assign_cell(cells, idx, preserve_grid_geometry(tile, existing))
             self.state.gridCells = self.normalize_grid_cells(cells)
             self.state.activeGridCell = idx
+            rendered_tile = dict(self.state.gridCells[idx] or {})
         except Exception as e:
             err_cell = self.no_visualization_grid_cell(
                 str(
@@ -453,4 +456,27 @@ class ContextMenuControllerMixin:
             assign_cell(cells, idx, preserve_grid_geometry(err_cell, existing))
             self.state.gridCells = self.normalize_grid_cells(cells)
             self.state.activeGridCell = idx
+        if rendered_tile:
+            variable_id = str(
+                rendered_tile.get("variable_id", "")
+                or rendered_tile.get("variable_name", "")
+                or ""
+            ).strip()
+            if variable_id:
+                self.set_details_provenance_context(True)
+                self.state.selectedVar = variable_id
+                self.state.draggedVar = variable_id
+                self.update_selected_var_panels(
+                    variable_id,
+                    preferred_source_key=str(
+                        rendered_tile.get("_source_key", "") or ""
+                    ),
+                    include_visualization_provenance=True,
+                    preferred_visualization=str(
+                        rendered_tile.get("selected_visualization", "")
+                        or rendered_tile.get("visualization_name", "")
+                        or ""
+                    ),
+                    provenance_tile=rendered_tile,
+                )
         self.hide_context_menu()

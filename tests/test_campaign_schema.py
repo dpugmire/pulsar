@@ -23,6 +23,9 @@ from ingest_campaign import (
     _read_campaign_schema_text,
     _schema_metadata_for_file,
     _schema_metadata_for_variable,
+    _source_dataset_from_path,
+    extract_file_var,
+    extract_file_var_img,
 )
 
 
@@ -50,6 +53,46 @@ class CampaignSchemaTests(unittest.TestCase):
             self.analysis_b,
             "schema.yaml",
         ]
+
+    def test_bp5_paths_preserve_dataset_and_full_variable_identity(self):
+        variable_path = (
+            "data/png-14387-2026-06-07.bp5/"
+            "data/meshes/scalars/PNG_digitizer_Ch2_Energy/value"
+        )
+
+        variable, file_name, source_dataset, producer, casename = (
+            extract_file_var(variable_path)
+        )
+
+        self.assertEqual(
+            variable,
+            "data/meshes/scalars/PNG_digitizer_Ch2_Energy/value",
+        )
+        self.assertEqual(file_name, "png-14387-2026-06-07.bp5")
+        self.assertEqual(source_dataset, "data/png-14387-2026-06-07.bp5")
+        self.assertEqual(producer, "data")
+        self.assertEqual(casename, "data")
+        self.assertEqual(
+            _source_dataset_from_path(variable_path),
+            "data/png-14387-2026-06-07.bp5",
+        )
+
+    def test_bp5_image_paths_use_the_dataset_segment(self):
+        image_path = (
+            "run/case/output.bp5/density/images/pseudocolor/"
+            "image.000001.png/640x480"
+        )
+
+        variable, file_name, varpath, producer, casename = (
+            extract_file_var_img(image_path)
+        )
+
+        self.assertEqual(variable, "density")
+        self.assertEqual(file_name, "output.bp5")
+        self.assertEqual(varpath, image_path)
+        self.assertEqual(producer, "run")
+        self.assertEqual(casename, "case")
+        self.assertEqual(_source_dataset_from_path(varpath), "run/case/output.bp5")
 
     def test_append_patterns_match_multiple_datasets(self):
         schema = {
@@ -500,6 +543,202 @@ files:
         self.assertTrue(equilibrium["static"])
         self.assertNotIn("time_values", equilibrium)
         self.assertNotIn("physical_time", equilibrium)
+
+    def test_lasernet_variable_groups_preserve_multiple_dimension_axes(self):
+        dataset = "data/png-14387-2026-06-07.bp5"
+        shot_path = f"{dataset}/data/meshes/shots/shot_number/value"
+        run_path = f"{dataset}/data/meshes/shots/run_number/value"
+        scalar_path = (
+            f"{dataset}/data/meshes/scalars/PNG_digitizer_Ch2_Energy/value"
+        )
+        signal_path = f"{dataset}/data/meshes/traces/Siglent_Ch1_Trace/signal"
+        trace_time_path = f"{dataset}/data/meshes/traces/Siglent_Ch1_Trace/time"
+        values = {
+            shot_path: [15.0, 16.0, 17.0],
+            run_path: [14387.0, 14387.0, 14387.0],
+        }
+        variables = {
+            shot_path: {"Shape": "3", "AvailableStepsCount": "1"},
+            run_path: {"Shape": "3", "AvailableStepsCount": "1"},
+            scalar_path: {"Shape": "3", "AvailableStepsCount": "1"},
+            signal_path: {"Shape": "3, 4", "AvailableStepsCount": "1"},
+            trace_time_path: {"Shape": "3, 4", "AvailableStepsCount": "1"},
+        }
+
+        layout = _load_campaign_schema(
+            "/campaign/lasernet.aca",
+            [dataset],
+            {},
+            campaign_schema_path=str(
+                Path(__file__).with_name("fixtures")
+                / "lasernet_multi_axis_schema.yaml"
+            ),
+        )
+        reader = FakeReader(values)
+        context = _build_schema_time_context(layout, reader, variables)
+        scalar = _schema_metadata_for_variable(
+            context,
+            dataset,
+            "data/meshes/scalars/PNG_digitizer_Ch2_Energy/value",
+        )
+        trace = _schema_metadata_for_variable(
+            context,
+            dataset,
+            "data/meshes/traces/Siglent_Ch1_Trace/signal",
+        )
+
+        self.assertEqual(scalar["dimension_axes"], ["shot"])
+        self.assertEqual(scalar["plot_x_axis"], "shot")
+        self.assertEqual(scalar["selection_axis"], "shot")
+        self.assertEqual(scalar["display_name"], "PNG_digitizer_Ch2_Energy")
+        self.assertEqual(scalar["axes"]["shot"]["values"], [15.0, 16.0, 17.0])
+        self.assertEqual(scalar["axes"]["shot"]["label"], "Shot number")
+        self.assertEqual(trace["dimension_axes"], ["shot", "trace_time"])
+        self.assertEqual(trace["plot_x_axis"], "trace_time")
+        self.assertEqual(trace["selection_axis"], "shot")
+        self.assertEqual(trace["display_name"], "Siglent_Ch1_Trace")
+        self.assertEqual(trace["schema_default_axis"], "shot")
+        self.assertEqual(trace["axes"]["trace_time"]["shape"], [3, 4])
+        self.assertEqual(
+            trace["axes"]["trace_time"]["variable_path"],
+            trace_time_path,
+        )
+        self.assertNotIn("values", trace["axes"]["trace_time"])
+        self.assertEqual(
+            reader.reads,
+            [(shot_path, None), (run_path, None)],
+        )
+
+    def test_source_collections_order_members_and_build_offsets(self):
+        alignment = "data/alignment-14378-2026-06-07.bp5"
+        png_a = "data/png-14380-2026-06-07.bp5"
+        png_b = "data/png-14379-2026-06-07.bp5"
+        datasets = [png_a, alignment, png_b]
+        values = {}
+        variables = {}
+        lengths = {alignment: 2, png_a: 3, png_b: 1}
+        runs = {alignment: 14378.0, png_a: 14380.0, png_b: 14379.0}
+
+        for dataset in datasets:
+            length = lengths[dataset]
+            shot_path = f"{dataset}/data/meshes/shots/shot_number/value"
+            run_path = f"{dataset}/data/meshes/shots/run_number/value"
+            scalar_path = f"{dataset}/data/meshes/scalars/energy/value"
+            signal_path = f"{dataset}/data/meshes/traces/Scope_Trace/signal"
+            time_path = f"{dataset}/data/meshes/traces/Scope_Trace/time"
+            values[shot_path] = list(range(15, 15 + length))
+            values[run_path] = [runs[dataset]] * length
+            variables.update(
+                {
+                    shot_path: {"Shape": str(length)},
+                    run_path: {"Shape": str(length)},
+                    scalar_path: {"Shape": str(length)},
+                    signal_path: {"Shape": f"{length}, 4"},
+                    time_path: {"Shape": f"{length}, 4"},
+                }
+            )
+
+        layout = _load_campaign_schema(
+            "/campaign/lasernet.aca",
+            datasets,
+            {},
+            campaign_schema_path=str(
+                Path(__file__).with_name("fixtures")
+                / "lasernet_multi_axis_schema.yaml"
+            ),
+        )
+        context = _build_schema_time_context(
+            layout,
+            FakeReader(values),
+            variables,
+        )
+
+        png_members = context["source_collection_members"]["png"]
+        self.assertEqual(
+            [member["source_dataset"] for member in png_members],
+            [png_b, png_a],
+        )
+        self.assertEqual(
+            [(member["offset"], member["length"]) for member in png_members],
+            [(0, 1), (1, 3)],
+        )
+        metadata = _schema_metadata_for_variable(
+            context,
+            png_a,
+            "data/meshes/traces/Scope_Trace/signal",
+        )
+        self.assertEqual(metadata["source_collection_id"], "png")
+        self.assertEqual(metadata["source_collection_label"], "PNG")
+        self.assertEqual(metadata["source_collection_offset"], 1)
+        self.assertEqual(metadata["source_collection_total_length"], 4)
+        self.assertEqual(metadata["source_collection_partition_label"], "Run 14380")
+        self.assertEqual(metadata["axes"]["shot"]["key"], "lasernet:png:shot")
+
+        alignment_metadata = _schema_metadata_for_variable(
+            context,
+            alignment,
+            "data/meshes/scalars/energy/value",
+        )
+        self.assertEqual(alignment_metadata["source_collection_id"], "alignment")
+        self.assertEqual(
+            alignment_metadata["axes"]["shot"]["key"],
+            "lasernet:alignment:shot",
+        )
+
+    def test_variable_group_rejects_unknown_display_name_placeholder(self):
+        schema = {
+            "schema_version": 1,
+            "files": {
+                "output": {"role": "static", "path": "run.bp"},
+            },
+            "variable_groups": {
+                "traces": {
+                    "file": "output",
+                    "pattern": "traces/*/signal",
+                    "display_name_template": "{unknown}",
+                    "role": "waveform",
+                }
+            },
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "variable_groups.traces.display_name_template",
+        ):
+            _interpret_campaign_schema(schema, ["run.bp"], {})
+
+    def test_multi_axis_group_rejects_axis_outside_dimension_axes(self):
+        schema = {
+            "schema_version": 1,
+            "files": {
+                "output": {"role": "static", "path": "run.bp"},
+            },
+            "axes": {
+                "shot": {
+                    "file": "output",
+                    "variable": "shot",
+                    "kind": "shot",
+                },
+                "trace_time": {
+                    "file": "output",
+                    "variable": "time",
+                    "kind": "time",
+                },
+            },
+            "variable_groups": {
+                "trace": {
+                    "file": "output",
+                    "pattern": "trace",
+                    "role": "waveform",
+                    "dimension_axes": ["shot"],
+                    "plot_x_axis": "trace_time",
+                    "selection_axis": "shot",
+                }
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "must appear in dimension_axes"):
+            _interpret_campaign_schema(schema, ["run.bp"], {})
 
     def test_variable_group_patterns_match_full_paths(self):
         schema = {

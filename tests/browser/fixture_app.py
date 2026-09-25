@@ -12,7 +12,13 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from seurat import module as seurat_module  # noqa: E402
-from seurat.controllers.catalog import _filter_variable_groups  # noqa: E402
+from seurat.controllers.catalog import (  # noqa: E402
+    _apply_provenance_expansion,
+    _apply_provenance_graph_expansion,
+    _filter_variable_groups,
+    _provenance_detail_node_ids,
+    _provenance_graph_detail_node_ids,
+)
 from seurat.history import WorkspaceMutationCoordinator  # noqa: E402
 from seurat.models import canvas_layout  # noqa: E402
 from seurat.models.grid import (  # noqa: E402
@@ -133,6 +139,109 @@ def _image_sequence_cell(mode):
     return cell
 
 
+def _multi_axis_cells():
+    shot_key = "lasernet:laser_runs:shot"
+    trace_time_key = "lasernet:laser_runs:trace_time"
+    shot_values = [15.0, 16.0, 17.0]
+
+    scalar = _plot_cell("physical")
+    scalar.update(
+        {
+            "variable_id": "laser_energy",
+            "variable_name": "laser_energy",
+            "display_title": "laser_energy",
+            "plot_axis_key": shot_key,
+            "selection_axis": {
+                "id": "shot",
+                "key": shot_key,
+                "kind": "shot",
+                "label": "Shot number",
+                "values": shot_values,
+                "index": 0,
+                "value": shot_values[0],
+            },
+        }
+    )
+    scalar["plot"].update(
+        {
+            "x_label": "Shot number",
+            "x_axis_key": shot_key,
+            "series": [
+                {
+                    "x": shot_values,
+                    "y": [2.5, 3.0, 3.75],
+                    "source_label": "fixture",
+                    "source_key": "fixture",
+                    "color": "#1565c0",
+                }
+            ],
+        }
+    )
+
+    waveform = _plot_cell("physical")
+    waveform.update(
+        {
+            "variable_id": "photodiode_signal",
+            "variable_name": "photodiode_signal",
+            "display_title": "photodiode_signal",
+            "visualization_name": "generated_timeseries",
+            "selected_visualization": "generated_timeseries",
+            "plot_axis_key": trace_time_key,
+            "selection_axis": {
+                "id": "shot",
+                "key": shot_key,
+                "kind": "shot",
+                "label": "Shot number",
+                "values": shot_values,
+                "index": 0,
+                "value": shot_values[0],
+            },
+        }
+    )
+    waveform["plot"].update(
+        {
+            "x_label": "Time within shot (s)",
+            "x_axis_key": trace_time_key,
+            "series": [
+                {
+                    "x": [0.0, 0.5, 1.0],
+                    "y": [10.0, 12.0, 11.0],
+                    "source_label": "fixture",
+                    "source_key": "fixture",
+                    "color": "#7b1fa2",
+                }
+            ],
+        }
+    )
+
+    incompatible = _plot_cell("physical")
+    incompatible.update(
+        {
+            "variable_id": "pulse_profile",
+            "variable_name": "pulse_profile",
+            "display_title": "pulse_profile",
+            "plot_axis_key": trace_time_key,
+            "selection_axis": {
+                "id": "trace_time",
+                "key": trace_time_key,
+                "kind": "within_shot_time",
+                "label": "Time within shot",
+                "unit": "s",
+                "values": [0.0, 0.5, 1.0],
+                "index": 0,
+                "value": 0.0,
+            },
+        }
+    )
+    incompatible["plot"].update(
+        {
+            "x_label": "Time within shot (s)",
+            "x_axis_key": trace_time_key,
+        }
+    )
+    return [scalar, waveform, incompatible]
+
+
 def _scalar_field_cell(background):
     is_white = background == "white"
     background_color = "#ffffff" if is_white else "#000000"
@@ -250,6 +359,161 @@ def build_fixture_server(mode):
     state.sourceRows = list(state.sourceRowsAll)
     state.selectedSourceKeys = ["source-128"]
     state.selectedSourceLabel = "run-128/output.bp"
+    state.detailsProvenanceKind = "visualization"
+    state.detailsProvenanceChain = (
+        "velocity_streamlines --> visualization: streamlines --> vx + vy + pressure --> hll_128/output.bp"
+    )
+    state.detailsProvenanceCompact = (
+        "velocity_streamlines = streamlines(vx + vy + pressure) : hll_128/output.bp"
+    )
+    state.detailsProvenanceExpanded = {}
+    provenance_nodes = [
+        {
+            "id": "visualization",
+            "kind": "visualization",
+            "label": "velocity_streamlines",
+            "display_label": "Velocity streamlines",
+            "secondary_label": "velocity_streamlines",
+            "shape": "box",
+            "details": [
+                {"label": "Visualization", "value": "velocity_streamlines"},
+                {"label": "Kind", "value": "streamlines"},
+            ],
+        },
+        {
+            "id": "activity",
+            "kind": "activity",
+            "label": "visualization: streamlines",
+            "display_label": "Streamlines",
+            "secondary_label": "visualization: streamlines",
+            "shape": "box",
+            "details": [
+                {"label": "Kind", "value": "visualization"},
+                {"label": "Operation", "value": "streamlines"},
+                {
+                    "label": "Inputs",
+                    "kind": "input_table",
+                    "value": "vx, vy, pressure",
+                    "rows": [
+                        {"variable": "vx", "role": "streamline-x"},
+                        {"variable": "vy", "role": "streamline-y"},
+                        {"variable": "pressure", "role": "color-by"},
+                    ],
+                },
+            ],
+        },
+        {
+            "id": "inputs",
+            "kind": "variables",
+            "label": "Inputs",
+            "shape": "group",
+            "items": [
+                {
+                    "id": "input-0",
+                    "kind": "variable",
+                    "label": "vx",
+                    "shape": "box",
+                    "details": [
+                        {"label": "Variable", "value": "vx"},
+                    ],
+                },
+                {
+                    "id": "input-1",
+                    "kind": "variable",
+                    "label": "vy",
+                    "shape": "box",
+                    "details": [
+                        {"label": "Variable", "value": "vy"},
+                    ],
+                },
+                {
+                    "id": "input-2",
+                    "kind": "variable",
+                    "label": "pressure",
+                    "shape": "box",
+                    "details": [
+                        {"label": "Variable", "value": "pressure"},
+                    ],
+                },
+            ],
+            "details": [
+                {
+                    "label": "Inputs",
+                    "value": (
+                        "vx (hll_128/output.bp), vy (hll_128/output.bp), "
+                        "pressure (hll_128/output.bp)"
+                    ),
+                },
+            ],
+        },
+        {
+            "id": "source",
+            "kind": "source",
+            "label": "hll_128/output.bp",
+            "shape": "cylinder",
+            "details": [
+                {"label": "Dataset", "value": "hll_128/output.bp"},
+            ],
+        },
+    ]
+    state.detailsProvenanceNodes = _apply_provenance_expansion(
+        provenance_nodes,
+        state.detailsProvenanceExpanded,
+    )
+    plan_node = {
+        "id": "visualization-activity-plan",
+        "kind": "plan",
+        "label": "MHD visualization workflow",
+        "shape": "box",
+        "details": [
+            {"label": "Workflow", "value": "render_visualizations"},
+            {
+                "label": "Implementation",
+                "value": "plans/render_adios_visualizations_to_campaign.py",
+            },
+        ],
+    }
+    agent_node = {
+        "id": "visualization-activity-agent",
+        "kind": "agent",
+        "label": "Matplotlib",
+        "shape": "box",
+        "details": [
+            {"label": "Type", "value": "SoftwareAgent"},
+            {"label": "Version", "value": "3.10.0"},
+        ],
+    }
+    state.detailsProvenanceGraph = _apply_provenance_graph_expansion(
+        [
+            {"id": "node-visualization", "type": "node", "node": provenance_nodes[0]},
+            {"id": "arrow-1", "type": "arrow", "relation": ""},
+            {
+                "id": "plan-group-visualization-activity",
+                "type": "plan_group",
+                "plan": plan_node,
+                "selected_action": {
+                    "id": "visualization-activity-selected-action",
+                    "node": provenance_nodes[1],
+                    "agent": agent_node,
+                    "selected": True,
+                },
+            },
+            {
+                "id": "branches-input",
+                "type": "branches",
+                "relation": "uses",
+                "branches": [
+                    {
+                        "id": item["id"],
+                        "input": item,
+                    }
+                    for item in provenance_nodes[2]["items"]
+                ],
+                "shared_source": provenance_nodes[3],
+            },
+        ],
+        state.detailsProvenanceExpanded,
+    )
     state.queryAssistantAvailable = True
     state.queryAssistantProvider = "Deterministic browser fixture"
     state.variableGroupCollapsed = {"0D": False, "2D": False}
@@ -270,7 +534,9 @@ def build_fixture_server(mode):
         "minmax(180px, 1fr)" for _ in range(state.gridCols)
     )
     state.gridFitRowTemplate = "minmax(212px, 1fr)"
-    if mode in {"scalar", "scalar-settings"}:
+    if mode == "multi-axis":
+        state.gridCells = _multi_axis_cells()
+    elif mode in {"scalar", "scalar-settings"}:
         state.gridCells = [
             _scalar_field_cell("black"),
             _scalar_field_cell("white"),
@@ -557,6 +823,57 @@ def build_fixture_server(mode):
 
     def set_active_grid_cell(cell_index, _ignored=0, _extend_selection=0):
         state.activeGridCell = int(cell_index)
+
+    def set_active_axis_selection(axis_index):
+        cells = [dict(cell) for cell in state.gridCells]
+        driver_index = int(state.timelineDriverCell)
+        if not 0 <= driver_index < len(cells):
+            driver_index = int(state.activeGridCell)
+        if not 0 <= driver_index < len(cells):
+            driver_index = next(
+                (
+                    index
+                    for index, cell in enumerate(cells)
+                    if (cell.get("selection_axis", {}) or {}).get("values")
+                ),
+                -1,
+            )
+        if driver_index < 0:
+            return
+        driver_axis = dict(cells[driver_index].get("selection_axis", {}) or {})
+        driver_values = list(driver_axis.get("values", []) or [])
+        if not driver_values:
+            return
+        selected_index = max(0, min(int(axis_index), len(driver_values) - 1))
+        selected_value = driver_values[selected_index]
+        driver_key = str(driver_axis.get("key", "") or "")
+        for cell in cells:
+            axis = dict(cell.get("selection_axis", {}) or {})
+            if not axis:
+                cell["axis_sync_status"] = "static"
+                continue
+            if str(axis.get("key", "") or "") != driver_key:
+                cell["axis_sync_status"] = "incompatible"
+                continue
+            values = list(axis.get("values", []) or [])
+            if selected_value not in values:
+                cell["axis_sync_status"] = "unavailable"
+                continue
+            target_index = values.index(selected_value)
+            axis.update({"index": target_index, "value": selected_value})
+            cell["selection_axis"] = axis
+            cell["axis_sync_status"] = "synchronized"
+            if cell.get("variable_id") == "photodiode_signal":
+                plot = deepcopy(cell["plot"])
+                series = deepcopy(plot["series"])
+                series[0]["y"] = [
+                    10.0 + target_index,
+                    12.0 + target_index,
+                    11.0 + target_index,
+                ]
+                plot["series"] = series
+                cell["plot"] = plot
+        state.gridCells = cells
 
     def assign_var_to_grid_cell(variable_id, cell_index):
         index = int(cell_index)
@@ -1077,6 +1394,39 @@ def build_fixture_server(mode):
         state.sourceDialogTitle = "Sources: internal_energy"
         state.showSourcesModal = not bool(state.showSourcesModal)
 
+    def open_provenance_dialog():
+        if state.detailsProvenanceChain:
+            state.showProvenanceModal = True
+
+    def close_provenance_dialog():
+        state.showProvenanceModal = False
+
+    def toggle_provenance_node_details(node_id):
+        target = str(node_id or "")
+        nodes = [
+            dict(node)
+            for node in (state.detailsProvenanceNodes or [])
+            if isinstance(node, dict)
+        ]
+        graph = [
+            dict(segment)
+            for segment in (state.detailsProvenanceGraph or [])
+            if isinstance(segment, dict)
+        ]
+        detail_node_ids = _provenance_detail_node_ids(
+            nodes
+        ) | _provenance_graph_detail_node_ids(graph)
+        if target not in detail_node_ids:
+            return
+        expanded = dict(state.detailsProvenanceExpanded or {})
+        expanded[target] = not bool(expanded.get(target, False))
+        state.detailsProvenanceExpanded = expanded
+        state.detailsProvenanceNodes = _apply_provenance_expansion(nodes, expanded)
+        state.detailsProvenanceGraph = _apply_provenance_graph_expansion(
+            graph,
+            expanded,
+        )
+
     def capture_fixture_history():
         layout = deepcopy(state.workspaceLayout)
         _pane, tab = active_pane_and_tab(layout)
@@ -1134,6 +1484,7 @@ def build_fixture_server(mode):
         history_edit("Move tab", move_workspace_tab)
     )
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
+    server.controller.add("set_active_axis_selection")(set_active_axis_selection)
     server.controller.add("set_grid_layout_mode")(
         history_edit("Change layout mode", set_grid_layout_mode)
     )
@@ -1212,6 +1563,11 @@ def build_fixture_server(mode):
         update_scalar_field_contour_color
     )
     server.controller.add("toggle_sources")(toggle_sources)
+    server.controller.add("open_provenance_dialog")(open_provenance_dialog)
+    server.controller.add("close_provenance_dialog")(close_provenance_dialog)
+    server.controller.add("toggle_provenance_node_details")(
+        toggle_provenance_node_details
+    )
     server.controller.add("open_query_assistant")(open_query_assistant)
     server.controller.add("open_source_query_assistant")(
         open_source_query_assistant
@@ -1236,6 +1592,7 @@ def main():
             "step",
             "physical",
             "mixed",
+            "multi-axis",
             "scalar",
             "scalar-settings",
             "freeform-column-seam",

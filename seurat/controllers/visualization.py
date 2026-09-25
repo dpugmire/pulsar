@@ -1,6 +1,8 @@
 """Visualization, plot, scalar-field, and plugin controller behavior."""
 
 import asyncio
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
@@ -27,6 +29,7 @@ from plugin_runtime import (
     normalize_plugin_options,
 )
 from query_parser import and_filter
+from seurat.learning.context import stable_fingerprint
 from seurat.models import plot as plot_model
 from seurat.models.plugin_options import plugin_option_rows, plugin_options_from_rows
 from seurat.models.grid import (
@@ -38,6 +41,12 @@ from seurat.models.grid import (
 from seurat.models.source_selection import (
     source_fields_from_row,
     source_filter_from_row,
+)
+from seurat.models.timeline import (
+    selection_axis_descriptor,
+    selection_axis_index_for_value,
+    selection_axis_key,
+    selection_axis_values,
 )
 from seurat.plot_options_assistant import (
     PlotOptionsTranslationRequest,
@@ -53,6 +62,7 @@ from state_init import fmt
 
 class VisualizationControllerMixin:
     ACTION_BINDINGS = (
+        ("set_active_axis_selection", "set_active_axis_selection"),
         ("cancel_scalar_plot_generation", "cancel_scalar_plot_generation"),
         ("confirm_scalar_plot_generation", "confirm_scalar_plot_generation"),
         ("cancel_plot_settings", "cancel_plot_settings"),
@@ -125,6 +135,256 @@ class VisualizationControllerMixin:
             if name and name not in out:
                 out.append(name)
         return out
+
+    def execute_plugin_render(
+        self,
+        *,
+        plugin_id: str,
+        plugin_scope_name: str,
+        variable_id: str,
+        source_dataset: str,
+        options: Dict[str, Any],
+        renderer,
+    ) -> Dict[str, Any]:
+        started_at_utc = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        started_monotonic = time.monotonic()
+        tile: Dict[str, Any] = {}
+        error = None
+        try:
+            tile = renderer()
+            return tile
+        except Exception as caught:
+            error = caught
+            raise
+        finally:
+            execution = dict(tile.get("plugin_execution_provenance", {}) or {})
+            ended_at_utc = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
+            status = "failure" if error is not None else "success"
+            input_variables = [
+                str(value or "")
+                for value in list(execution.get("input_variables", []) or [])
+                if str(value or "")
+            ]
+            if variable_id and variable_id not in input_variables:
+                input_variables.insert(0, variable_id)
+            source_datasets = [
+                str(value or "")
+                for value in list(execution.get("source_datasets", []) or [])
+                if str(value or "")
+            ]
+            if source_dataset and source_dataset not in source_datasets:
+                source_datasets.insert(0, source_dataset)
+            payload: Dict[str, Any] = {
+                "plugin_id": str(
+                    execution.get("plugin_id", "") or plugin_id or ""
+                ),
+                "plugin_label": str(
+                    execution.get("plugin_label", "") or plugin_id or ""
+                ),
+                "plugin_module": str(execution.get("plugin_module", "") or ""),
+                "plugin_version": str(execution.get("plugin_version", "") or ""),
+                "plugin_scope": str(
+                    execution.get("plugin_scope", "")
+                    or plugin_scope_name
+                    or "variable"
+                ),
+                "started_at_utc": str(
+                    execution.get("started_at_utc", "") or started_at_utc
+                ),
+                "ended_at_utc": str(
+                    execution.get("ended_at_utc", "") or ended_at_utc
+                ),
+                "duration_ms": int(
+                    execution.get("duration_ms", 0)
+                    or max(
+                        0,
+                        int((time.monotonic() - started_monotonic) * 1000),
+                    )
+                ),
+                "status": status,
+                "normalized_options": dict(
+                    execution.get("normalized_options", {}) or options or {}
+                ),
+                "input_variables": input_variables,
+                "source_ids": [
+                    stable_fingerprint(value, "source")
+                    for value in source_datasets
+                ],
+                "query_id": str(self._interaction_query_id or ""),
+            }
+            if execution.get("output"):
+                payload["output"] = dict(execution["output"])
+            if execution.get("scientific_context"):
+                payload["scientific_context"] = dict(
+                    execution["scientific_context"]
+                )
+            if execution.get("annotation_error_type"):
+                payload["annotation_error_type"] = str(
+                    execution["annotation_error_type"]
+                )
+            if error is not None:
+                payload["error_type"] = type(error).__name__
+            self.record_interaction(
+                "plugin.executed",
+                source="plugin_runtime",
+                payload=payload,
+            )
+
+    def active_selection_axis_cell_index(
+        self,
+        cells: List[Dict[str, Any]],
+    ) -> int:
+        try:
+            driver = int(self.state.timelineDriverCell)
+        except Exception:
+            driver = -1
+        if 0 <= driver < len(cells) and selection_axis_values(cells[driver]):
+            return driver
+        try:
+            active = int(self.state.activeGridCell)
+        except Exception:
+            active = -1
+        if 0 <= active < len(cells) and selection_axis_values(cells[active]):
+            return active
+        return next(
+            (
+                index
+                for index, cell in enumerate(cells)
+                if selection_axis_values(cell)
+            ),
+            -1,
+        )
+
+    def regenerate_axis_selected_plot(
+        self,
+        cell: Dict[str, Any],
+        selection_index: int,
+    ) -> Dict[str, Any]:
+        variable_id = str(
+            cell.get("variable_id", "") or cell.get("variable_name", "") or ""
+        ).strip()
+        source_fields_list = self.source_fields_list_from_cell(cell)
+        source_keys = self.source_keys_from_cell(cell)
+        if len(source_fields_list) > 1:
+            source_filters = [
+                self.source_fields_to_filter(variable_id, fields)
+                for fields in source_fields_list
+            ]
+            tile = self.db.get_generated_scalar_plot_tile_for_sources(
+                self.campaign_path,
+                variable_id,
+                source_filters=source_filters,
+                extra_filter=self.active_query_filter(),
+                selection_index=selection_index,
+            )
+        else:
+            source_fields = source_fields_list[0] if source_fields_list else {}
+            tile = self.db.get_or_create_generated_scalar_plot_tile(
+                self.campaign_path,
+                variable_id,
+                source_filter=self.source_fields_to_filter(
+                    variable_id,
+                    source_fields,
+                )
+                or None,
+                extra_filter=self.active_query_filter(),
+                selection_index=selection_index,
+            )
+        if not tile:
+            raise ValueError("Could not regenerate axis-selected plot")
+
+        if source_fields_list:
+            tile.update(
+                {
+                    key: value
+                    for key, value in source_fields_list[0].items()
+                    if value and key != "_source_key"
+                }
+            )
+        tile["_source_key"] = source_keys[0] if source_keys else ""
+        tile["_source_keys"] = source_keys
+        tile["_source_fields_list"] = source_fields_list
+        self.assign_plot_series_keys(tile, source_keys)
+        tile["plot_settings"] = self.normalize_plot_settings(
+            tile,
+            self.existing_plot_settings(cell, variable_id),
+        )
+        return preserve_grid_geometry(tile, cell)
+
+    def set_active_axis_selection(self, axis_index: int, **_):
+        try:
+            requested_index = int(axis_index)
+        except Exception:
+            return
+
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        driver_index = self.active_selection_axis_cell_index(cells)
+        if driver_index < 0:
+            return
+        driver = cells[driver_index]
+        driver_values = selection_axis_values(driver)
+        driver_key = selection_axis_key(driver)
+        if not driver_values or not driver_key:
+            return
+        requested_index = max(0, min(requested_index, len(driver_values) - 1))
+        selected_value = driver_values[requested_index]
+
+        updated: List[Dict[str, Any]] = []
+        for raw_cell in cells:
+            cell = dict(raw_cell or {})
+            cell_key = selection_axis_key(cell)
+            if not cell_key:
+                cell["axis_sync_status"] = "static"
+                updated.append(cell)
+                continue
+            if cell_key != driver_key:
+                cell["axis_sync_status"] = "incompatible"
+                updated.append(cell)
+                continue
+
+            target_index = selection_axis_index_for_value(cell, selected_value)
+            if target_index is None:
+                cell["axis_sync_status"] = "unavailable"
+                updated.append(cell)
+                continue
+
+            axis = selection_axis_descriptor(cell)
+            axis["index"] = target_index
+            axis["value"] = selected_value
+            cell["selection_axis"] = axis
+            cell["axis_sync_status"] = "synchronized"
+
+            is_axis_selected_generated_plot = (
+                str(cell.get("visualization_name", "") or "")
+                == GENERATED_SCALAR_PLOT_VIS
+                and str(cell.get("media_type", "") or "") == "plot1d"
+                and str(cell.get("plot_axis_key", "") or "") != driver_key
+            )
+            if is_axis_selected_generated_plot:
+                try:
+                    cell = self.regenerate_axis_selected_plot(cell, target_index)
+                    cell["axis_sync_status"] = "synchronized"
+                except Exception as e:
+                    cell["axis_sync_status"] = "error"
+                    cell["note"] = f"Axis synchronization failed: {type(e).__name__}: {e}"
+            elif (
+                is_plugin_visualization(
+                    str(cell.get("visualization_name", "") or "")
+                )
+                and str(cell.get("plot_axis_key", "") or "") != driver_key
+            ):
+                cell["axis_sync_status"] = "unsupported"
+            updated.append(cell)
+
+        self.state.gridCells = self.normalize_grid_cells(updated)
 
     def plugin_candidate(
         self,
@@ -222,11 +482,25 @@ class VisualizationControllerMixin:
             else dict(existing.get("plugin_options", {}) or {})
         )
         options = normalize_plugin_options(schema, raw_options)
-        tile = render_source_plugin_tile(
-            self.campaign_path, plugin, meta, options=options
+        source_fields = dict(meta.get("source_fields", {}) or {})
+        tile = self.execute_plugin_render(
+            plugin_id=plugin,
+            plugin_scope_name="source",
+            variable_id=str(meta.get("variable_id", "") or ""),
+            source_dataset=str(
+                meta.get("source_dataset", "")
+                or source_fields.get("source_dataset", "")
+                or ""
+            ),
+            options=options,
+            renderer=lambda: render_source_plugin_tile(
+                self.campaign_path,
+                plugin,
+                meta,
+                options=options,
+            ),
         )
 
-        source_fields = dict(meta.get("source_fields", {}) or {})
         tile.update({k: v for k, v in source_fields.items() if v})
         source_key = str(source_fields.get("_source_key", "") or "")
         tile["_source_keys"] = [source_key] if source_key else []
@@ -1309,8 +1583,18 @@ class VisualizationControllerMixin:
             else dict((existing_cell or {}).get("plugin_options", {}) or {})
         )
         options = normalize_plugin_options(schema, raw_options)
-        tile = render_plugin_tile(
-            self.campaign_path, plugin_id, candidate, options=options
+        tile = self.execute_plugin_render(
+            plugin_id=plugin_id,
+            plugin_scope_name="variable",
+            variable_id=var_id,
+            source_dataset=str(meta.get("source_dataset", "") or ""),
+            options=options,
+            renderer=lambda: render_plugin_tile(
+                self.campaign_path,
+                plugin_id,
+                candidate,
+                options=options,
+            ),
         )
         label = self.variable_label(var_id)
         source_fields = self.source_fields_for_assignment(
@@ -1373,6 +1657,9 @@ class VisualizationControllerMixin:
             source_fields = {
                 "_source_key": str(existing_cell.get("_source_key", "") or ""),
                 "source_dataset": str(existing_cell.get("source_dataset", "") or ""),
+                "source_collection_id": str(
+                    existing_cell.get("source_collection_id", "") or ""
+                ),
                 "schema_file_group": str(
                     existing_cell.get("schema_file_group", "") or ""
                 ),
@@ -1584,6 +1871,7 @@ class VisualizationControllerMixin:
         label = self.variable_label(variable_id)
         policy = self.normalize_scalar_plot_policy()
         self.state.activeGridCell = cell_index
+        self.set_details_provenance_context(True)
         self.state.selectedVar = variable_id
         self.state.draggedVar = variable_id
 
@@ -1955,6 +2243,17 @@ class VisualizationControllerMixin:
 
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.state.activeGridCell = idx
+        current_cell = dict(self.state.gridCells[idx] or {})
+        self.set_details_provenance_context(True)
+        self.state.selectedVar = var_id
+        self.state.draggedVar = var_id
+        self.update_selected_var_panels(
+            var_id,
+            preferred_source_key=str(current_cell.get("_source_key", "") or ""),
+            include_visualization_provenance=True,
+            preferred_visualization=selected_vis,
+            provenance_tile=current_cell,
+        )
         self.state.pluginOptionsStatus = ""
         self.state.showPluginOptionsModal = False
 

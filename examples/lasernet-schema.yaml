@@ -1,0 +1,75 @@
+schema_version: 1
+name: lasernet
+
+files:
+  laser_runs:
+    role: static
+    pattern: "data/*.bp5"
+
+source_collections:
+  alignment:
+    label: Alignment
+    file: laser_runs
+    pattern: "data/alignment-*.bp5"
+    combine:
+      mode: concatenate
+      axis: shot
+      order_by:
+        variable: data/meshes/shots/run_number/value
+        reduce: first
+      partition_label:
+        variable: data/meshes/shots/run_number/value
+        template: "Run {value}"
+
+  png:
+    label: PNG
+    file: laser_runs
+    pattern: "data/png-*.bp5"
+    combine:
+      mode: concatenate
+      axis: shot
+      order_by:
+        variable: data/meshes/shots/run_number/value
+        reduce: first
+      partition_label:
+        variable: data/meshes/shots/run_number/value
+        template: "Run {value}"
+
+axes:
+  shot:
+    file: laser_runs
+    variable: data/meshes/shots/shot_number/value
+    kind: shot
+    label: Shot number
+    dimension: 0
+
+  trace_time:
+    file: laser_runs
+    variable_template: "{variable_parent}/time"
+    kind: within_shot_time
+    label: Time within shot
+    unit: s
+    dimension: 1
+    layout: per_selection
+
+timeline:
+  default_axis: shot
+
+variable_groups:
+  shot_scalars:
+    file: laser_runs
+    pattern: data/meshes/scalars/*/value
+    display_name_template: "{variable_parent_name}"
+    role: scalar_trace
+    dimension_axes: [shot]
+    plot_x_axis: shot
+    selection_axis: shot
+
+  waveforms:
+    file: laser_runs
+    pattern: data/meshes/traces/*_Trace/signal
+    display_name_template: "{variable_parent_name}"
+    role: waveform
+    dimension_axes: [shot, trace_time]
+    plot_x_axis: trace_time
+    selection_axis: shot

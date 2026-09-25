@@ -101,6 +101,12 @@ class ScalarFieldAxisTests(unittest.TestCase):
                     "visualization_name": "scalar_field",
                     "source_dataset": "run/output.bp",
                     "frame_index": 0,
+                    "visualization_activity_provenance": {
+                        "activity_operation": "scalar_field",
+                        "workflow_plan": {
+                            "label": "MHD scalar-field visualization workflow"
+                        },
+                    },
                     "scalar_field_metadata": {
                         "shape": [4, 6],
                         "grid": {
@@ -130,6 +136,15 @@ class ScalarFieldAxisTests(unittest.TestCase):
         self.assertEqual(len(tiles), 1)
         self.assertEqual(tiles[0]["scalar_field_axes"]["x"]["label"], "R")
         self.assertEqual(tiles[0]["scalar_field_axes"]["y"]["label"], "Z")
+        self.assertEqual(
+            tiles[0]["visualization_activity_provenance"],
+            {
+                "activity_operation": "scalar_field",
+                "workflow_plan": {
+                    "label": "MHD scalar-field visualization workflow"
+                },
+            },
+        )
 
 
 class ScalarFieldRepresentationSummaryTests(unittest.TestCase):

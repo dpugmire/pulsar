@@ -21,6 +21,7 @@ NON_HISTORICAL_ACTIONS = {
     "clear_query",
     "clear_source_filter",
     "close_help_modal",
+    "close_provenance_dialog",
     "close_query_assistant",
     "context_menu_cell_add_source",
     "context_menu_cell_plot_settings",
@@ -31,6 +32,7 @@ NON_HISTORICAL_ACTIONS = {
     "hide_context_menu",
     "load_workspace_state",
     "open_plot_settings_plugin_options",
+    "open_provenance_dialog",
     "open_query_assistant",
     "open_scalar_field_options_assistant",
     "open_source_query_assistant",
@@ -46,6 +48,7 @@ NON_HISTORICAL_ACTIONS = {
     "save_workspace_state_as",
     "select_all_sources",
     "select_var",
+    "set_active_axis_selection",
     "set_canvas_fit_to_view",
     "set_canvas_nudge_others",
     "set_canvas_show_grid",
@@ -57,6 +60,7 @@ NON_HISTORICAL_ACTIONS = {
     "source_dialog_select",
     "toggle_add_source",
     "toggle_movie_details",
+    "toggle_provenance_node_details",
     "toggle_scalar_field_background",
     "toggle_sources",
     "toggle_variable_group",
@@ -87,7 +91,7 @@ NON_HISTORICAL_TRIGGERS = {
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 114,
+            "ACTION_BINDINGS": 118,
             "TRIGGER_BINDINGS": 20,
             "STATE_CHANGE_BINDINGS": 4,
         }

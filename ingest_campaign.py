@@ -48,6 +48,7 @@ def _load_image_association_schema_text(schema_path: Optional[str]) -> tuple[Opt
 _IMAGE_ASSOC_MODES = {"first_match_wins", "all_matches"}
 _IMAGE_ASSOC_UNMATCHED = {"warn", "error", "ignore"}
 _IMAGE_SIZE_SEGMENT_RE = re.compile(r"^\d+x\d+$")
+_ADIOS_DATASET_SEGMENT_RE = re.compile(r"\.bp\d*$", re.IGNORECASE)
 # hpc-campaign writes the visualization API into the ACA SQLite database.
 # All four tables are needed to map an image item back to its source variables.
 _VISUALIZATION_API_TABLES = {
@@ -308,24 +309,187 @@ def _schema_file_group_reference(
 def _interpret_schema_axes(
     raw_axes: Any,
     file_groups: Dict[str, Dict[str, Any]],
-) -> Dict[str, Dict[str, str]]:
-    axes: Dict[str, Dict[str, str]] = {}
+) -> Dict[str, Dict[str, Any]]:
+    axes: Dict[str, Dict[str, Any]] = {}
     for raw_name, raw_axis in _schema_optional_mapping(raw_axes, "axes").items():
         name = _schema_nonempty_string(raw_name, "axes name")
         axis = _schema_mapping(raw_axis, f"axes.{name}")
-        axes[name] = {
+        has_variable = "variable" in axis
+        has_template = "variable_template" in axis
+        if has_variable == has_template:
+            raise ValueError(
+                f"axes.{name} requires exactly one of variable or variable_template"
+            )
+
+        normalized: Dict[str, Any] = {
             "file": _schema_file_group_reference(
                 axis.get("file"),
                 f"axes.{name}.file",
                 file_groups,
             ),
-            "variable": _schema_nonempty_string(
-                axis.get("variable"),
-                f"axes.{name}.variable",
-            ),
             "kind": _schema_nonempty_string(axis.get("kind"), f"axes.{name}.kind"),
         }
+        variable_key = "variable" if has_variable else "variable_template"
+        normalized[variable_key] = _schema_nonempty_string(
+            axis.get(variable_key),
+            f"axes.{name}.{variable_key}",
+        )
+
+        for key in ("label", "unit"):
+            if key in axis:
+                normalized[key] = _schema_nonempty_string(
+                    axis.get(key),
+                    f"axes.{name}.{key}",
+                )
+
+        if "dimension" in axis:
+            dimension = axis.get("dimension")
+            if isinstance(dimension, bool):
+                raise ValueError(f"axes.{name}.dimension must be a non-negative integer")
+            try:
+                dimension = int(dimension)
+            except Exception as e:
+                raise ValueError(
+                    f"axes.{name}.dimension must be a non-negative integer"
+                ) from e
+            if dimension < 0:
+                raise ValueError(f"axes.{name}.dimension must be a non-negative integer")
+            normalized["dimension"] = dimension
+
+        layout = str(axis.get("layout", "shared") or "shared").strip().lower()
+        if layout not in {"shared", "per_selection"}:
+            raise ValueError(
+                f"axes.{name}.layout must be 'shared' or 'per_selection'"
+            )
+        normalized["layout"] = layout
+        axes[name] = normalized
     return axes
+
+
+def _interpret_schema_source_collections(
+    raw_collections: Any,
+    file_groups: Dict[str, Dict[str, Any]],
+    axes: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    collections: Dict[str, Dict[str, Any]] = {}
+    claimed_datasets: Dict[tuple[str, str], str] = {}
+    for raw_name, raw_collection in _schema_optional_mapping(
+        raw_collections,
+        "source_collections",
+    ).items():
+        name = _schema_nonempty_string(raw_name, "source_collections name")
+        field_name = f"source_collections.{name}"
+        collection = _schema_mapping(raw_collection, field_name)
+        file_group = _schema_file_group_reference(
+            collection.get("file"),
+            f"{field_name}.file",
+            file_groups,
+        )
+        pattern = _schema_nonempty_string(
+            collection.get("pattern"),
+            f"{field_name}.pattern",
+        )
+        combine = _schema_mapping(
+            collection.get("combine"),
+            f"{field_name}.combine",
+        )
+        mode = _schema_nonempty_string(
+            combine.get("mode"),
+            f"{field_name}.combine.mode",
+        ).lower()
+        if mode != "concatenate":
+            raise ValueError(
+                f"{field_name}.combine.mode must be 'concatenate'"
+            )
+        axis_name = _schema_axis_reference(
+            combine.get("axis"),
+            f"{field_name}.combine.axis",
+            file_group,
+            axes,
+        )
+        if "variable" not in axes[axis_name]:
+            raise ValueError(
+                f"{field_name}.combine.axis must reference an axis with a "
+                "fixed variable"
+            )
+
+        order_by = _schema_mapping(
+            combine.get("order_by"),
+            f"{field_name}.combine.order_by",
+        )
+        order_variable = _schema_nonempty_string(
+            order_by.get("variable"),
+            f"{field_name}.combine.order_by.variable",
+        ).strip("/")
+        order_reduce = str(order_by.get("reduce", "first") or "first").strip().lower()
+        if order_reduce != "first":
+            raise ValueError(
+                f"{field_name}.combine.order_by.reduce must be 'first'"
+            )
+
+        partition_label: Dict[str, str] = {}
+        if "partition_label" in combine:
+            label_spec = _schema_mapping(
+                combine.get("partition_label"),
+                f"{field_name}.combine.partition_label",
+            )
+            label_variable = _schema_nonempty_string(
+                label_spec.get("variable"),
+                f"{field_name}.combine.partition_label.variable",
+            ).strip("/")
+            label_template = _schema_nonempty_string(
+                label_spec.get("template"),
+                f"{field_name}.combine.partition_label.template",
+            )
+            try:
+                label_template.format(value="example")
+            except (KeyError, ValueError) as e:
+                raise ValueError(
+                    f"Invalid {field_name}.combine.partition_label.template "
+                    f"{label_template!r}: {e}"
+                ) from e
+            partition_label = {
+                "variable": label_variable,
+                "template": label_template,
+            }
+
+        group_datasets = [
+            str(dataset)
+            for dataset in (file_groups[file_group].get("datasets", []) or [])
+        ]
+        datasets = sorted(
+            dataset for dataset in group_datasets if fnmatch.fnmatch(dataset, pattern)
+        )
+        for dataset in datasets:
+            claim_key = (file_group, dataset)
+            previous = claimed_datasets.get(claim_key)
+            if previous is not None:
+                raise ValueError(
+                    f"{field_name}.pattern overlaps source collection "
+                    f"{previous!r} for dataset {dataset!r}"
+                )
+            claimed_datasets[claim_key] = name
+
+        collections[name] = {
+            "label": str(collection.get("label", "") or name).strip() or name,
+            "file": file_group,
+            "pattern": pattern,
+            "datasets": datasets,
+            "combine": {
+                "mode": mode,
+                "axis": axis_name,
+                "order_by": {
+                    "variable": order_variable,
+                    "reduce": order_reduce,
+                },
+                **(
+                    {"partition_label": partition_label}
+                    if partition_label
+                    else {}
+                ),
+            },
+        }
+    return collections
 
 
 def _schema_string_list(value: Any, field_name: str) -> List[str]:
@@ -439,7 +603,7 @@ def _schema_axis_reference(
     value: Any,
     field_name: str,
     group_file: str,
-    axes: Dict[str, Dict[str, str]],
+    axes: Dict[str, Dict[str, Any]],
 ) -> str:
     name = _schema_named_reference(value, field_name, axes)
     if axes[name]["file"] != group_file:
@@ -452,7 +616,7 @@ def _schema_axis_reference(
 def _interpret_schema_variable_groups(
     raw_groups: Any,
     file_groups: Dict[str, Dict[str, Any]],
-    axes: Dict[str, Dict[str, str]],
+    axes: Dict[str, Dict[str, Any]],
     meshes: Dict[str, Dict[str, Any]],
     basis: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
@@ -491,6 +655,19 @@ def _interpret_schema_variable_groups(
                 f"variable_groups.{name}.data_model",
             )
 
+        if "display_name_template" in group:
+            field_name = f"variable_groups.{name}.display_name_template"
+            display_name_template = _schema_nonempty_string(
+                group.get("display_name_template"),
+                field_name,
+            )
+            _schema_display_name_for_variable(
+                display_name_template,
+                "example/variable",
+                field_name,
+            )
+            normalized["display_name_template"] = display_name_template
+
         for key, targets in (("mesh", meshes), ("basis", basis)):
             if key not in group:
                 continue
@@ -515,12 +692,57 @@ def _interpret_schema_variable_groups(
                     axes,
                 )
 
+        if "dimension_axes" in group:
+            dimension_axes = _schema_string_list(
+                group.get("dimension_axes"),
+                f"variable_groups.{name}.dimension_axes",
+            )
+            if len(set(dimension_axes)) != len(dimension_axes):
+                raise ValueError(
+                    f"variable_groups.{name}.dimension_axes must not contain duplicates"
+                )
+            normalized["dimension_axes"] = [
+                _schema_axis_reference(
+                    axis_name,
+                    f"variable_groups.{name}.dimension_axes",
+                    file_group,
+                    axes,
+                )
+                for axis_name in dimension_axes
+            ]
+
+        for key in ("plot_x_axis", "selection_axis"):
+            if key in group:
+                normalized[key] = _schema_axis_reference(
+                    group.get(key),
+                    f"variable_groups.{name}.{key}",
+                    file_group,
+                    axes,
+                )
+
+        declared_dimensions = set(normalized.get("dimension_axes", []))
+        if declared_dimensions:
+            for key in ("plot_x_axis", "selection_axis"):
+                axis_name = normalized.get(key)
+                if axis_name and axis_name not in declared_dimensions:
+                    raise ValueError(
+                        f"variable_groups.{name}.{key} must appear in dimension_axes"
+                    )
+
         if "static" in group:
             if not isinstance(group.get("static"), bool):
                 raise ValueError(f"variable_groups.{name}.static must be a boolean")
             normalized["static"] = bool(group.get("static"))
         if normalized.get("static") and any(
-            key in normalized for key in ("time_axis", "x_axis", "timestep_axis")
+            key in normalized
+            for key in (
+                "time_axis",
+                "x_axis",
+                "timestep_axis",
+                "plot_x_axis",
+                "selection_axis",
+                "dimension_axes",
+            )
         ):
             raise ValueError(
                 f"variable_groups.{name} is static and cannot reference an axis"
@@ -531,11 +753,15 @@ def _interpret_schema_variable_groups(
 
 
 def _schema_declared_exact_variables(
-    axes: Dict[str, Dict[str, str]],
+    axes: Dict[str, Dict[str, Any]],
     meshes: Dict[str, Dict[str, Any]],
     basis: Dict[str, Dict[str, Any]],
 ) -> set[str]:
-    variables = {axis["variable"] for axis in axes.values()}
+    variables = {
+        str(axis["variable"])
+        for axis in axes.values()
+        if "variable" in axis
+    }
     variables.update(mesh["variable"] for mesh in meshes.values())
     for spec in basis.values():
         variables.update(str(variable) for variable in spec["variables"].values())
@@ -635,6 +861,25 @@ def _interpret_schema_optional_metadata(
     axes = _interpret_schema_axes(schema.get("axes"), file_groups)
     if "axes" in schema:
         result["axes"] = axes
+
+    source_collections = _interpret_schema_source_collections(
+        schema.get("source_collections"),
+        file_groups,
+        axes,
+    )
+    if "source_collections" in schema:
+        result["source_collections"] = source_collections
+
+    if "timeline" in schema:
+        timeline = _schema_mapping(schema.get("timeline"), "timeline")
+        normalized_timeline: Dict[str, Any] = {}
+        if "default_axis" in timeline:
+            normalized_timeline["default_axis"] = _schema_named_reference(
+                timeline.get("default_axis"),
+                "timeline.default_axis",
+                axes,
+            )
+        result["timeline"] = normalized_timeline
 
     meshes = _interpret_schema_meshes(schema.get("meshes"), file_groups)
     if "meshes" in schema:
@@ -768,6 +1013,18 @@ def _prefix_schema_layout_datasets(prefix: str, layout: Dict[str, Any]) -> Dict[
         ]
         file_groups[str(group_name)] = prefixed_group
     prefixed["file_groups"] = file_groups
+    source_collections: Dict[str, Dict[str, Any]] = {}
+    for collection_name, collection in (
+        layout.get("source_collections", {}) or {}
+    ).items():
+        prefixed_collection = dict(collection)
+        prefixed_collection["datasets"] = [
+            f"{prefix}/{dataset}"
+            for dataset in collection.get("datasets", []) or []
+        ]
+        source_collections[str(collection_name)] = prefixed_collection
+    if source_collections:
+        prefixed["source_collections"] = source_collections
     return prefixed
 
 
@@ -800,6 +1057,18 @@ def _merge_scoped_schema_layouts(
         "file_groups": file_groups,
     }
     layout.update(_interpret_schema_optional_metadata(schema, file_groups))
+    merged_collections = layout.get("source_collections", {}) or {}
+    for collection_name, collection in merged_collections.items():
+        collection["datasets"] = [
+            dataset
+            for scoped_layout in layouts
+            for dataset in (
+                (scoped_layout.get("source_collections", {}) or {})
+                .get(collection_name, {})
+                .get("datasets", [])
+                or []
+            )
+        ]
     return layout
 
 
@@ -977,6 +1246,167 @@ def _read_numeric_array(fr: FileReader, varpath: str, varinfo: Optional[Dict[str
     return values
 
 
+def _schema_variable_shape(varinfo: Any) -> List[int]:
+    if not isinstance(varinfo, dict):
+        return []
+    raw_shape = varinfo.get("Shape", varinfo.get("shape", ""))
+    if isinstance(raw_shape, (list, tuple)):
+        parts = list(raw_shape)
+    else:
+        text = str(raw_shape or "").strip().strip("[](){}")
+        parts = [part.strip() for part in text.replace("x", ",").split(",")]
+    shape: List[int] = []
+    for part in parts:
+        if part in (None, ""):
+            continue
+        try:
+            value = int(part)
+        except Exception:
+            return []
+        if value < 0:
+            return []
+        shape.append(value)
+    return shape
+
+
+def _schema_axis_variable_for_data(axis: Dict[str, Any], data_variable: str) -> str:
+    if "variable" in axis:
+        return str(axis.get("variable", "") or "").strip("/")
+
+    variable = str(data_variable or "").strip("/")
+    parent, _, name = variable.rpartition("/")
+    template = str(axis.get("variable_template", "") or "")
+    try:
+        resolved = template.format(
+            variable=variable,
+            variable_parent=parent,
+            variable_name=name,
+        )
+    except (KeyError, ValueError) as e:
+        raise ValueError(
+            f"Invalid axis variable_template {template!r}: {e}"
+        ) from e
+    return _schema_nonempty_string(resolved, "axis variable_template result").strip("/")
+
+
+def _schema_display_name_for_variable(
+    template: str,
+    data_variable: str,
+    field_name: str = "display_name_template",
+) -> str:
+    variable = str(data_variable or "").strip("/")
+    parent, _, name = variable.rpartition("/")
+    parent_name = parent.rsplit("/", 1)[-1] if parent else ""
+    try:
+        resolved = template.format(
+            variable=variable,
+            variable_parent=parent,
+            variable_parent_name=parent_name,
+            variable_name=name,
+        )
+    except (KeyError, ValueError) as e:
+        raise ValueError(f"Invalid {field_name} {template!r}: {e}") from e
+    return _schema_nonempty_string(resolved, f"{field_name} result")
+
+
+def _schema_axis_label(axis_name: str, axis: Dict[str, Any]) -> str:
+    label = str(axis.get("label", "") or "").strip()
+    if label:
+        return label
+    kind = str(axis.get("kind", "") or "").strip().lower()
+    if kind == "time":
+        return "Time"
+    if kind == "timestep_index":
+        return "Timestep"
+    return str(axis_name or "axis").replace("_", " ").strip().title()
+
+
+def _schema_scalar_label(value: float) -> str:
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}"
+
+
+def _schema_axis_descriptor(
+    context: Dict[str, Any],
+    fr: FileReader,
+    vars_dict: Dict[str, Any],
+    dataset: str,
+    data_variable: str,
+    axis_name: str,
+    include_values: bool = False,
+) -> Dict[str, Any]:
+    axis = dict(context["axes"][axis_name])
+    coordinate_variable = _schema_axis_variable_for_data(axis, data_variable)
+    path = _schema_required_variable_path(
+        vars_dict,
+        dataset,
+        coordinate_variable,
+        f"axes.{axis_name}",
+    )
+    shape = _schema_variable_shape(vars_dict.get(path))
+    collection = dict(
+        context.get("dataset_collections", {}).get(dataset, {}) or {}
+    )
+    axis_key_group = str(axis.get("file", "") or "")
+    if collection and str(collection.get("source_collection_axis", "") or "") == axis_name:
+        axis_key_group = str(collection.get("source_collection_id", "") or axis_key_group)
+    descriptor: Dict[str, Any] = {
+        "id": str(axis_name),
+        "key": ":".join(
+            part
+            for part in (
+                str(context.get("schema_name", "") or ""),
+                axis_key_group,
+                str(axis_name),
+            )
+            if part
+        ),
+        "kind": str(axis.get("kind", "") or ""),
+        "label": _schema_axis_label(axis_name, axis),
+        "unit": str(axis.get("unit", "") or ""),
+        "layout": str(axis.get("layout", "shared") or "shared"),
+        "variable": coordinate_variable,
+        "variable_path": path,
+        "shape": shape,
+    }
+    if "dimension" in axis:
+        descriptor["dimension"] = int(axis["dimension"])
+    if collection and str(collection.get("source_collection_axis", "") or "") == axis_name:
+        descriptor.update(
+            {
+                "source_collection_id": str(
+                    collection.get("source_collection_id", "") or ""
+                ),
+                "collection_offset": int(
+                    collection.get("source_collection_offset", 0) or 0
+                ),
+                "collection_length": int(
+                    collection.get("source_collection_length", 0) or 0
+                ),
+                "collection_total_length": int(
+                    collection.get("source_collection_total_length", 0) or 0
+                ),
+            }
+        )
+    if include_values:
+        if len(shape) > 1:
+            raise ValueError(
+                f"Selection axis {axis_name!r} must be one-dimensional; "
+                f"coordinate {path!r} has shape {shape}"
+            )
+        descriptor["values"] = _schema_axis_values(
+            context,
+            fr,
+            vars_dict,
+            dataset,
+            axis_name,
+            data_variable=data_variable,
+        )
+    return descriptor
+
+
 def _schema_dataset_variables(
     vars_dict: Dict[str, Any],
     dataset: str,
@@ -1012,14 +1442,15 @@ def _schema_axis_values(
     vars_dict: Dict[str, Any],
     dataset: str,
     axis_name: str,
+    data_variable: str = "",
 ) -> List[float]:
-    cache_key = f"{dataset}\0{axis_name}"
+    axis = context["axes"][axis_name]
+    variable = _schema_axis_variable_for_data(axis, data_variable)
+    cache_key = f"{dataset}\0{axis_name}\0{variable}"
     cached = context["axis_values"].get(cache_key)
     if isinstance(cached, list):
         return list(cached)
 
-    axis = context["axes"][axis_name]
-    variable = str(axis.get("variable", "") or "")
     path = _schema_required_variable_path(
         vars_dict,
         dataset,
@@ -1043,6 +1474,8 @@ def _validate_schema_resource_variables(
 ) -> None:
     resources: List[tuple[str, str, List[str]]] = []
     for name, axis in context["axes"].items():
+        if "variable" not in axis:
+            continue
         resources.append(
             (
                 f"axes.{name}",
@@ -1132,6 +1565,15 @@ def _build_schema_variable_context(
                     "role": str(group.get("role", "") or ""),
                     "static": bool(group.get("static", False)),
                 }
+                display_name_template = str(
+                    group.get("display_name_template", "") or ""
+                )
+                if display_name_template:
+                    metadata["display_name"] = _schema_display_name_for_variable(
+                        display_name_template,
+                        variable,
+                        f"variable_groups.{group_name}.display_name_template",
+                    )
                 for key in (
                     "data_model",
                     "mesh",
@@ -1139,9 +1581,81 @@ def _build_schema_variable_context(
                     "time_axis",
                     "x_axis",
                     "timestep_axis",
+                    "dimension_axes",
+                    "plot_x_axis",
+                    "selection_axis",
                 ):
                     if key in group:
                         metadata[key] = group[key]
+
+                variable_path = f"{dataset}/{variable}"
+                variable_shape = _schema_variable_shape(vars_dict.get(variable_path))
+                dimension_axes = list(group.get("dimension_axes", []) or [])
+                if variable_shape and dimension_axes and len(variable_shape) != len(
+                    dimension_axes
+                ):
+                    raise ValueError(
+                        f"variable_groups.{group_name}.dimension_axes has "
+                        f"{len(dimension_axes)} entries but {variable_path!r} has "
+                        f"shape {variable_shape}"
+                    )
+                for dimension, axis_name in enumerate(dimension_axes):
+                    axis_dimension = context["axes"][axis_name].get("dimension")
+                    if axis_dimension is not None and int(axis_dimension) != dimension:
+                        raise ValueError(
+                            f"axes.{axis_name}.dimension={axis_dimension} does not "
+                            f"match its position {dimension} in "
+                            f"variable_groups.{group_name}.dimension_axes"
+                        )
+
+                plot_axis_name = str(
+                    group.get("plot_x_axis", group.get("x_axis", "")) or ""
+                )
+                selection_axis_name = str(
+                    group.get(
+                        "selection_axis",
+                        group.get("time_axis", plot_axis_name),
+                    )
+                    or ""
+                )
+                referenced_axes: List[str] = []
+                for axis_name in (
+                    *dimension_axes,
+                    plot_axis_name,
+                    selection_axis_name,
+                ):
+                    if axis_name and axis_name not in referenced_axes:
+                        referenced_axes.append(axis_name)
+
+                axis_descriptors: Dict[str, Dict[str, Any]] = {}
+                for axis_name in referenced_axes:
+                    axis = context["axes"][axis_name]
+                    include_axis_values = axis_name == selection_axis_name or (
+                        axis_name == plot_axis_name
+                        and str(axis.get("layout", "shared") or "shared") == "shared"
+                    )
+                    axis_descriptors[axis_name] = _schema_axis_descriptor(
+                        context,
+                        fr,
+                        vars_dict,
+                        dataset,
+                        variable,
+                        axis_name,
+                        include_values=include_axis_values,
+                    )
+                if axis_descriptors:
+                    metadata["axes"] = axis_descriptors
+                if dimension_axes:
+                    metadata["dimension_axes"] = dimension_axes
+                if plot_axis_name:
+                    metadata["plot_x_axis"] = plot_axis_name
+                if selection_axis_name:
+                    metadata["selection_axis"] = selection_axis_name
+                default_axis = str(
+                    context.get("timeline", {}).get("default_axis", "") or ""
+                )
+                if default_axis:
+                    metadata["schema_default_axis"] = default_axis
 
                 time_axis_name = str(
                     group.get("time_axis", group.get("x_axis", "")) or ""
@@ -1237,7 +1751,11 @@ def _build_schema_time_context(
         "group_step_metadata": {},
         "group_frame_metadata": {},
         "file_groups": schema_layout.get("file_groups", {}) or {},
+        "source_collections": schema_layout.get("source_collections", {}) or {},
+        "dataset_collections": {},
+        "source_collection_members": {},
         "axes": schema_layout.get("axes", {}) or {},
+        "timeline": schema_layout.get("timeline", {}) or {},
         "meshes": schema_layout.get("meshes", {}) or {},
         "basis": schema_layout.get("basis", {}) or {},
         "variable_groups": schema_layout.get("variable_groups", {}) or {},
@@ -1368,6 +1886,134 @@ def _build_schema_time_context(
             context["group_frame_metadata"].setdefault(str(group_name), {})[index] = metadata
             if isinstance(step_index, int):
                 context["group_step_metadata"].setdefault(str(group_name), {})[step_index] = metadata
+
+    for collection_name, collection in context["source_collections"].items():
+        combine = dict(collection.get("combine", {}) or {})
+        axis_name = str(combine.get("axis", "") or "")
+        order_by = dict(combine.get("order_by", {}) or {})
+        order_variable = str(order_by.get("variable", "") or "").strip("/")
+        partition_spec = dict(combine.get("partition_label", {}) or {})
+        partition_variable = str(
+            partition_spec.get("variable", "") or ""
+        ).strip("/")
+        partition_template = str(
+            partition_spec.get("template", "{value}") or "{value}"
+        )
+        members: List[Dict[str, Any]] = []
+
+        for dataset in collection.get("datasets", []) or []:
+            dataset_name = str(dataset)
+            axis_values = _schema_axis_values(
+                context,
+                fr,
+                vars_dict or {},
+                dataset_name,
+                axis_name,
+            )
+            if not axis_values:
+                raise ValueError(
+                    f"source_collections.{collection_name} axis could not be read "
+                    f"for dataset {dataset_name!r}"
+                )
+
+            order_path = _schema_required_variable_path(
+                vars_dict or {},
+                dataset_name,
+                order_variable,
+                f"source_collections.{collection_name}.combine.order_by.variable",
+            )
+            order_values = _read_numeric_array(
+                fr,
+                order_path,
+                (vars_dict or {}).get(order_path),
+            )
+            if not order_values:
+                raise ValueError(
+                    f"source_collections.{collection_name} ordering variable "
+                    f"could not be read for dataset {dataset_name!r}"
+                )
+            order_value = float(order_values[0])
+
+            partition_value = order_value
+            if partition_variable:
+                if partition_variable == order_variable:
+                    partition_values = order_values
+                else:
+                    partition_path = _schema_required_variable_path(
+                        vars_dict or {},
+                        dataset_name,
+                        partition_variable,
+                        f"source_collections.{collection_name}.combine.partition_label.variable",
+                    )
+                    partition_values = _read_numeric_array(
+                        fr,
+                        partition_path,
+                        (vars_dict or {}).get(partition_path),
+                    )
+                if not partition_values:
+                    raise ValueError(
+                        f"source_collections.{collection_name} partition label "
+                        f"variable could not be read for dataset {dataset_name!r}"
+                    )
+                partition_value = float(partition_values[0])
+
+            members.append(
+                {
+                    "source_dataset": dataset_name,
+                    "length": len(axis_values),
+                    "order_value": order_value,
+                    "partition_value": partition_value,
+                    "partition_label": partition_template.format(
+                        value=_schema_scalar_label(partition_value)
+                    ),
+                }
+            )
+
+        members.sort(
+            key=lambda item: (
+                float(item.get("order_value", 0.0) or 0.0),
+                str(item.get("source_dataset", "") or ""),
+            )
+        )
+        offset = 0
+        for member_index, member in enumerate(members):
+            member["member_index"] = member_index
+            member["offset"] = offset
+            offset += int(member.get("length", 0) or 0)
+
+        total_length = offset
+        member_count = len(members)
+        public_members = [dict(member) for member in members]
+        context["source_collection_members"][str(collection_name)] = public_members
+        for member in members:
+            dataset_name = str(member.get("source_dataset", "") or "")
+            collection_metadata = {
+                "source_collection_id": str(collection_name),
+                "source_collection_label": str(
+                    collection.get("label", "") or collection_name
+                ),
+                "source_collection_mode": str(
+                    combine.get("mode", "") or ""
+                ),
+                "source_collection_axis": axis_name,
+                "source_collection_member_index": int(
+                    member.get("member_index", 0) or 0
+                ),
+                "source_collection_member_count": member_count,
+                "source_collection_offset": int(member.get("offset", 0) or 0),
+                "source_collection_length": int(member.get("length", 0) or 0),
+                "source_collection_total_length": total_length,
+                "source_collection_partition_value": float(
+                    member.get("partition_value", 0.0) or 0.0
+                ),
+                "source_collection_partition_label": str(
+                    member.get("partition_label", "") or ""
+                ),
+            }
+            context["dataset_collections"][dataset_name] = collection_metadata
+            context["dataset_metadata"].setdefault(dataset_name, {}).update(
+                collection_metadata
+            )
 
     if vars_dict:
         _build_schema_variable_context(
@@ -2348,6 +2994,470 @@ def _load_unified_representation_index(
         con.close()
 
 
+def _normalize_activity_inputs(inputs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+    for spec in inputs:
+        name = str(spec.get("name", "") or "").strip()
+        if not name:
+            continue
+        source_dataset = str(spec.get("source_dataset", "") or "").strip()
+        key = (name, source_dataset)
+        entry = grouped.setdefault(
+            key,
+            {
+                "name": name,
+                "source_dataset": source_dataset,
+                "definition": str(spec.get("definition", "") or ""),
+                "roles": [],
+            },
+        )
+        role = str(spec.get("role", "") or "source").strip().lower()
+        if role and role not in entry["roles"]:
+            entry["roles"].append(role)
+
+    normalized = list(grouped.values())
+    for entry in normalized:
+        entry["roles"].sort(key=_role_sort_key)
+    normalized.sort(
+        key=lambda entry: (
+            min((_role_sort_key(role)[0] for role in entry.get("roles", [])), default=50),
+            str(entry.get("name", "")),
+            str(entry.get("source_dataset", "")),
+        )
+    )
+    return normalized
+
+
+def _prov_reference(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("$", "")
+    return str(value or "").strip()
+
+
+def _prov_qname(value: Any) -> str:
+    text = _prov_reference(value)
+    if ":" in text:
+        return text.rsplit(":", 1)[-1]
+    return text
+
+
+def _prov_type_values(attrs: Dict[str, Any]) -> List[Any]:
+    raw = attrs.get("prov:type")
+    if isinstance(raw, list):
+        return raw
+    if raw is None:
+        return []
+    return [raw]
+
+
+def _prov_has_type(attrs: Dict[str, Any], name: str) -> bool:
+    target = str(name or "").casefold()
+    return any(_prov_qname(value).casefold() == target for value in _prov_type_values(attrs))
+
+
+def _prov_activity_kind(attrs: Dict[str, Any]) -> str:
+    if _prov_has_type(attrs, "QuantityOfInterest"):
+        return "quantity_of_interest"
+    if _prov_has_type(attrs, "Visualization"):
+        return "visualization"
+    for value in _prov_type_values(attrs):
+        name = _prov_qname(value)
+        if name:
+            return name
+    return ""
+
+
+def _prov_action_metadata(
+    entities: Dict[str, Any],
+    usages: Dict[str, Any],
+    activity_id: str,
+) -> Dict[str, Any]:
+    for usage in usages.values():
+        if _prov_reference(usage.get("prov:activity")) != activity_id:
+            continue
+        if _prov_qname(usage.get("prov:role")).casefold() != "action_specification":
+            continue
+        plan = entities.get(_prov_reference(usage.get("prov:entity")), {})
+        if not isinstance(plan, dict):
+            continue
+        return _json_object_or_empty(plan.get("prov:value", ""))
+    return {}
+
+
+def _prov_activity_operation(metadata: Dict[str, Any]) -> str:
+    return str(
+        metadata.get("operation", "")
+        or metadata.get("visualization_type", "")
+        or metadata.get("representation_kind", "")
+        or metadata.get("kind", "")
+        or ""
+    ).strip()
+
+
+def _prov_activity_uuid(activity_id: str) -> str:
+    text = _prov_reference(activity_id)
+    if "activity_" in text:
+        return text.rsplit("activity_", 1)[-1]
+    return text
+
+
+def _prov_workflow_context(
+    entities: Dict[str, Any],
+    agents: Dict[str, Any],
+    associations: Dict[str, Any],
+    activity_id: str,
+) -> Dict[str, Any]:
+    """Return the Plan and Agent associated with one PROV Activity."""
+
+    context: Dict[str, Any] = {}
+    for association in associations.values():
+        if not isinstance(association, dict):
+            continue
+        if _prov_reference(association.get("prov:activity")) != activity_id:
+            continue
+
+        plan_id = _prov_reference(association.get("prov:plan"))
+        plan = entities.get(plan_id, {})
+        if (
+            "workflow_plan" not in context
+            and plan_id
+            and isinstance(plan, dict)
+            and _prov_has_type(plan, "Plan")
+        ):
+            context["workflow_plan"] = {
+                "id": plan_id,
+                "label": str(plan.get("prov:label", "") or ""),
+                "location": _prov_reference(plan.get("prov:location", "")),
+                "details": _json_object_or_empty(plan.get("prov:value", "")),
+            }
+
+        agent_id = _prov_reference(association.get("prov:agent"))
+        agent = agents.get(agent_id, {})
+        if (
+            "activity_agent" not in context
+            and agent_id
+            and isinstance(agent, dict)
+        ):
+            agent_types = [
+                _prov_qname(value)
+                for value in _prov_type_values(agent)
+                if _prov_qname(value)
+            ]
+            context["activity_agent"] = {
+                "id": agent_id,
+                "label": str(agent.get("prov:label", "") or ""),
+                "type": agent_types[0] if agent_types else "",
+                "version": str(agent.get("hpc:version", "") or ""),
+            }
+    return context
+
+
+def _read_text_json_dataset(
+    con: sqlite3.Connection,
+    dataset_name: str,
+) -> Dict[str, Any]:
+    """Read one unencrypted ACA TEXT dataset as a JSON object."""
+
+    name = str(dataset_name or "").strip("/")
+    if not name or not _CAMPAIGN_SCHEMA_TABLES.issubset(_sqlite_table_names(con)):
+        return {}
+    row = con.execute(
+        """
+        select
+            r.keyid as keyid,
+            f.compression as compression,
+            f.data as data
+        from dataset as d
+        join replica as r on r.datasetid = d.rowid
+        join repfiles as rf on rf.replicaid = r.rowid
+        join file as f on f.fileid = rf.fileid
+        where d.name = ? and d.fileformat = 'TEXT'
+          and d.deltime = 0 and r.deltime = 0
+        order by r.rowid desc, f.fileid desc
+        limit 1
+        """,
+        (name,),
+    ).fetchone()
+    if row is None or int(row["keyid"] or 0) > 0:
+        return {}
+    data = bytes(row["data"])
+    if int(row["compression"] or 0):
+        data = zlib.decompress(data)
+    return _json_object_or_empty(data.decode("utf-8", errors="replace"))
+
+
+def _prov_visualization_sequence(
+    con: sqlite3.Connection,
+    output_dataset: str,
+    metadata: Dict[str, Any],
+) -> str:
+    """Resolve a visualization sequence through its embedded manifest."""
+
+    sequence_name = str(
+        metadata.get("visualization_sequence", "")
+        or metadata.get("sequence_name", "")
+        or ""
+    ).strip()
+    if sequence_name:
+        return sequence_name
+    manifest_name = str(
+        metadata.get("sequence_manifest", "") or output_dataset or ""
+    ).strip("/")
+    if not manifest_name:
+        return ""
+    try:
+        manifest = _read_text_json_dataset(con, manifest_name)
+    except (sqlite3.Error, OSError, ValueError, zlib.error):
+        return ""
+    return str(manifest.get("sequence_name", "") or "").strip()
+
+
+def _load_prov_json_activity_provenance_index(
+    con: sqlite3.Connection,
+) -> Dict[tuple[str, str], Dict[str, Any]]:
+    """Load compact activity provenance from ACA PROV-JSON documents."""
+
+    if "provenance_document" not in _sqlite_table_names(con):
+        return {}
+
+    rows = con.execute(
+        """
+        select content
+        from provenance_document
+        where format = 'prov-json' and active = 1
+        order by name
+        """
+    ).fetchall()
+
+    grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+    for row in rows:
+        try:
+            document = json.loads(str(row["content"] or ""))
+        except Exception:
+            continue
+        if not isinstance(document, dict):
+            continue
+
+        entities = document.get("entity", {})
+        activities = document.get("activity", {})
+        agents = document.get("agent", {})
+        usages = document.get("used", {})
+        derivations = document.get("wasDerivedFrom", {})
+        associations = document.get("wasAssociatedWith", {})
+        if not all(
+            isinstance(value, dict)
+            for value in (
+                entities,
+                activities,
+                agents,
+                usages,
+                derivations,
+                associations,
+            )
+        ):
+            continue
+
+        for derivation in derivations.values():
+            if not isinstance(derivation, dict):
+                continue
+            output_id = _prov_reference(derivation.get("prov:generatedEntity"))
+            input_id = _prov_reference(derivation.get("prov:usedEntity"))
+            activity_id = _prov_reference(derivation.get("prov:activity"))
+            output = entities.get(output_id, {})
+            source = entities.get(input_id, {})
+            activity = activities.get(activity_id, {})
+            if not all(isinstance(value, dict) for value in (output, source, activity)):
+                continue
+            if not _prov_has_type(output, "LogicalVariable"):
+                continue
+
+            output_dataset = str(output.get("hpc:datasetName", "") or "").strip("/")
+            output_variable = str(output.get("hpc:variable", "") or "").strip("/")
+            if not output_dataset or not output_variable:
+                continue
+
+            metadata = _prov_action_metadata(entities, usages, activity_id)
+            activity_kind = _prov_activity_kind(activity)
+            key = (output_dataset, output_variable)
+            entry = grouped.setdefault(
+                key,
+                {
+                    "activity_uuid": _prov_activity_uuid(activity_id),
+                    "activity_kind": activity_kind,
+                    "activity_operation": _prov_activity_operation(metadata),
+                    "activity_metadata": metadata,
+                    "output_role": "",
+                    "output_definition": str(
+                        output.get("hpc:variableDefinition", "") or ""
+                    ),
+                    "inputs": [],
+                },
+            )
+            entry.update(
+                {
+                    field: value
+                    for field, value in _prov_workflow_context(
+                        entities,
+                        agents,
+                        associations,
+                        activity_id,
+                    ).items()
+                    if value
+                }
+            )
+            if activity_kind == "visualization":
+                sequence_name = _prov_visualization_sequence(
+                    con,
+                    output_dataset,
+                    metadata,
+                )
+                if sequence_name:
+                    entry["visualization_sequence"] = sequence_name
+
+            source_variable = str(source.get("hpc:variable", "") or "").strip()
+            if not source_variable:
+                continue
+            usage = usages.get(_prov_reference(derivation.get("prov:usage")), {})
+            input_spec = {
+                "name": source_variable,
+                "definition": str(source.get("hpc:variableDefinition", "") or ""),
+                "role": (
+                    _prov_qname(usage.get("prov:role"))
+                    if isinstance(usage, dict)
+                    else "source"
+                ),
+                "source_dataset": str(source.get("hpc:datasetName", "") or ""),
+            }
+            if input_spec not in entry["inputs"]:
+                entry["inputs"].append(input_spec)
+
+    for entry in grouped.values():
+        entry["inputs"] = _normalize_activity_inputs(entry.get("inputs", []))
+    return grouped
+
+
+def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+    """Load compact activity provenance keyed by output dataset and variable."""
+
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return {}
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for activities: {e}")
+        return {}
+
+    try:
+        available_tables = _sqlite_table_names(con)
+        required = {
+            "action_spec",
+            "activity",
+            "activity_input",
+            "activity_kind",
+            "activity_output",
+            "dataset",
+            "logical_variable",
+            "variable_definition",
+        }
+        if not required.issubset(available_tables):
+            return _load_prov_json_activity_provenance_index(con)
+
+        rows = con.execute(
+            """
+            select
+                derived_dataset.name as output_dataset_name,
+                derived.name as output_variable_name,
+                derived_definition.name as output_definition_name,
+                output.role as output_role,
+                activity.uuid as activity_uuid,
+                kind.name as activity_kind,
+                spec.metadata as action_spec_metadata,
+                input.inputid as input_id,
+                input.role as input_role,
+                source.name as input_variable_name,
+                source_definition.name as input_definition_name,
+                source_dataset.name as input_dataset_name
+            from activity_output as output
+            join activity as activity on activity.activityid = output.activityid
+            join activity_kind as kind on kind.kindid = activity.kindid
+            join logical_variable as derived on derived.variableid = output.variableid
+            join variable_definition as derived_definition
+                on derived_definition.definitionid = derived.definitionid
+            join dataset as derived_dataset on derived_dataset.rowid = derived.datasetid
+            left join action_spec as spec on spec.specid = activity.specid
+            left join activity_input as input on input.activityid = activity.activityid
+            left join logical_variable as source on source.variableid = input.variableid
+            left join variable_definition as source_definition
+                on source_definition.definitionid = source.definitionid
+            left join dataset as source_dataset on source_dataset.rowid = source.datasetid
+            order by derived_dataset.name, derived.name, input.inputid
+            """
+        )
+
+        grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+        for row in rows:
+            output_dataset = str(row["output_dataset_name"] or "").strip("/")
+            output_variable = str(row["output_variable_name"] or "").strip("/")
+            if not output_dataset or not output_variable:
+                continue
+            key = (output_dataset, output_variable)
+            metadata = _json_object_or_empty(row["action_spec_metadata"])
+            operation = str(
+                metadata.get("operation", "")
+                or metadata.get("visualization_type", "")
+                or metadata.get("representation_kind", "")
+                or metadata.get("kind", "")
+                or ""
+            ).strip()
+            entry = grouped.setdefault(
+                key,
+                {
+                    "activity_uuid": str(row["activity_uuid"] or ""),
+                    "activity_kind": str(row["activity_kind"] or ""),
+                    "activity_operation": operation,
+                    "activity_metadata": metadata,
+                    "output_role": str(row["output_role"] or ""),
+                    "output_definition": str(row["output_definition_name"] or ""),
+                    "inputs": [],
+                },
+            )
+            source_variable = str(row["input_variable_name"] or "").strip()
+            if not source_variable:
+                continue
+            input_spec = {
+                "name": source_variable,
+                "definition": str(row["input_definition_name"] or ""),
+                "role": str(row["input_role"] or "source"),
+                "source_dataset": str(row["input_dataset_name"] or ""),
+            }
+            if input_spec not in entry["inputs"]:
+                entry["inputs"].append(input_spec)
+
+        for entry in grouped.values():
+            entry["inputs"] = _normalize_activity_inputs(entry.get("inputs", []))
+        prov_json = _load_prov_json_activity_provenance_index(con)
+        for key, prov_entry in prov_json.items():
+            if key not in grouped:
+                grouped[key] = prov_entry
+                continue
+            for field in (
+                "workflow_plan",
+                "activity_agent",
+                "visualization_sequence",
+            ):
+                if prov_entry.get(field):
+                    grouped[key][field] = prov_entry[field]
+        return grouped
+    except sqlite3.Error as e:
+        print(f"[warn] could not read activity provenance metadata: {e}")
+        return {}
+    finally:
+        con.close()
+
+
 def _lookup_visualization_api_image(
     varpath: str,
     visualization_api_index: Dict[str, Dict[str, Any]],
@@ -2388,7 +3498,10 @@ def extract_file_var(input: str) -> tuple[str, str, str, str, str]:
     filename = parts[-2]
     varpath = "/".join(parts[0:-1])
 
-    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    bp_idx = next(
+        (i for i, part in enumerate(parts) if _ADIOS_DATASET_SEGMENT_RE.search(part)),
+        -1,
+    )
     if bp_idx >= 0:
         filename = parts[bp_idx]
         if bp_idx - 1 >= 0:
@@ -2418,10 +3531,10 @@ def get_visualization_name(input: str) -> str:
 
 def _parse_image_path_components(parts: list[str]) -> tuple[str, str, str, str, str]:
     """
-    Parse campaign image logical paths by anchoring on the .bp segment.
+    Parse campaign image logical paths by anchoring on the .bp/.bpN segment.
 
     Expected robust layout:
-      <producer>/<optional-casename>/.../<file.bp>/<var>/images/<vis>/<image>.png[/<size>]
+      <producer>/<optional-casename>/.../<file.bpN>/<var>/images/<vis>/<image>.png[/<size>]
     """
     producer = parts[0] if parts else ""
     casename = parts[1] if len(parts) > 1 else ""
@@ -2429,7 +3542,10 @@ def _parse_image_path_components(parts: list[str]) -> tuple[str, str, str, str, 
     varname = parts[3] if len(parts) > 3 else ""
     visualization_name = ""
 
-    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    bp_idx = next(
+        (i for i, part in enumerate(parts) if _ADIOS_DATASET_SEGMENT_RE.search(part)),
+        -1,
+    )
     if bp_idx >= 0:
         filename = parts[bp_idx]
         if bp_idx - 1 >= 0:
@@ -2461,7 +3577,10 @@ def _source_dataset_from_path(varpath: str) -> str:
     if not parts or parts == [""]:
         return ""
 
-    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    bp_idx = next(
+        (i for i, part in enumerate(parts) if _ADIOS_DATASET_SEGMENT_RE.search(part)),
+        -1,
+    )
     if bp_idx >= 0:
         return "/".join(parts[: bp_idx + 1])
 
@@ -2547,6 +3666,12 @@ def parse_campaign(
     legacy_visualization_api_index = _load_visualization_api_index(campaign_path)
     unified_representation_index = _load_unified_representation_index(campaign_path)
     visualization_api_index = unified_representation_index or legacy_visualization_api_index
+    activity_provenance_index = _load_activity_provenance_index(campaign_path)
+    visualization_activity_provenance_index = {
+        str(entry.get("visualization_sequence", "") or ""): entry
+        for entry in activity_provenance_index.values()
+        if str(entry.get("visualization_sequence", "") or "")
+    }
     visualization_metadata_source = (
         "activity-backed"
         if unified_representation_index
@@ -2564,6 +3689,8 @@ def parse_campaign(
             "provenance visualization metadata items:",
             len(legacy_visualization_api_index),
         )
+    if activity_provenance_index:
+        print("activity provenance outputs:", len(activity_provenance_index))
 
     dataset_rows = _load_campaign_dataset_rows(campaign_path)
     dataset_names = [row["name"] for row in dataset_rows if row.get("name")]
@@ -2629,7 +3756,7 @@ def parse_campaign(
                 data = fr.read(varname)
                 if baseVar not in var_stats :
                     var_stats[baseVar] = []
-                var_stats[baseVar].append((producer, source_dataset, statType, data[0]))
+                var_stats[baseVar].append((producer, source_dataset, statType, data[0], physical_var))
                 continue
 
             if var_type == "image":
@@ -2814,6 +3941,18 @@ def parse_campaign(
                             ),
                         }
                     )
+                    visualization_activity_provenance = (
+                        visualization_activity_provenance_index.get(
+                            str(
+                                visualization_api_entry.get("sequence_name", "")
+                                or ""
+                            )
+                        )
+                    )
+                    if visualization_activity_provenance:
+                        base_document["visualization_activity_provenance"] = (
+                            visualization_activity_provenance
+                        )
 
                 for record in image_variable_records:
                     record_source_dataset = str(record.get("source_dataset", "") or source_dataset)
@@ -2865,6 +4004,11 @@ def parse_campaign(
                     "min": fmin,
                     "max": fmax,
                 }
+                activity_provenance = activity_provenance_index.get(
+                    (str(source_dataset or "").strip("/"), physical_var.strip("/"))
+                )
+                if activity_provenance:
+                    document["activity_provenance"] = activity_provenance
                 document.update(
                     _schema_metadata_for_variable(
                         schema_context,
@@ -2958,6 +4102,15 @@ def parse_campaign(
             "min": fmin,
             "max": fmax,
         }
+        visualization_activity_provenance = (
+            visualization_activity_provenance_index.get(
+                str(visualization_api_entry.get("sequence_name", "") or "")
+            )
+        )
+        if visualization_activity_provenance:
+            base_document["visualization_activity_provenance"] = (
+                visualization_activity_provenance
+            )
 
         for record in scalar_variable_records:
             record_source_dataset = str(record.get("source_dataset", "") or "")
@@ -2989,7 +4142,7 @@ def parse_campaign(
         vname, stats = v
         logical_vname = _map_physical_to_logical_name(vname, image_assoc_schema)
         for stat in stats :
-            producer, source_dataset, statType, data = stat
+            producer, source_dataset, statType, data, output_variable = stat
             document = {"campaign_path": campaign_path,
                         "variable_id": vname,
                         "variable_name": logical_vname,
@@ -2999,6 +4152,11 @@ def parse_campaign(
                         "producer": producer,
                         "statistic_type": statType,
                         "data": data.tolist()}
+            activity_provenance = activity_provenance_index.get(
+                (str(source_dataset or "").strip("/"), str(output_variable or "").strip("/"))
+            )
+            if activity_provenance:
+                document["activity_provenance"] = activity_provenance
             collection.insert_one(document)
 
     if image_assoc_schema is not None:

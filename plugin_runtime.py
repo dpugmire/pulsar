@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
+import json
 import math
 import os
 import sys
+import time
+import types
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from adios2 import FileReader
 
-
 PLUGIN_VIS_PREFIX = "plugin:"
 PERSONAL_PLUGIN_ENV = "SEURAT_PLUGIN_PATH"
 DEFAULT_PERSONAL_PLUGIN_DIR = Path("~/.seurat/plugins")
+DEFAULT_PROFILE_PATH = Path("~/.seurat/profile.json")
+PROFILE_PLUGIN_PATHS_KEY = "plugin_paths"
 
 
 @dataclass(frozen=True)
@@ -36,10 +42,9 @@ _BUILTIN_PLUGIN_MODULES = (
     "seurat_plugins.divertor_lambda_q_timeseries",
     "seurat_plugins.divertor_load_map",
     "seurat_plugins.divertor_target_totals_timeseries",
-    "seurat_plugins.mhd_energy_conservation",
-    "seurat_plugins.mhd_energy_partition",
 )
 _FAILED_BUILTIN_PLUGIN_IMPORTS: set[str] = set()
+_FAILED_PROFILE_WARNINGS: set[str] = set()
 
 
 def plugin_visualization_name(plugin_id: str) -> str:
@@ -117,16 +122,69 @@ def _personal_plugin_dirs() -> List[Path]:
     raw = os.environ.get(PERSONAL_PLUGIN_ENV, "")
     dirs: List[Path] = []
     candidates = [str(DEFAULT_PERSONAL_PLUGIN_DIR)]
+    candidates.extend(_profile_plugin_path_items())
     if raw.strip():
         candidates.extend(item.strip() for item in raw.split(os.pathsep))
 
     for item in candidates:
-        if not item:
+        path = _expand_plugin_path(item)
+        if path is None:
             continue
-        path = Path(item).expanduser()
         if path not in dirs:
             dirs.append(path)
     return dirs
+
+
+def _profile_plugin_path_items() -> List[str]:
+    profile_path = _expand_plugin_path(DEFAULT_PROFILE_PATH)
+    if profile_path is None or not profile_path.is_file():
+        return []
+
+    try:
+        with profile_path.open("r", encoding="utf-8") as stream:
+            profile = json.load(stream)
+    except Exception as exc:
+        _warn_profile(profile_path, f"{type(exc).__name__}: {exc}")
+        return []
+
+    if not isinstance(profile, dict):
+        _warn_profile(profile_path, "expected a JSON object")
+        return []
+
+    raw_paths = profile.get(PROFILE_PLUGIN_PATHS_KEY, [])
+    if raw_paths is None:
+        return []
+    if not isinstance(raw_paths, list):
+        _warn_profile(profile_path, f"{PROFILE_PLUGIN_PATHS_KEY} must be a list")
+        return []
+
+    paths: List[str] = []
+    for item in raw_paths:
+        if not isinstance(item, str):
+            _warn_profile(
+                profile_path,
+                f"ignored non-string {PROFILE_PLUGIN_PATHS_KEY} item",
+            )
+            continue
+        text = item.strip()
+        if text:
+            paths.append(text)
+    return paths
+
+
+def _expand_plugin_path(item: Any) -> Optional[Path]:
+    text = str(item or "").strip()
+    if not text:
+        return None
+    return Path(os.path.expandvars(text)).expanduser()
+
+
+def _warn_profile(profile_path: Path, message: str) -> None:
+    key = f"{profile_path}:{message}"
+    if key in _FAILED_PROFILE_WARNINGS:
+        return
+    print(f"Ignoring Seurat profile {profile_path}: {message}", file=sys.stderr)
+    _FAILED_PROFILE_WARNINGS.add(key)
 
 
 def _load_personal_plugin_modules() -> List[Tuple[Any, str]]:
@@ -149,9 +207,44 @@ def _load_personal_plugin_modules() -> List[Tuple[Any, str]]:
 
 def _personal_plugin_module_name(path: Path) -> str:
     resolved = path.expanduser().resolve()
-    token = str(abs(hash(str(resolved))))
-    stem = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in resolved.stem)
-    return f"_seurat_personal_plugin_{stem}_{token}"
+    package_name = _personal_plugin_package_name(resolved.parent)
+    _ensure_personal_plugin_package(package_name, resolved.parent)
+    stem = _module_name_token(resolved.stem)
+    token = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:12]
+    return f"{package_name}.{stem}_{token}"
+
+
+def _personal_plugin_package_name(plugin_dir: Path) -> str:
+    resolved = plugin_dir.expanduser().resolve()
+    stem = _module_name_token(resolved.name or "plugins")
+    token = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+    return f"_seurat_personal_plugins_{stem}_{token}"
+
+
+def _ensure_personal_plugin_package(package_name: str, plugin_dir: Path) -> None:
+    resolved = plugin_dir.expanduser().resolve()
+    cached = sys.modules.get(package_name)
+    if cached is not None:
+        cached.__path__ = [str(resolved)]
+        return
+
+    mod = types.ModuleType(package_name)
+    mod.__file__ = str(resolved / "__init__.py")
+    mod.__package__ = package_name
+    mod.__path__ = [str(resolved)]
+    spec = importlib.util.spec_from_loader(package_name, loader=None, is_package=True)
+    if spec is not None:
+        spec.submodule_search_locations = [str(resolved)]
+    mod.__spec__ = spec
+    sys.modules[package_name] = mod
+
+
+def _module_name_token(text: str) -> str:
+    token = "".join(ch if ch.isascii() and (ch.isalnum() or ch == "_") else "_" for ch in str(text or ""))
+    token = token.strip("_") or "plugin"
+    if token[0].isdigit():
+        token = f"_{token}"
+    return token
 
 
 def _load_module_from_path(module_name: str, path: Path):
@@ -175,6 +268,235 @@ def _load_module_from_path(module_name: str, path: Path):
 def plugin_scope(plugin_id: str) -> str:
     info = plugin_info(plugin_id)
     return info.scope if info is not None else ""
+
+
+def _utc_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _plugin_version(mod: Any) -> str:
+    for name in ("PLUGIN_VERSION", "VERSION", "__version__"):
+        value = str(getattr(mod, name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _provenance_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _provenance_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_provenance_value(item) for item in value]
+    return str(value)
+
+
+def _merge_provenance(
+    defaults: Dict[str, Any],
+    supplied: Any,
+) -> Dict[str, Any]:
+    merged = dict(defaults)
+    if not isinstance(supplied, Mapping):
+        return merged
+    for key, value in supplied.items():
+        name = str(key)
+        if isinstance(value, Mapping) and isinstance(merged.get(name), Mapping):
+            merged[name] = _merge_provenance(
+                dict(merged[name]),
+                value,
+            )
+        else:
+            merged[name] = _provenance_value(value)
+    return merged
+
+
+def _plugin_input_items(
+    meta: Dict[str, Any],
+    tile: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    source_dataset = str(meta.get("source_dataset", "") or "")
+    supplied: List[Dict[str, Any]] = []
+    for raw_item in list(tile.get("visualization_variables", []) or []):
+        if isinstance(raw_item, str):
+            raw_item = {"name": raw_item}
+        if not isinstance(raw_item, Mapping):
+            continue
+        item = dict(_provenance_value(raw_item))
+        name = str(
+            item.get("name", "")
+            or item.get("variable_name", "")
+            or item.get("variable_id", "")
+            or item.get("definition", "")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        item.setdefault("name", name)
+        item.setdefault("roles", ["source"])
+        if source_dataset:
+            item.setdefault("source_dataset", source_dataset)
+        supplied.append(item)
+    if supplied:
+        return supplied
+
+    name = str(
+        meta.get("variable_name", "")
+        or meta.get("variable_id", "")
+        or meta.get("variable_path", "")
+        or ""
+    ).strip()
+    if not name:
+        return []
+    item: Dict[str, Any] = {"name": name, "roles": ["source"]}
+    if source_dataset:
+        item["source_dataset"] = source_dataset
+    variable_id = str(meta.get("variable_id", "") or "").strip()
+    if variable_id:
+        item["variable_id"] = variable_id
+    return [item]
+
+
+def _plugin_scientific_context(
+    mod: Any,
+    ctx: Dict[str, Any],
+    tile: Dict[str, Any],
+) -> tuple[Dict[str, Any], str]:
+    hook = getattr(mod, "provenance", None)
+    if not callable(hook):
+        return {}, ""
+    try:
+        value = hook(ctx, tile)
+    except Exception as error:
+        return {}, type(error).__name__
+    if value is None:
+        return {}, ""
+    if not isinstance(value, Mapping):
+        return {}, "TypeError"
+    return dict(_provenance_value(value)), ""
+
+
+def _attach_plugin_provenance(
+    tile: Dict[str, Any],
+    *,
+    mod: Any,
+    plugin_id: str,
+    scope: str,
+    meta: Dict[str, Any],
+    options: Dict[str, Any],
+    ctx: Dict[str, Any],
+    started_at_utc: str,
+    started_monotonic: float,
+) -> None:
+    ended_at_utc = _utc_timestamp()
+    duration_ms = max(0, int((time.monotonic() - started_monotonic) * 1000))
+    label = str(getattr(mod, "LABEL", "") or plugin_id)
+    module_name = str(getattr(mod, "__name__", "") or plugin_id)
+    version = _plugin_version(mod)
+    inputs = _plugin_input_items(meta, tile)
+    source_datasets = sorted(
+        {
+            str(item.get("source_dataset", "") or "")
+            for item in inputs
+            if str(item.get("source_dataset", "") or "")
+        }
+    )
+    scientific_context, annotation_error = _plugin_scientific_context(
+        mod,
+        ctx,
+        tile,
+    )
+    output = {
+        "media_type": str(tile.get("media_type", "") or ""),
+        "status": str(tile.get("status", "") or "ok"),
+    }
+    execution = {
+        "plugin_id": plugin_id,
+        "plugin_label": label,
+        "plugin_module": module_name,
+        "plugin_version": version,
+        "plugin_scope": scope,
+        "started_at_utc": started_at_utc,
+        "ended_at_utc": ended_at_utc,
+        "duration_ms": duration_ms,
+        "status": "success",
+        "normalized_options": _provenance_value(options),
+        "input_variables": [
+            str(item.get("variable_id", "") or item.get("name", "") or "")
+            for item in inputs
+        ],
+        "source_datasets": source_datasets,
+        "output": output,
+    }
+    if scientific_context:
+        execution["scientific_context"] = scientific_context
+    if annotation_error:
+        execution["annotation_error_type"] = annotation_error
+
+    selection = {
+        "variables": execution["input_variables"],
+        "source_datasets": source_datasets,
+    }
+    activity_metadata: Dict[str, Any] = {
+        "plugin": {
+            "id": plugin_id,
+            "label": label,
+            "module": module_name,
+            "version": version,
+            "scope": scope,
+        },
+        "execution": {
+            "started_at_utc": started_at_utc,
+            "ended_at_utc": ended_at_utc,
+            "duration_ms": duration_ms,
+            "status": "success",
+            "output": output,
+        },
+        "rendering_parameters": _provenance_value(options),
+    }
+    if scientific_context:
+        activity_metadata["scientific_context"] = scientific_context
+    if annotation_error:
+        activity_metadata["annotation_error_type"] = annotation_error
+
+    automatic = {
+        "activity_kind": "visualization",
+        "activity_operation": plugin_id,
+        "activity_metadata": activity_metadata,
+        "inputs": inputs,
+        "workflow_plan": {
+            "label": f"{label} workflow",
+            "location": module_name,
+            "details": {
+                "workflow": plugin_id,
+                "implementation_dataset": module_name,
+                "selection": selection,
+                "parameters": _provenance_value(options),
+                "output_policy": output,
+            },
+        },
+        "activity_agent": {
+            "label": label,
+            "type": "SoftwareAgent",
+            "version": version,
+        },
+    }
+    tile["visualization_activity_provenance"] = _merge_provenance(
+        automatic,
+        tile.get("visualization_activity_provenance"),
+    )
+    tile["plugin_execution_provenance"] = execution
+    if inputs and not tile.get("visualization_variables"):
+        tile["visualization_variables"] = inputs
 
 
 def normalize_options_schema(raw: Any) -> List[Dict[str, Any]]:
@@ -312,6 +634,13 @@ def build_plugin_meta(candidate: Dict[str, Any]) -> Dict[str, Any]:
         "ndims": metadata_ndims(metadata),
         "steps_count": metadata_steps_count(metadata),
         "shape": metadata_shape(metadata),
+        "axes": dict(candidate.get("axes", {}) or {}),
+        "dimension_axes": list(candidate.get("dimension_axes", []) or []),
+        "plot_x_axis": str(candidate.get("plot_x_axis", "") or ""),
+        "selection_axis": str(candidate.get("selection_axis", "") or ""),
+        "schema_default_axis": str(
+            candidate.get("schema_default_axis", "") or ""
+        ),
         "min": candidate.get("min", None),
         "max": candidate.get("max", None),
     }
@@ -364,15 +693,63 @@ class PluginHelpers:
         self.campaign_path = str(campaign_path or "")
         self.source_dataset = str(source_dataset or "").strip("/")
 
-    def read_variable(self, variable_path: str, step_selection: Optional[Tuple[int, int]] = None):
+    def read_variable(
+        self,
+        variable_path: str,
+        step_selection: Optional[Tuple[int, int]] = None,
+        start: Optional[Sequence[int]] = None,
+        count: Optional[Sequence[int]] = None,
+    ):
         kwargs = {"step_selection": list(step_selection)} if step_selection else {}
+        if start is not None:
+            kwargs["start"] = list(start)
+        if count is not None:
+            kwargs["count"] = list(count)
         with FileReader(self.campaign_path) as fr:
             return fr.read(str(variable_path or "").strip("/"), **kwargs)
 
-    def read_source_variable(self, name: str, step_selection: Optional[Tuple[int, int]] = None):
+    def read_source_variable(
+        self,
+        name: str,
+        step_selection: Optional[Tuple[int, int]] = None,
+        start: Optional[Sequence[int]] = None,
+        count: Optional[Sequence[int]] = None,
+    ):
         key = str(name or "").strip("/")
         variable_path = f"{self.source_dataset}/{key}" if self.source_dataset and not key.startswith(self.source_dataset + "/") else key
-        return self.read_variable(variable_path, step_selection=step_selection)
+        return self.read_variable(
+            variable_path,
+            step_selection=step_selection,
+            start=start,
+            count=count,
+        )
+
+    def read_axis_values(
+        self,
+        axis: Dict[str, Any],
+        selection_index: Optional[int] = None,
+    ):
+        descriptor = dict(axis or {})
+        values = descriptor.get("values", None)
+        if values is not None and selection_index is None:
+            return np.asarray(values, dtype=float)
+        variable_path = str(descriptor.get("variable_path", "") or "")
+        if not variable_path:
+            raise ValueError("Axis descriptor has no variable_path")
+        shape = [int(value) for value in descriptor.get("shape", []) or []]
+        if selection_index is None or len(shape) <= 1:
+            return np.asarray(self.read_variable(variable_path), dtype=float).reshape(-1)
+        if len(shape) != 2:
+            raise ValueError(
+                f"Selected axis reads require rank 2 coordinates, got {shape}"
+            )
+        index = max(0, min(int(selection_index), shape[0] - 1))
+        values = self.read_variable(
+            variable_path,
+            start=[index, 0],
+            count=[1, shape[1]],
+        )
+        return np.asarray(values, dtype=float).reshape(-1)
 
     def plot1d_payload(self, series_values: List[Dict[str, Any]], x_label: str, y_label: str) -> Dict[str, Any]:
         return plot1d_payload(series_values, x_label, y_label)
@@ -405,6 +782,8 @@ def render_plugin_tile(
     if not callable(render):
         raise ValueError(f"Plugin {plugin_id} has no render(ctx)")
 
+    started_at_utc = _utc_timestamp()
+    started_monotonic = time.monotonic()
     tile = render(ctx)
     if not isinstance(tile, dict):
         raise ValueError(f"Plugin {plugin_id} returned {type(tile).__name__}, expected dict")
@@ -416,6 +795,43 @@ def render_plugin_tile(
     tile["visualization_name"] = plugin_visualization_name(plugin_id)
     tile["selected_visualization"] = plugin_visualization_name(plugin_id)
     tile["visualization_options"] = [plugin_visualization_name(plugin_id)]
+    _attach_plugin_provenance(
+        tile,
+        mod=mod,
+        plugin_id=plugin_id,
+        scope="variable",
+        meta=meta,
+        options=normalized_options,
+        ctx=ctx,
+        started_at_utc=started_at_utc,
+        started_monotonic=started_monotonic,
+    )
+    axes = dict(meta.get("axes", {}) or {})
+    if axes:
+        plot_axis_name = str(meta.get("plot_x_axis", "") or "")
+        selection_axis_name = str(meta.get("selection_axis", "") or "")
+        tile.setdefault("axes", axes)
+        tile.setdefault("dimension_axes", list(meta.get("dimension_axes", []) or []))
+        tile.setdefault("plot_x_axis", plot_axis_name)
+        tile.setdefault(
+            "plot_axis_key",
+            str((axes.get(plot_axis_name, {}) or {}).get("key", "") or ""),
+        )
+        selection_axis = dict(axes.get(selection_axis_name, {}) or {})
+        if selection_axis:
+            selection_axis["default"] = bool(
+                selection_axis_name
+                and selection_axis_name
+                == str(meta.get("schema_default_axis", "") or "")
+            )
+            values = selection_axis.get("values", [])
+            if isinstance(values, list) and values:
+                selection_axis.setdefault("index", 0)
+                selection_axis.setdefault("value", values[0])
+            tile.setdefault("selection_axis", selection_axis)
+        tile.setdefault(
+            "schema_default_axis", str(meta.get("schema_default_axis", "") or "")
+        )
     return tile
 
 
@@ -451,6 +867,8 @@ def render_source_plugin_tile(
     if not callable(render):
         raise ValueError(f"Plugin {plugin_id} has no render(ctx)")
 
+    started_at_utc = _utc_timestamp()
+    started_monotonic = time.monotonic()
     tile = render(ctx)
     if not isinstance(tile, dict):
         raise ValueError(f"Plugin {plugin_id} returned {type(tile).__name__}, expected dict")
@@ -463,6 +881,17 @@ def render_source_plugin_tile(
     tile["selected_visualization"] = plugin_visualization_name(plugin_id)
     tile["visualization_options"] = [plugin_visualization_name(plugin_id)]
     tile["plugin_scope"] = "source"
+    _attach_plugin_provenance(
+        tile,
+        mod=mod,
+        plugin_id=plugin_id,
+        scope="source",
+        meta=meta,
+        options=normalized_options,
+        ctx=ctx,
+        started_at_utc=started_at_utc,
+        started_monotonic=started_monotonic,
+    )
     return tile
 
 

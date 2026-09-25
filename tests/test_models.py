@@ -32,6 +32,10 @@ from seurat.models.source_selection import (
 from seurat.models.timeline import (
     cell_has_timeline_samples,
     clear_timeline_driver,
+    selection_axis_descriptor,
+    selection_axis_index_for_value,
+    selection_axis_key,
+    selection_axis_values,
     toggle_timeline_driver,
 )
 
@@ -132,6 +136,28 @@ class GridModelTests(unittest.TestCase):
 
 
 class TimelineModelTests(unittest.TestCase):
+    def test_explicit_selection_axis_drives_timeline_semantics(self):
+        cell = variable_cell(
+            "waveform",
+            axes={
+                "shot": {
+                    "id": "shot",
+                    "key": "lasernet:laser_runs:shot",
+                    "label": "Shot number",
+                    "values": [15, 16, 17],
+                }
+            },
+            selection_axis="shot",
+            plot={"x_label": "Time within shot", "series": [{"x": [0, 1]}]},
+        )
+
+        self.assertEqual(selection_axis_descriptor(cell)["label"], "Shot number")
+        self.assertEqual(selection_axis_values(cell), [15.0, 16.0, 17.0])
+        self.assertEqual(selection_axis_key(cell), "lasernet:laser_runs:shot")
+        self.assertEqual(selection_axis_index_for_value(cell, 16.0), 1)
+        self.assertIsNone(selection_axis_index_for_value(cell, 18.0))
+        self.assertTrue(cell_has_timeline_samples(cell))
+
     def test_timeline_samples_accept_explicit_or_time_axis_values(self):
         explicit = variable_cell("a", time_values=[None, "1.5", "nan"])
         plotted = variable_cell(

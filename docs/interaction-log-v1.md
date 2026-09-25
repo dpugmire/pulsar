@@ -38,12 +38,19 @@ Every line is one JSON object with these required fields:
 V1 records session lifecycle, normalized query application and clearing,
 visualization assignment/change/removal, workspace tab and pane operations,
 grid layout and cell operations, saved/loaded workspace snapshots, and timeline
-driver changes.
+driver changes. It also records `plugin.executed` for successful and failed
+plugin render attempts.
 
 Visualization assignments include the complete supported candidate set, the
 chosen default, the active normalized query ID, and the semantic workspace
 location. Manual changes reference the original assignment event and record
 the elapsed time since assignment.
+
+Plugin execution events include plugin identity, module, version, scope,
+execution timing and status, normalized option values, input variable IDs,
+pseudonymous source IDs, output type, optional scientific context, and the
+exception type for failed attempts. The event never stores generated plot data
+or campaign file contents.
 
 ## Query data
 
@@ -68,8 +75,12 @@ Snapshots and events intentionally exclude:
 - tab titles;
 - ADIOS arrays and scalar payloads;
 - images, movies, previews, and data URLs;
-- arbitrary plugin option values;
 - transient browser rendering state.
+
+Normalized plugin option values and optional scientific annotations are stored
+in `plugin.executed` events because they are necessary to reproduce and learn
+from the plugin workflow. These fields are plugin-defined and may contain
+sensitive text or paths. Review plugin schemas and hooks before sharing logs.
 
 Variable IDs and structured numeric query operands remain present because they
 are required to learn variable- and task-specific behavior. Logs should be

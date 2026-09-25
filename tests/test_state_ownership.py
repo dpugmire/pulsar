@@ -20,7 +20,7 @@ class StateOwnershipTests(unittest.TestCase):
         state = SimpleNamespace()
         init_state(state, SimpleNamespace(ok=True, last_error=""))
 
-        self.assertEqual(len(vars(state)), 222)
+        self.assertEqual(len(vars(state)), 230)
         self.assertEqual(state.gridLayoutMode, "uniform")
         self.assertEqual(set(vars(state)) - {"dbOk", "dbStatus"}, set(owner_by_key))
 
@@ -34,10 +34,14 @@ class StateOwnershipTests(unittest.TestCase):
         first.variableGroups.append({"name": "changed"})
         first.gridCells[0]["variable_id"] = "changed"
         first.plotSettingsStandardColors.append("#123456")
+        first.detailsProvenanceExpanded["variable"] = True
+        first.detailsProvenanceGraph.append({"type": "changed"})
 
         self.assertEqual(second.variableGroups, [])
         self.assertEqual(second.gridCells[0]["variable_id"], "")
         self.assertNotIn("#123456", second.plotSettingsStandardColors)
+        self.assertEqual(second.detailsProvenanceExpanded, {})
+        self.assertEqual(second.detailsProvenanceGraph, [])
 
     def test_compatibility_module_exports_package_state_api(self):
         self.assertIs(compatibility_state.init_state, init_state)

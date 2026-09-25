@@ -7,6 +7,281 @@ from trame.widgets import vuetify3 as vuetify
 from seurat.constants import SCALAR_FIELD_COLORMAP_OPTIONS
 
 
+def _build_provenance_node(node_expr: str, detail_toggle=None):
+    with html.Div(
+        classes="seurat-provenance-node",
+        raw_attrs=[
+            f":class=\"[{node_expr}.kind ? 'is-' + {node_expr}.kind : '', {node_expr}.shape ? 'shape-' + {node_expr}.shape : '', {node_expr}.expanded ? 'is-expanded' : '']\"",
+            f":title=\"{node_expr}.label || ''\"",
+        ],
+    ):
+        if detail_toggle is not None:
+            with vuetify.Template(
+                v_if=f"{node_expr}.details && {node_expr}.details.length"
+            ):
+                with html.Button(
+                    classes="seurat-provenance-detail-btn",
+                    click=(detail_toggle, f"[{node_expr}.id]"),
+                    raw_attrs=[
+                        'type="button"',
+                        f":aria-expanded=\"{node_expr}.expanded ? 'true' : 'false'\"",
+                        f":aria-label=\"({node_expr}.expanded ? 'Hide' : 'Show') + ' details for ' + ({node_expr}.label || 'provenance item')\"",
+                        f":title=\"({node_expr}.expanded ? 'Hide' : 'Show') + ' details'\"",
+                    ],
+                ):
+                    vuetify.VIcon("mdi-information-outline", size="x-small")
+        html.Span(
+            f"{{{{ {node_expr}.display_label || {node_expr}.label }}}}",
+            classes="seurat-provenance-node-label",
+        )
+        with vuetify.Template(v_if=f"{node_expr}.secondary_label"):
+            html.Span(
+                f"{{{{ {node_expr}.secondary_label }}}}",
+                classes="seurat-provenance-node-secondary",
+            )
+        if detail_toggle is not None:
+            with vuetify.Template(
+                v_if=(
+                    f"{node_expr}.expanded && {node_expr}.details "
+                    f"&& {node_expr}.details.length"
+                )
+            ):
+                with html.Div(classes="seurat-provenance-node-details"):
+                    with vuetify.Template(
+                        v_for=f"detail in {node_expr}.details",
+                        key="detail.label + '-' + (detail.kind || 'row')",
+                    ):
+                        with vuetify.Template(v_if="detail.kind === 'input_table'"):
+                            with html.Div(
+                                classes="seurat-provenance-detail-table-block"
+                            ):
+                                html.Div(
+                                    "{{ detail.label }}",
+                                    classes=(
+                                        "seurat-provenance-detail-label "
+                                        "seurat-provenance-detail-table-title"
+                                    ),
+                                )
+                                with html.Div(classes="seurat-provenance-detail-table-wrap"):
+                                    with html.Table(
+                                        classes="seurat-provenance-input-table"
+                                    ):
+                                        with html.Thead():
+                                            with html.Tr():
+                                                html.Th("Variable")
+                                                html.Th("Role")
+                                        with html.Tbody():
+                                            with vuetify.Template(
+                                                v_for="input in detail.rows",
+                                                key="input.variable + '-' + input.role",
+                                            ):
+                                                with html.Tr():
+                                                    html.Td("{{ input.variable }}")
+                                                    html.Td("{{ input.role }}")
+                        with vuetify.Template(v_if="detail.kind !== 'input_table'"):
+                            with html.Div(classes="seurat-provenance-detail-row"):
+                                html.Span(
+                                    "{{ detail.label }}",
+                                    classes="seurat-provenance-detail-label",
+                                )
+                                html.Span(
+                                    "{{ detail.value }}",
+                                    classes="seurat-provenance-detail-value",
+                                )
+
+
+def _build_provenance_entity_source(
+    entity_expr: str,
+    source_expr: str,
+    detail_toggle=None,
+):
+    with html.Div(classes="seurat-provenance-entity-source"):
+        _build_provenance_node(entity_expr, detail_toggle)
+        _build_provenance_node(source_expr, detail_toggle)
+
+
+def _build_provenance_down_arrow(relation_expr: str = ""):
+    with html.Div(
+        classes="seurat-provenance-down-arrow",
+        raw_attrs=['aria-hidden="true"'],
+    ):
+        if relation_expr:
+            html.Span(
+                f"{{{{ {relation_expr} }}}}",
+                v_if=relation_expr,
+                classes="seurat-provenance-down-arrow-label",
+            )
+
+
+def _branch_grid_style() -> str:
+    return (
+        ":style=\"{ gridTemplateColumns: 'repeat(' + segment.branches.length "
+        "+ ', minmax(138px, 1fr))' }\""
+    )
+
+
+def build_provenance_graph(detail_toggle=None):
+    with html.Div(
+        classes="seurat-provenance-graph is-expandable",
+        raw_attrs=['role="list"'],
+    ):
+        with vuetify.Template(
+            v_for="(segment, segmentIndex) in detailsProvenanceGraph",
+            key="segment.id || segmentIndex",
+        ):
+            with vuetify.Template(v_if="segment.type === 'node'"):
+                with html.Div(
+                    classes="seurat-provenance-dag-row",
+                    raw_attrs=['role="listitem"'],
+                ):
+                    _build_provenance_node("segment.node", detail_toggle)
+            with vuetify.Template(v_if="segment.type === 'entity_source'"):
+                with html.Div(raw_attrs=['role="listitem"']):
+                    _build_provenance_entity_source(
+                        "segment.entity",
+                        "segment.source",
+                        detail_toggle,
+                    )
+            with vuetify.Template(v_if="segment.type === 'activity_context'"):
+                with html.Div(
+                    classes="seurat-provenance-activity-context-row",
+                    raw_attrs=['role="listitem"'],
+                ):
+                    with html.Div(
+                        classes="seurat-provenance-activity-context-primary"
+                    ):
+                        _build_provenance_node("segment.node", detail_toggle)
+                    with html.Div(
+                        classes="seurat-provenance-activity-context-items"
+                    ):
+                        with vuetify.Template(
+                            v_for="context in segment.contexts",
+                            key="context.id",
+                        ):
+                            with html.Div(
+                                classes="seurat-provenance-activity-context-item"
+                            ):
+                                html.Span(
+                                    "{{ context.relation }}",
+                                    classes="seurat-provenance-context-relation",
+                                )
+                                _build_provenance_node(
+                                    "context.node",
+                                    detail_toggle,
+                                )
+            with vuetify.Template(v_if="segment.type === 'plan_group'"):
+                with html.Div(
+                    classes="seurat-provenance-plan-group",
+                    raw_attrs=[
+                        'role="group"',
+                        ':aria-label="\'Plan: \' + (segment.plan.label || \'workflow\')"',
+                    ],
+                ):
+                    with html.Div(classes="seurat-provenance-plan-group-header"):
+                        html.Span(
+                            "WORKFLOW",
+                            classes="seurat-provenance-plan-group-kicker",
+                        )
+                        _build_provenance_node("segment.plan", detail_toggle)
+                    with html.Div(classes="seurat-provenance-plan-actions"):
+                        with html.Div(
+                            classes=(
+                                "seurat-provenance-plan-action-row "
+                                "is-selected"
+                            )
+                        ):
+                            _build_provenance_node(
+                                "segment.selected_action.node",
+                                detail_toggle,
+                            )
+                            with vuetify.Template(
+                                v_if="segment.selected_action.agent && segment.selected_action.agent.id"
+                            ):
+                                _build_provenance_node(
+                                    "segment.selected_action.agent",
+                                    detail_toggle,
+                                )
+            with vuetify.Template(v_if="segment.type === 'arrow'"):
+                _build_provenance_down_arrow("segment.relation")
+            with vuetify.Template(v_if="segment.type === 'branches'"):
+                with html.Div(
+                    classes="seurat-provenance-branch-section",
+                    raw_attrs=['role="listitem"'],
+                ):
+                    with vuetify.Template(
+                        v_if="segment.relation && segment.branches.length > 1"
+                    ):
+                        html.Span(
+                            "{{ segment.relation }}",
+                            classes="seurat-provenance-branch-relation",
+                        )
+                    with vuetify.Template(v_if="segment.branches.length > 1"):
+                        with html.Div(
+                            classes="seurat-provenance-fan",
+                            raw_attrs=[_branch_grid_style(), 'aria-hidden="true"'],
+                        ):
+                            html.Span(classes="seurat-provenance-fan-spine")
+                            html.Span(classes="seurat-provenance-fan-bar")
+                            with vuetify.Template(
+                                v_for="(_branch, branchIndex) in segment.branches",
+                                key="'fan-' + branchIndex",
+                            ):
+                                html.Span(classes="seurat-provenance-fan-drop")
+                    with vuetify.Template(v_if="segment.branches.length <= 1"):
+                        _build_provenance_down_arrow("segment.relation")
+                    with html.Div(
+                        classes="seurat-provenance-branch-grid seurat-provenance-input-row",
+                        raw_attrs=[_branch_grid_style()],
+                    ):
+                        with vuetify.Template(
+                            v_for="branch in segment.branches",
+                            key="branch.id",
+                        ):
+                            with html.Div(classes="seurat-provenance-branch-cell"):
+                                with vuetify.Template(v_if="segment.shared_source"):
+                                    _build_provenance_node(
+                                        "branch.input",
+                                        detail_toggle,
+                                    )
+                                with vuetify.Template(v_if="!segment.shared_source"):
+                                    _build_provenance_entity_source(
+                                        "branch.input",
+                                        "branch.source",
+                                        detail_toggle,
+                                    )
+                    with vuetify.Template(v_if="segment.shared_source"):
+                        with vuetify.Template(v_if="segment.branches.length > 1"):
+                            html.Span(
+                                "stored in",
+                                classes="seurat-provenance-branch-relation",
+                            )
+                            with html.Div(
+                                classes="seurat-provenance-source-fan",
+                                raw_attrs=[_branch_grid_style(), 'aria-hidden="true"'],
+                            ):
+                                html.Span(classes="seurat-provenance-source-fan-bar")
+                                with vuetify.Template(
+                                    v_for="(_branch, branchIndex) in segment.branches",
+                                    key="'source-fan-' + branchIndex",
+                                ):
+                                    html.Span(
+                                        classes="seurat-provenance-source-fan-drop"
+                                    )
+                                html.Span(
+                                    classes="seurat-provenance-source-fan-spine"
+                                )
+                        with vuetify.Template(v_if="segment.branches.length <= 1"):
+                            html.Div(
+                                classes="seurat-provenance-down-arrow",
+                                raw_attrs=['aria-hidden="true"'],
+                            )
+                        with html.Div(classes="seurat-provenance-shared-source-row"):
+                            _build_provenance_node(
+                                "segment.shared_source",
+                                detail_toggle,
+                            )
+
+
 class HelpDialog(TrameComponent):
     def build(self):
         ctrl = self.ctrl
@@ -26,6 +301,90 @@ class HelpDialog(TrameComponent):
                         variant="outlined",
                         hide_details=True,
                     )
+
+
+class ProvenanceDialog(TrameComponent):
+    def build(self):
+        ctrl = self.ctrl
+        with html.Div(
+            id="seurat-provenance-panel",
+            v_show=("showProvenanceModal",),
+            classes="seurat-floating-options-panel seurat-provenance-panel",
+            raw_attrs=[
+                'role="dialog"',
+                'aria-modal="false"',
+                'aria-labelledby="seurat-provenance-title"',
+            ],
+        ):
+            with vuetify.VCard(
+                classes="seurat-floating-options-card seurat-provenance-dialog",
+                elevation=6,
+            ):
+                with vuetify.VCardTitle(
+                    classes=(
+                        "seurat-floating-options-titlebar "
+                        "seurat-provenance-titlebar"
+                    )
+                ):
+                    with html.Div(
+                        style="display:flex; align-items:center; gap:8px; width:100%;"
+                    ):
+                        with html.Div(
+                            id="seurat-provenance-title",
+                            classes="seurat-floating-panel-drag-handle",
+                        ):
+                            vuetify.VIcon("mdi-family-tree", size="small")
+                            html.Span("Provenance Viewer")
+                        vuetify.VSpacer()
+                        vuetify.VBtn(
+                            "Close",
+                            classes="seurat-provenance-close-btn",
+                            variant="text",
+                            size="small",
+                            click=ctrl.close_provenance_dialog,
+                        )
+                with vuetify.VCardText(
+                    classes=(
+                        "seurat-floating-options-content "
+                        "seurat-provenance-dialog-content"
+                    )
+                ):
+                    with vuetify.Template(
+                        v_if="detailsProvenanceGraph && detailsProvenanceGraph.length"
+                    ):
+                        build_provenance_graph(
+                            detail_toggle=ctrl.toggle_provenance_node_details,
+                        )
+                        with html.Div(classes="seurat-provenance-legend"):
+                            with html.Div(classes="seurat-provenance-legend-item"):
+                                html.Span(classes="seurat-provenance-legend-swatch is-visualization")
+                                html.Span("Visualization")
+                            with html.Div(classes="seurat-provenance-legend-item"):
+                                html.Span(classes="seurat-provenance-legend-swatch is-variable")
+                                html.Span("Variable")
+                            with html.Div(classes="seurat-provenance-legend-item"):
+                                html.Span(classes="seurat-provenance-legend-swatch is-activity")
+                                html.Span("Action")
+                            with html.Div(classes="seurat-provenance-legend-item"):
+                                html.Span(classes="seurat-provenance-legend-swatch is-plan")
+                                html.Span("Workflow Plan")
+                            with html.Div(classes="seurat-provenance-legend-item"):
+                                html.Span(classes="seurat-provenance-legend-swatch is-agent")
+                                html.Span("Agent")
+                            with html.Div(classes="seurat-provenance-legend-item"):
+                                html.Span(classes="seurat-provenance-legend-swatch is-source")
+                                html.Span("Data source")
+                    with vuetify.Template(
+                        v_if="!(detailsProvenanceGraph && detailsProvenanceGraph.length)"
+                    ):
+                        html.Div("No provenance available.", class_="text-caption")
+            html.Div(
+                classes="seurat-provenance-resize-handle",
+                raw_attrs=[
+                    'role="separator"',
+                    'aria-label="Resize provenance viewer"',
+                ],
+            )
 
 
 class SourceDialog(TrameComponent):

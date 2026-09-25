@@ -1253,6 +1253,7 @@ class WorkspaceControllerMixin:
         )
         if selected_variable not in list(self.state.variableNames or []):
             selected_variable = ""
+        self.set_details_provenance_context(False)
         self.state.selectedVar = selected_variable
         self.state.draggedVar = ""
         if selected_variable:

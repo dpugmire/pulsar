@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 from db import CampaignDb
 from ingest_campaign import (
+    _load_activity_provenance_index,
     _load_unified_representation_index,
     _load_visualization_api_index,
     parse_campaign,
@@ -337,6 +339,468 @@ def test_legacy_visualization_api_archive_is_supported(tmp_path: Path):
             "source_dataset": "run/output.bp",
         }
     ]
+
+
+def test_prov_json_activity_provenance_links_analysis_variables_to_output(tmp_path: Path):
+    campaign_path = tmp_path / "prov-json.aca"
+    con = sqlite3.connect(campaign_path)
+    try:
+        con.execute(
+            """
+            create table provenance_document(
+                uuid text primary key,
+                name text not null unique,
+                format text not null,
+                content text not null,
+                sha256 text not null,
+                active integer not null,
+                modtime integer not null
+            )
+            """
+        )
+        content = {
+            "activity": {
+                "hpcid:activity_gradient": {
+                    "prov:type": {"$": "hpc:QuantityOfInterest", "type": "xsd:QName"}
+                },
+                "hpcid:activity_divergence": {
+                    "prov:type": {"$": "hpc:QuantityOfInterest", "type": "xsd:QName"}
+                },
+            },
+            "entity": {
+                "hpcid:variable_grad": {
+                    "prov:type": {"$": "hpc:LogicalVariable", "type": "xsd:QName"},
+                    "hpc:datasetName": "hll_128/analysis.bp",
+                    "hpc:variable": "grad_rho_abs",
+                    "hpc:variableDefinition": "density_gradient_magnitude",
+                },
+                "hpcid:variable_div": {
+                    "prov:type": {"$": "hpc:LogicalVariable", "type": "xsd:QName"},
+                    "hpc:datasetName": "hll_128/analysis.bp",
+                    "hpc:variable": "div_b",
+                    "hpc:variableDefinition": "magnetic_field_divergence",
+                },
+                "hpcid:variable_rho": {
+                    "prov:type": {"$": "hpc:LogicalVariable", "type": "xsd:QName"},
+                    "hpc:datasetName": "hll_128/output.bp",
+                    "hpc:variable": "rho",
+                    "hpc:variableDefinition": "density",
+                },
+                "hpcid:variable_bx": {
+                    "prov:type": {"$": "hpc:LogicalVariable", "type": "xsd:QName"},
+                    "hpc:datasetName": "hll_128/output.bp",
+                    "hpc:variable": "bx",
+                    "hpc:variableDefinition": "magnetic_x",
+                },
+                "hpcid:variable_by": {
+                    "prov:type": {"$": "hpc:LogicalVariable", "type": "xsd:QName"},
+                    "hpc:datasetName": "hll_128/output.bp",
+                    "hpc:variable": "by",
+                    "hpc:variableDefinition": "magnetic_y",
+                },
+                "hpcid:plan_gradient": {
+                    "prov:type": [
+                        {"$": "prov:Plan", "type": "xsd:QName"},
+                        {"$": "hpc:ActionSpecification", "type": "xsd:QName"},
+                    ],
+                    "prov:value": json.dumps(
+                        {
+                            "operation": "gradient_magnitude",
+                            "script_dataset": "plans/adios_derived_variables.py",
+                        }
+                    ),
+                },
+                "hpcid:plan_divergence": {
+                    "prov:type": [
+                        {"$": "prov:Plan", "type": "xsd:QName"},
+                        {"$": "hpc:ActionSpecification", "type": "xsd:QName"},
+                    ],
+                    "prov:value": json.dumps(
+                        {
+                            "operation": "divergence",
+                            "script_dataset": "plans/adios_derived_variables.py",
+                        }
+                    ),
+                },
+                "hpcid:workflow_gradient": {
+                    "prov:type": {"$": "prov:Plan", "type": "xsd:QName"},
+                    "prov:label": "MHD derived-variable workflow",
+                    "prov:location": (
+                        "https://github.com/example/repo/blob/abc123/"
+                        "scripts/adios_derived_variables.py"
+                    ),
+                    "prov:value": json.dumps(
+                        {
+                            "schema_version": 1,
+                            "workflow": "derived_variables",
+                            "implementation_dataset": (
+                                "plans/adios_derived_variables.py"
+                            ),
+                            "selection": {
+                                "datasets": ["hll_128/analysis.bp"]
+                            },
+                            "parameters": {
+                                "discretization": "numpy.gradient"
+                            },
+                        }
+                    ),
+                },
+            },
+            "agent": {
+                "hpcid:agent_numpy": {
+                    "prov:type": {
+                        "$": "prov:SoftwareAgent",
+                        "type": "xsd:QName",
+                    },
+                    "prov:label": "NumPy",
+                    "hpc:version": "2.0.0",
+                }
+            },
+            "used": {
+                "hpcid:usage_gradient_action_specification": {
+                    "prov:activity": "hpcid:activity_gradient",
+                    "prov:entity": "hpcid:plan_gradient",
+                    "prov:role": {"$": "hpc:action_specification", "type": "xsd:QName"},
+                },
+                "hpcid:usage_gradient_density": {
+                    "prov:activity": "hpcid:activity_gradient",
+                    "prov:entity": "hpcid:variable_rho",
+                    "prov:role": {"$": "hpc:density", "type": "xsd:QName"},
+                },
+                "hpcid:usage_divergence_action_specification": {
+                    "prov:activity": "hpcid:activity_divergence",
+                    "prov:entity": "hpcid:plan_divergence",
+                    "prov:role": {"$": "hpc:action_specification", "type": "xsd:QName"},
+                },
+                "hpcid:usage_divergence_magnetic_x": {
+                    "prov:activity": "hpcid:activity_divergence",
+                    "prov:entity": "hpcid:variable_bx",
+                    "prov:role": {"$": "hpc:magnetic_x", "type": "xsd:QName"},
+                },
+                "hpcid:usage_divergence_magnetic_y": {
+                    "prov:activity": "hpcid:activity_divergence",
+                    "prov:entity": "hpcid:variable_by",
+                    "prov:role": {"$": "hpc:magnetic_y", "type": "xsd:QName"},
+                },
+            },
+            "wasDerivedFrom": {
+                "hpcid:derivation_gradient_density": {
+                    "prov:activity": "hpcid:activity_gradient",
+                    "prov:generatedEntity": "hpcid:variable_grad",
+                    "prov:usage": "hpcid:usage_gradient_density",
+                    "prov:usedEntity": "hpcid:variable_rho",
+                },
+                "hpcid:derivation_divergence_magnetic_x": {
+                    "prov:activity": "hpcid:activity_divergence",
+                    "prov:generatedEntity": "hpcid:variable_div",
+                    "prov:usage": "hpcid:usage_divergence_magnetic_x",
+                    "prov:usedEntity": "hpcid:variable_bx",
+                },
+                "hpcid:derivation_divergence_magnetic_y": {
+                    "prov:activity": "hpcid:activity_divergence",
+                    "prov:generatedEntity": "hpcid:variable_div",
+                    "prov:usage": "hpcid:usage_divergence_magnetic_y",
+                    "prov:usedEntity": "hpcid:variable_by",
+                },
+            },
+            "wasAssociatedWith": {
+                "hpcid:association_gradient": {
+                    "prov:activity": "hpcid:activity_gradient",
+                    "prov:agent": "hpcid:agent_numpy",
+                    "prov:plan": "hpcid:workflow_gradient",
+                },
+                "hpcid:association_divergence": {
+                    "prov:activity": "hpcid:activity_divergence",
+                    "prov:agent": "hpcid:agent_numpy",
+                    "prov:plan": "hpcid:workflow_gradient",
+                }
+            },
+        }
+        con.execute(
+            """
+            insert into provenance_document(
+                uuid, name, format, content, sha256, active, modtime
+            ) values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "prov-doc",
+                "campaign-provenance",
+                "prov-json",
+                json.dumps(content),
+                "sha",
+                1,
+                1,
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    index = _load_activity_provenance_index(str(campaign_path))
+
+    gradient_entry = index[("hll_128/analysis.bp", "grad_rho_abs")]
+    assert gradient_entry == {
+        "activity_uuid": "gradient",
+        "activity_kind": "quantity_of_interest",
+        "activity_operation": "gradient_magnitude",
+        "activity_metadata": {
+            "operation": "gradient_magnitude",
+            "script_dataset": "plans/adios_derived_variables.py",
+        },
+        "output_role": "",
+        "output_definition": "density_gradient_magnitude",
+        "inputs": [
+            {
+                "name": "rho",
+                "source_dataset": "hll_128/output.bp",
+                "definition": "density",
+                "roles": ["density"],
+            }
+        ],
+        "workflow_plan": {
+            "id": "hpcid:workflow_gradient",
+            "label": "MHD derived-variable workflow",
+            "location": (
+                "https://github.com/example/repo/blob/abc123/"
+                "scripts/adios_derived_variables.py"
+            ),
+            "details": {
+                "schema_version": 1,
+                "workflow": "derived_variables",
+                "implementation_dataset": "plans/adios_derived_variables.py",
+                "selection": {"datasets": ["hll_128/analysis.bp"]},
+                "parameters": {"discretization": "numpy.gradient"},
+            },
+        },
+        "activity_agent": {
+            "id": "hpcid:agent_numpy",
+            "label": "NumPy",
+            "type": "SoftwareAgent",
+            "version": "2.0.0",
+        },
+    }
+    assert index[("hll_128/analysis.bp", "div_b")]["inputs"] == [
+        {
+            "name": "bx",
+            "source_dataset": "hll_128/output.bp",
+            "definition": "magnetic_x",
+            "roles": ["magnetic_x"],
+        },
+        {
+            "name": "by",
+            "source_dataset": "hll_128/output.bp",
+            "definition": "magnetic_y",
+            "roles": ["magnetic_y"],
+        },
+    ]
+    assert index[("hll_128/analysis.bp", "div_b")]["activity_metadata"] == {
+        "operation": "divergence",
+        "script_dataset": "plans/adios_derived_variables.py",
+    }
+
+
+def test_prov_json_visualization_provenance_resolves_sequence_manifest(tmp_path: Path):
+    campaign_path = tmp_path / "visualization-prov-json.aca"
+    manifest_name = "run/provenance/visualizations/pressure.json"
+    sequence_name = "run/output.bp/visualizations/pressure_heatmap"
+    con = sqlite3.connect(campaign_path)
+    try:
+        con.executescript(
+            """
+            create table provenance_document(
+                uuid text primary key,
+                name text not null unique,
+                format text not null,
+                content text not null,
+                sha256 text not null,
+                active integer not null,
+                modtime integer not null
+            );
+            create table dataset(
+                rowid integer primary key,
+                name text not null,
+                fileformat text not null,
+                deltime integer not null
+            );
+            create table replica(
+                rowid integer primary key,
+                datasetid integer not null,
+                keyid integer not null,
+                deltime integer not null
+            );
+            create table repfiles(
+                replicaid integer not null,
+                fileid integer not null
+            );
+            create table file(
+                fileid integer primary key,
+                compression integer not null,
+                data blob not null
+            );
+            """
+        )
+        content = {
+            "activity": {
+                "hpcid:activity_visualization": {
+                    "prov:type": {
+                        "$": "hpc:Visualization",
+                        "type": "xsd:QName",
+                    }
+                }
+            },
+            "entity": {
+                "hpcid:visualization_output": {
+                    "prov:type": {
+                        "$": "hpc:LogicalVariable",
+                        "type": "xsd:QName",
+                    },
+                    "hpc:datasetName": manifest_name,
+                    "hpc:variable": "image_sequence",
+                    "hpc:variableDefinition": "pressure_visualization",
+                },
+                "hpcid:pressure": {
+                    "prov:type": {
+                        "$": "hpc:LogicalVariable",
+                        "type": "xsd:QName",
+                    },
+                    "hpc:datasetName": "run/output.bp",
+                    "hpc:variable": "pressure",
+                    "hpc:variableDefinition": "pressure",
+                },
+                "hpcid:visualization_action": {
+                    "prov:type": [
+                        {"$": "prov:Plan", "type": "xsd:QName"},
+                        {
+                            "$": "hpc:ActionSpecification",
+                            "type": "xsd:QName",
+                        },
+                    ],
+                    "prov:value": json.dumps(
+                        {
+                            "visualization_type": "heatmap",
+                            "steps": [0, 1],
+                            "rendering_parameters": {"dpi": 120},
+                            "sequence_manifest": manifest_name,
+                            "script_dataset": (
+                                "plans/render_adios_visualizations_to_campaign.py"
+                            ),
+                        }
+                    ),
+                },
+                "hpcid:visualization_workflow": {
+                    "prov:type": {"$": "prov:Plan", "type": "xsd:QName"},
+                    "prov:label": "MHD visualization workflow",
+                    "prov:location": (
+                        "plans/render_adios_visualizations_to_campaign.py"
+                    ),
+                    "prov:value": json.dumps(
+                        {
+                            "schema_version": 1,
+                            "workflow": "render_visualizations",
+                            "implementation_dataset": (
+                                "plans/render_adios_visualizations_to_campaign.py"
+                            ),
+                            "selection": {"variables": ["pressure"]},
+                            "parameters": {"visualization_type": "heatmap"},
+                            "output_policy": {"replace": True},
+                        }
+                    ),
+                },
+            },
+            "agent": {
+                "hpcid:agent_matplotlib": {
+                    "prov:type": {
+                        "$": "prov:SoftwareAgent",
+                        "type": "xsd:QName",
+                    },
+                    "prov:label": "Matplotlib",
+                    "hpc:version": "3.10.0",
+                }
+            },
+            "used": {
+                "hpcid:usage_visualization_action": {
+                    "prov:activity": "hpcid:activity_visualization",
+                    "prov:entity": "hpcid:visualization_action",
+                    "prov:role": {
+                        "$": "hpc:action_specification",
+                        "type": "xsd:QName",
+                    },
+                },
+                "hpcid:usage_pressure": {
+                    "prov:activity": "hpcid:activity_visualization",
+                    "prov:entity": "hpcid:pressure",
+                    "prov:role": {"$": "hpc:color", "type": "xsd:QName"},
+                },
+            },
+            "wasDerivedFrom": {
+                "hpcid:derivation_visualization": {
+                    "prov:activity": "hpcid:activity_visualization",
+                    "prov:generatedEntity": "hpcid:visualization_output",
+                    "prov:usage": "hpcid:usage_pressure",
+                    "prov:usedEntity": "hpcid:pressure",
+                }
+            },
+            "wasAssociatedWith": {
+                "hpcid:association_visualization": {
+                    "prov:activity": "hpcid:activity_visualization",
+                    "prov:agent": "hpcid:agent_matplotlib",
+                    "prov:plan": "hpcid:visualization_workflow",
+                }
+            },
+        }
+        con.execute(
+            """
+            insert into provenance_document(
+                uuid, name, format, content, sha256, active, modtime
+            ) values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "visualization-prov-doc",
+                "visualization-provenance",
+                "prov-json",
+                json.dumps(content),
+                "sha",
+                1,
+                1,
+            ),
+        )
+        con.execute(
+            "insert into dataset(rowid, name, fileformat, deltime) values (?, ?, ?, ?)",
+            (1, manifest_name, "TEXT", 0),
+        )
+        con.execute(
+            "insert into replica(rowid, datasetid, keyid, deltime) values (?, ?, ?, ?)",
+            (1, 1, 0, 0),
+        )
+        con.execute(
+            "insert into repfiles(replicaid, fileid) values (?, ?)",
+            (1, 1),
+        )
+        con.execute(
+            "insert into file(fileid, compression, data) values (?, ?, ?)",
+            (1, 0, json.dumps({"sequence_name": sequence_name}).encode()),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    entry = _load_activity_provenance_index(str(campaign_path))[
+        (manifest_name, "image_sequence")
+    ]
+
+    assert entry["activity_kind"] == "visualization"
+    assert entry["activity_operation"] == "heatmap"
+    assert entry["visualization_sequence"] == sequence_name
+    assert entry["workflow_plan"]["details"]["workflow"] == (
+        "render_visualizations"
+    )
+    assert "activities" not in entry["workflow_plan"]
+    assert entry["activity_agent"] == {
+        "id": "hpcid:agent_matplotlib",
+        "label": "Matplotlib",
+        "type": "SoftwareAgent",
+        "version": "3.10.0",
+    }
 
 
 def test_temporary_demo_campaign_removes_generated_files():

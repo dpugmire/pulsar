@@ -10,6 +10,7 @@ from seurat.widgets import GridRuntime
 from .dialogs import (
     PlotSettingsPanel,
     PluginOptionsPanel,
+    ProvenanceDialog,
     ScalarFieldAssistantPanel,
     ScalarFieldSettingsPanel,
     ScalarPlotDialog,
@@ -535,6 +536,8 @@ def _build_inactive_workspace_grids(ctrl):
                                     ':data-pane-id="pane.id"',
                                     ':data-tab-id="tab.id"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
+                                    ':data-selection-axis="JSON.stringify((tile && tile.selection_axis) || {})"',
+                                    ':data-axis-sync-status="(tile && tile.axis_sync_status) || \'\'"',
                                     ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
                                     ':data-tile-type="(tile && tile.tile_type) || \'plot\'"',
                                     ':data-canvas-x="Number((tile && tile.canvas_x) || 0)"',
@@ -562,6 +565,7 @@ def _build_inactive_workspace_grids(ctrl):
                                                 raw_attrs=[
                                                     ':data-plot="JSON.stringify(tile.plot || {})"',
                                                     ':data-plot-settings="JSON.stringify(tile.plot_settings || {})"',
+                                                    ':data-plot-axis-key="tile.plot_axis_key || \'\'"',
                                                 ],
                                             )
                                         with vuetify.Template(
@@ -689,6 +693,7 @@ class GridWorkspace(TrameComponent):
     def __init__(self, server):
         super().__init__(server)
         self.runtime = None
+        self.provenance_dialog = ProvenanceDialog(server)
         self.source_dialog = SourceDialog(server)
         self.scalar_plot_dialog = ScalarPlotDialog(server)
         self.plot_settings_panel = PlotSettingsPanel(server)
@@ -781,6 +786,10 @@ class GridWorkspace(TrameComponent):
                                 type="range",
                                 id="seurat-vcr-step-slider",
                                 classes="seurat-vcr-slider",
+                                change=(
+                                    ctrl.set_active_axis_selection,
+                                    "[$event.target.value]",
+                                ),
                                 raw_attrs=[
                                     'min="0"',
                                     'max="20"',
@@ -954,6 +963,8 @@ class GridWorkspace(TrameComponent):
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
+                                    ':data-selection-axis="JSON.stringify((tile && tile.selection_axis) || {})"',
+                                    ':data-axis-sync-status="(tile && tile.axis_sync_status) || \'\'"',
                                     ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
                                     ':data-tile-type="(tile && tile.tile_type) || \'plot\'"',
                                     ':data-canvas-x="Number((tile && tile.canvas_x) || 0)"',
@@ -1142,7 +1153,9 @@ class GridWorkspace(TrameComponent):
                                         )
                                         with html.Button(
                                             v_if=(
-                                                "(tile.time_values && tile.time_values.length)"
+                                                "(tile.selection_axis && tile.selection_axis.values"
+                                                " && tile.selection_axis.values.length)"
+                                                " || (tile.time_values && tile.time_values.length)"
                                                 " || (tile.plot && tile.plot.series && tile.plot.series.length"
                                                 " && (String(tile.plot.x_label || '').toLowerCase() === 'time'"
                                                 " || String(tile.plot.x_label || '').toLowerCase() === 'physical time'))"
@@ -1189,6 +1202,7 @@ class GridWorkspace(TrameComponent):
                                                 raw_attrs=[
                                                     ':data-plot="JSON.stringify(tile.plot || {})"',
                                                     ':data-plot-settings="JSON.stringify(tile.plot_settings || {})"',
+                                                    ':data-plot-axis-key="tile.plot_axis_key || \'\'"',
                                                 ],
                                                 style=(
                                                     "display:block;"
@@ -1500,38 +1514,59 @@ class GridWorkspace(TrameComponent):
                     with vuetify.Template(v_if="detailsSelectedVar"):
                         with html.Div(
                             style=(
-                                "display:flex; align-items:center; gap:12px; "
-                                "width:100%; flex-wrap:wrap;"
+                                "display:flex; flex-direction:column; gap:6px; "
+                                "width:100%;"
                             )
                         ):
-                            html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
-                            vuetify.VBtn(
-                                "{{ 'SOURCES(' + detailsNumSources + ')' }}",
-                                variant="tonal",
-                                size="small",
-                                click=ctrl.toggle_sources,
-                            )
                             with html.Div(
-                                class_="text-caption",
                                 style=(
                                     "display:flex; align-items:center; gap:12px; "
-                                    "white-space:nowrap;"
+                                    "width:100%; flex-wrap:wrap;"
                                 ),
                             ):
-                                html.Span("Min/Max")
-                                with html.Span():
-                                    html.Strong("Global ")
-                                    html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
-                                with html.Span():
-                                    html.Strong("Median ")
-                                    html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
-                                with html.Span():
-                                    html.Strong("Mean ")
-                                    html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
-                            vuetify.VSpacer()
-                            html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+                                html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
+                                vuetify.VBtn(
+                                    "{{ 'SOURCES(' + detailsNumSources + ')' }}",
+                                    variant="tonal",
+                                    size="small",
+                                    click=ctrl.toggle_sources,
+                                )
+                                with html.Div(
+                                    class_="text-caption",
+                                    style=(
+                                        "display:flex; align-items:center; gap:12px; "
+                                        "white-space:nowrap;"
+                                    ),
+                                ):
+                                    html.Span("Min/Max")
+                                    with html.Span():
+                                        html.Strong("Global ")
+                                        html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
+                                    with html.Span():
+                                        html.Strong("Median ")
+                                        html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
+                                    with html.Span():
+                                        html.Strong("Mean ")
+                                        html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
+                                vuetify.VSpacer()
+                                html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+                            with vuetify.Template(v_if="detailsProvenanceChain"):
+                                with html.Div(
+                                    classes="seurat-provenance-strip text-caption",
+                                ):
+                                    vuetify.VBtn(
+                                        "Provenance",
+                                        variant="tonal",
+                                        size="small",
+                                        click=ctrl.open_provenance_dialog,
+                                    )
+                                    html.Span(
+                                        "{{ detailsProvenanceCompact || detailsProvenanceChain }}",
+                                        classes="seurat-provenance-compact",
+                                    )
                     with vuetify.Template(v_if="!detailsSelectedVar"):
                         html.Div("Select a variable", class_="text-caption")
+            self.provenance_dialog.build()
             self.source_dialog.build()
             self.scalar_plot_dialog.build()
             self.plot_settings_panel.build()
