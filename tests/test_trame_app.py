@@ -222,6 +222,21 @@ class PulsarAppTests(unittest.TestCase):
         ui = build_ui(server, campaign_name="sample.aca")
 
         self.assertIsInstance(ui, PulsarUI)
+        self.assertEqual(server.state.trame__title, "Pulsar")
+        self.assertEqual(
+            server.state.trame__favicon,
+            f"{pulsar_module.BASE_URL}/pulsar-mark.svg",
+        )
+        favicon_path = (
+            Path(pulsar_module.__file__).parent
+            / "serve"
+            / "pulsar-mark.svg"
+        )
+        self.assertTrue(favicon_path.is_file())
+        self.assertIn(
+            "Pulsar placeholder logo",
+            favicon_path.read_text(encoding="utf-8"),
+        )
         for component in (
             ui.query_toolbar,
             ui.query_assistant,

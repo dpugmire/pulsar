@@ -44,6 +44,18 @@ def _open_app(page, pulsar_server, mode="step"):
     return console_errors, page_errors, response_errors
 
 
+def test_browser_tab_uses_pulsar_title_and_favicon(page, pulsar_server):
+    _open_app(page, pulsar_server)
+
+    assert page.title() == "Pulsar"
+    favicon = page.locator('link[rel="icon"]')
+    favicon_url = favicon.evaluate("element => element.href")
+    assert favicon_url.endswith("/pulsar_0_1_11/pulsar-mark.svg")
+    response = page.request.get(favicon_url)
+    assert response.ok
+    assert "Pulsar placeholder logo" in response.text()
+
+
 def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
     bounds = locator.bounding_box()
     assert bounds is not None

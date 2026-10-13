@@ -53,7 +53,7 @@ py-modules = [
 include = ["pulsar*"]
 
 [tool.setuptools.package-data]
-"pulsar.module" = ["serve/*.css", "serve/*.js"]
+"pulsar.module" = ["serve/*.css", "serve/*.js", "serve/*.svg"]
 
 [tool.pytest.ini_options]
 markers = [

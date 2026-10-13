@@ -4,6 +4,7 @@ from trame.app import TrameComponent
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
 
+from pulsar import module as pulsar_module
 from pulsar.widgets import (
     CanvasRuntime,
     HistoryRuntime,
@@ -23,6 +24,10 @@ from .workspace import WorkspaceMenu
 class PulsarUI(TrameComponent):
     def __init__(self, server, campaign_name=""):
         super().__init__(server)
+        self.server.state.trame__title = "Pulsar"
+        self.server.state.trame__favicon = (
+            f"{pulsar_module.BASE_URL}/pulsar-mark.svg"
+        )
         self.query_toolbar = QueryToolbar(server)
         self.query_assistant = QueryAssistantDialog(server)
         self.help_dialog = HelpDialog(server)
