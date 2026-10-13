@@ -50,7 +50,7 @@ def test_browser_tab_uses_pulsar_title_and_favicon(page, pulsar_server):
     assert page.title() == "Pulsar"
     favicon = page.locator('link[rel="icon"]')
     favicon_url = favicon.evaluate("element => element.href")
-    assert favicon_url.endswith("/pulsar_0_1_11/pulsar-mark.svg")
+    assert favicon_url.endswith("/pulsar_0_1_12/pulsar-mark.svg")
     response = page.request.get(favicon_url)
     assert response.ok
     assert "Pulsar placeholder logo" in response.text()
@@ -3716,6 +3716,100 @@ def test_physical_timeline_uses_declared_time_values(page, pulsar_server):
     assert slider_box is not None
     assert label_box["y"] + label_box["height"] <= slider_box["y"] + 1
     assert slider_box["width"] == pytest.approx(slider_width, abs=1)
+
+
+def test_physical_timeline_seeks_video_by_frame_time_values(page, pulsar_server):
+    _open_app(page, pulsar_server, mode="physical")
+    page.evaluate(
+        """() => {
+            const cell = document.querySelector(
+                '.pulsar-dropcell[data-cell-index="1"]'
+            );
+            const video = document.createElement('video');
+            video.setAttribute('data-grid-video', '1');
+            video.setAttribute('data-frame-count', '3');
+            video.setAttribute('data-frame-indices', '0,1,2');
+            video.setAttribute('data-time-values', '0,0.25,1');
+            video.setAttribute('data-time-mode', 'physical_time');
+            video.setAttribute('data-fps', '2');
+            Object.defineProperty(video, 'duration', {
+                configurable: true,
+                value: 2,
+            });
+            let currentTime = 0;
+            Object.defineProperty(video, 'currentTime', {
+                configurable: true,
+                get: () => currentTime,
+                set: value => {
+                    currentTime = value;
+                    window.__pulsarVideoSeek = value;
+                },
+            });
+            cell.appendChild(video);
+            window.pulsarTimelineRuntime.scheduleMediaSync();
+        }"""
+    )
+
+    page.get_by_title("Forward step").click()
+    page.wait_for_function(
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Time = 0.25'"
+    )
+    assert page.evaluate("window.__pulsarVideoSeek") == pytest.approx(2.0 / 3.0)
+
+
+def test_video_only_physical_timeline_drives_slider_and_steps(page, pulsar_server):
+    _open_app(page, pulsar_server, mode="video-only")
+    page.evaluate(
+        """() => {
+            const cell = document.querySelector(
+                '.pulsar-dropcell[data-cell-index="0"]'
+            );
+            const video = document.createElement('video');
+            video.setAttribute('data-grid-video', '1');
+            video.setAttribute('data-frame-count', '3');
+            video.setAttribute('data-frame-indices', '0,1,2');
+            video.setAttribute('data-time-values', '0,0.25,1');
+            video.setAttribute('data-time-mode', 'physical_time');
+            video.setAttribute('data-fps', '2');
+            Object.defineProperty(video, 'duration', {
+                configurable: true,
+                value: 2,
+            });
+            let currentTime = 0;
+            Object.defineProperty(video, 'currentTime', {
+                configurable: true,
+                get: () => currentTime,
+                set: value => {
+                    currentTime = value;
+                    window.__pulsarVideoOnlySeek = value;
+                },
+            });
+            cell.appendChild(video);
+            window.pulsarTimelineRuntime.scheduleMediaSync();
+        }"""
+    )
+
+    assert page.locator('img[data-grid-image-sequence="1"]').count() == 0
+    assert page.locator(".pulsar-plot1d").count() == 0
+    slider = page.locator("#pulsar-vcr-step-slider")
+    page.wait_for_function(
+        "document.querySelector('#pulsar-vcr-step-slider').max === '2'"
+    )
+    assert slider.get_attribute("aria-label") == "Time"
+
+    page.get_by_title("Forward step").click()
+    page.wait_for_function(
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Time = 0.25'"
+    )
+    assert page.evaluate("window.__pulsarVideoOnlySeek") == pytest.approx(2.0 / 3.0)
+
+    slider.evaluate(
+        "element => { element.value = '2'; element.dispatchEvent(new Event('input', { bubbles: true })); }"
+    )
+    page.wait_for_function(
+        "document.querySelector('#pulsar-vcr-time-value').textContent === 'Time = 1'"
+    )
+    assert page.evaluate("window.__pulsarVideoOnlySeek") == pytest.approx(4.0 / 3.0)
 
 
 def test_multi_axis_slider_uses_active_axis_and_marks_incompatible_tiles(

@@ -19,10 +19,10 @@ from ui import build_ui
 
 class PulsarAppTests(unittest.TestCase):
     def test_browser_assets_use_current_cache_namespace(self):
-        self.assertEqual(pulsar_module.BASE_URL, "pulsar_0_1_11")
+        self.assertEqual(pulsar_module.BASE_URL, "pulsar_0_1_12")
         self.assertEqual(
             pulsar_module.styles,
-            ["pulsar_0_1_11/pulsar.css"],
+            ["pulsar_0_1_12/pulsar.css"],
         )
 
     def test_provenance_panel_styles_enable_bounded_two_axis_resize(self):

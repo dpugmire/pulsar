@@ -22,7 +22,11 @@ GENERATED_SCALAR_PLOT_VIS = "generated_timeseries"
 GENERATED_SCALAR_PLOT_VERSION = 3
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 SCALAR_FIELD_VARIABLE_TYPE = "scalarField"
-VISUALIZATION_PAYLOAD_VARIABLE_TYPES = ("image", SCALAR_FIELD_VARIABLE_TYPE)
+VISUALIZATION_PAYLOAD_VARIABLE_TYPES = (
+    "image",
+    SCALAR_FIELD_VARIABLE_TYPE,
+    "video",
+)
 SCALAR_FIELD_RENDER_MODES = ("colormap", "contours", "both")
 SCALAR_FIELD_CONTOUR_LEVEL_MODES = ("range", "values")
 SCALAR_FIELD_DEFAULT_CONTOUR_COUNT = 10
@@ -3545,7 +3549,7 @@ class CampaignDb:
 
         base_query: Dict[str, Any] = {
             "variable_id": variable_id,
-            "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
+            "variable_type": {"$in": ["image", SCALAR_FIELD_VARIABLE_TYPE]},
             "visualization_name": visualization_name,
         }
         if source_dataset:
@@ -3732,6 +3736,7 @@ class CampaignDb:
             "variable_type": 1,
             "payload_type": 1,
             "visualization_item_type": 1,
+            "visualization_item_uuid": 1,
             "scalar_field_metadata": 1,
             "visualization_kind": 1,
             "visualization_variables": 1,
@@ -3746,6 +3751,11 @@ class CampaignDb:
             "plot_x_axis": 1,
             "selection_axis": 1,
             "schema_default_axis": 1,
+            "frame_count": 1,
+            "frame_indices": 1,
+            "time_values": 1,
+            "time_mode": 1,
+            "time_unit": 1,
         }
 
         try:
@@ -3766,14 +3776,71 @@ class CampaignDb:
                 if not vis:
                     continue
 
-                key = (
-                    (vis, "schema", schema_file_group)
-                    if schema_file_group and schema_mode == "file_per_timestep"
-                    else ((vis, source_dataset) if source_dataset else (vis, producer, casename, file))
-                )
+                if str(doc.get("variable_type", "") or "") == "video":
+                    key = (
+                        vis,
+                        "video",
+                        str(doc.get("visualization_item_uuid", "") or ""),
+                    )
+                elif schema_file_group and schema_mode == "file_per_timestep":
+                    key = (vis, "schema", schema_file_group)
+                elif source_dataset:
+                    key = (vis, source_dataset)
+                else:
+                    key = (vis, producer, casename, file)
                 if key in seen:
                     continue
                 seen.add(key)
+
+                if str(doc.get("variable_type", "") or "") == "video":
+                    metadata = _dict_field(doc.get("visualization_item_metadata", {}))
+                    dataset_uuid = str(
+                        doc.get("visualization_item_uuid", "") or ""
+                    )
+                    frame_count = int(doc.get("frame_count", 0) or 0)
+                    frame_indices = _list_field(doc.get("frame_indices", []))
+                    time_values = _list_field(doc.get("time_values", []))
+                    if not frame_indices and frame_count > 0:
+                        frame_indices = list(range(frame_count))
+                    tile = {
+                        "variable_name": str(doc.get("variable_name", "") or variable_id),
+                        "variable_id": variable_id,
+                        "visualization_name": vis,
+                        "source_dataset": source_dataset,
+                        "schema_name": "",
+                        "schema_file_group": "",
+                        "schema_role": "",
+                        "schema_mode": "",
+                        "producer": producer,
+                        "casename": casename,
+                        "file": file,
+                        "variable_type": "video",
+                        "payload_type": "VIDEO",
+                        "visualization_item_type": "VIDEO",
+                        "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+                        "visualization_variables": _list_field(doc.get("visualization_variables", [])),
+                        "visualization_roles": _list_field(doc.get("visualization_roles", [])),
+                        "visualization_sequence_metadata": _dict_field(doc.get("visualization_sequence_metadata", {})),
+                        "visualization_item_metadata": metadata,
+                        "visualization_activity_provenance": _dict_field(doc.get("visualization_activity_provenance", {})),
+                        "visualization_item_uuid": dataset_uuid,
+                        "src": f"/pulsar-media/{dataset_uuid}" if dataset_uuid else "",
+                        "media_type": "video",
+                        "status": "ok" if dataset_uuid else "unavailable",
+                        "note": "" if dataset_uuid else "missing video dataset UUID",
+                        "fps": int(fps),
+                        "frame_count": frame_count,
+                        "frame_indices": frame_indices,
+                        "time_values": time_values,
+                        "time_mode": str(doc.get("time_mode", "timestep") or "timestep"),
+                        "time_unit": str(doc.get("time_unit", "") or ""),
+                        "frame_sources": [],
+                    }
+                    tile.update(self._axis_tile_fields(doc, 0))
+                    tiles.append(tile)
+                    if len(tiles) >= int(limit):
+                        break
+                    continue
 
                 grouped_schema_source = bool(schema_file_group and schema_mode == "file_per_timestep")
                 frames, total, frame_indices, time_values, time_mode = self.get_movie_frames_for_stream(

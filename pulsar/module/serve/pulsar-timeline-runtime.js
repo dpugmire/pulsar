@@ -126,9 +126,25 @@
     return values;
   }
 
+  function parseVideoTimeValues(el) {
+    const raw = String(el && el.getAttribute && el.getAttribute("data-time-values") || "");
+    if (!raw) return [];
+    const values = [];
+    for (const part of raw.split(",")) {
+      const value = Number(part);
+      if (Number.isFinite(value)) values.push(value);
+    }
+    return values;
+  }
+
   function imageSequenceHasPhysicalTime(el) {
     const mode = String(el && el.getAttribute && el.getAttribute("data-time-mode") || "").trim().toLowerCase();
     return mode === "physical_time" && parseImageSequenceTimeValues(el).length > 0;
+  }
+
+  function videoHasPhysicalTime(el) {
+    const mode = String(el && el.getAttribute && el.getAttribute("data-time-mode") || "").trim().toLowerCase();
+    return mode === "physical_time" && parseVideoTimeValues(el).length > 0;
   }
 
   function isVisibleGridCell(cell) {
@@ -345,7 +361,17 @@
 
   function getPhysicalTimeline(sequences, plots) {
     const axis = getActiveSelectionAxis(sequences, plots);
-    return axis && Array.isArray(axis.values) ? axis.values : [];
+    if (axis && Array.isArray(axis.values) && axis.values.length) return axis.values;
+
+    // Video-only campaigns still have a declared physical time axis. Use it
+    // when no image sequence or plot has already supplied the active timeline.
+    const values = [];
+    for (const video of getGridVideos()) {
+      if (videoHasPhysicalTime(video)) {
+        values.push.apply(values, parseVideoTimeValues(video));
+      }
+    }
+    return uniqueSortedTimelineValues(values);
   }
 
   function elementSelectionAxis(el) {
@@ -879,7 +905,32 @@
     const t = clampTimeForVideos(rawTime, videos);
     for (const v of videos) {
       try {
-        v.currentTime = t;
+        const timeMode = String(
+          v && v.getAttribute && v.getAttribute("data-time-mode") || ""
+        ).trim().toLowerCase();
+        const physicalTimes = String(
+          v && v.getAttribute && v.getAttribute("data-time-values") || ""
+        ).split(",").map(Number).filter(Number.isFinite);
+        if (timeMode === "physical_time" && physicalTimes.length) {
+          let nearestIndex = 0;
+          let nearestDistance = Infinity;
+          physicalTimes.forEach(function(value, index) {
+            const distance = Math.abs(value - t);
+            if (distance < nearestDistance) {
+              nearestDistance = distance;
+              nearestIndex = index;
+            }
+          });
+          const frameCount = getVideoFrameCount(v) || physicalTimes.length;
+          const frameDivisor = Math.max(1, frameCount);
+          const duration = Number(v.duration);
+          const mediaDuration = Number.isFinite(duration) && duration > 0
+            ? duration
+            : frameDivisor / inferFpsForVideos([v]);
+          v.currentTime = mediaDuration * nearestIndex / frameDivisor;
+        } else {
+          v.currentTime = t;
+        }
       } catch (_err) {
         // Ignore seek errors for unloaded videos.
       }
@@ -1277,7 +1328,7 @@
     const plots = getGridPlots();
     if (!sequences.length && !videos.length && !plots.length) return;
     const timeline = getPhysicalTimeline(sequences, plots);
-    if (timeline.length && !videos.length) {
+    if (timeline.length) {
       stepPhysicalTimelineBy(frameCount, sequences, videos, plots);
       if (!gridVcrState.playing) pauseAllVideos(videos);
       return;
@@ -1364,7 +1415,7 @@
       return;
     }
     const timeline = getPhysicalTimeline(sequences, plots);
-    if (timeline.length && !videos.length) {
+    if (timeline.length) {
       applyPhysicalTimelineTime(timeline[0], sequences, videos, plots);
       return;
     }
@@ -1397,7 +1448,7 @@
       return;
     }
     const timeline = getPhysicalTimeline(sequences, plots);
-    if (timeline.length && !videos.length) {
+    if (timeline.length) {
       applyPhysicalTimelineTime(timeline[timeline.length - 1], sequences, videos, plots);
       return;
     }
@@ -1432,7 +1483,7 @@
       return;
     }
     const timeline = getPhysicalTimeline(sequences, plots);
-    if (timeline.length && !videos.length) {
+    if (timeline.length) {
       const base = Number.isFinite(gridVcrState.syncTime)
         ? clampTimeForMedia(gridVcrState.syncTime, videos, plots)
         : timeline[0];
@@ -1477,7 +1528,7 @@
       return;
     }
     const timeline = getPhysicalTimeline(sequences, plots);
-    if (timeline.length && !videos.length) {
+    if (timeline.length) {
       gridVcrState.syncTime = clampTimeForMedia(gridVcrState.syncTime, videos, plots);
       gridVcrState.timelinePosition = timelineIndexNearest(gridVcrState.syncTime, timeline);
       setImageSequencesForTime(gridVcrState.syncTime, sequences);
@@ -1505,7 +1556,7 @@
     stopSyncTimer();
     pauseAllVideos(videos);
     const timeline = getPhysicalTimeline(sequences, plots);
-    if (timeline.length && !videos.length) {
+    if (timeline.length) {
       applyPhysicalTimelineTime(timeline[0], sequences, videos, plots);
       return;
     }

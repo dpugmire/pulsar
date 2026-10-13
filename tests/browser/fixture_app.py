@@ -534,7 +534,9 @@ def build_fixture_server(mode):
         "minmax(180px, 1fr)" for _ in range(state.gridCols)
     )
     state.gridFitRowTemplate = "minmax(212px, 1fr)"
-    if mode == "multi-axis":
+    if mode == "video-only":
+        state.gridCells = [empty_grid_cell() for _ in range(state.gridCols)]
+    elif mode == "multi-axis":
         state.gridCells = _multi_axis_cells()
     elif mode in {"scalar", "scalar-settings"}:
         state.gridCells = [
@@ -1591,6 +1593,7 @@ def main():
         choices=(
             "step",
             "physical",
+            "video-only",
             "mixed",
             "multi-axis",
             "scalar",
