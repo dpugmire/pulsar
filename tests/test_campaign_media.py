@@ -1,4 +1,6 @@
+import io
 import sqlite3
+import tarfile
 import tempfile
 import unittest
 import zlib
@@ -12,9 +14,11 @@ from db import CampaignDb
 from ingest_campaign import (
     _load_visualization_api_index,
     _video_variables_from_provenance,
+    parse_campaign,
 )
 from pulsar.campaign_media import (
     _byte_range,
+    read_archived_image,
     read_embedded_video,
     register_campaign_media_route,
 )
@@ -45,6 +49,81 @@ class CampaignMediaTests(unittest.TestCase):
         con.commit()
         con.close()
 
+    def _archive_with_tar_image(
+        self, campaign_path: Path, tar_path: Path, payload: bytes
+    ):
+        member_name = "images/vis0/frame.0000.png"
+        with tarfile.open(tar_path, "w:") as archive:
+            member = tarfile.TarInfo(member_name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        with tarfile.open(tar_path, "r:") as archive:
+            offset_data = archive.getmember(member_name).offset_data
+
+        con = sqlite3.connect(campaign_path)
+        con.executescript(
+            """
+            create table dataset(
+              rowid integer primary key, name text, uuid text, fileformat text,
+              deltime integer, tsid integer, tsorder integer
+            );
+            create table replica(
+              rowid integer primary key, datasetid integer, hostid integer,
+              dirid integer, archiveid integer, name text, deltime integer,
+              keyid integer, size integer
+            );
+            create table archive(rowid integer primary key, dirid integer, tarname text);
+            create table directory(rowid integer primary key, hostid integer, name text);
+            create table archiveidx(
+              archiveid integer, replicaid integer, filename text,
+              offset integer, offset_data integer, size integer
+            );
+            create table visualization_sequence(
+              visid integer primary key, name text, vistype text, metadata text
+            );
+            create table visualization_item(
+              visid integer, item_order integer, item_type text,
+              item_uuid text, metadata text
+            );
+            create table visualization_variable(
+              visid integer, datasetid integer, variable_name text, role text
+            );
+            """
+        )
+        con.execute(
+            "insert into dataset values (1, ?, ?, 'BP', 0, null, null)",
+            ("runs/run-a/output.bp", "source-uuid"),
+        )
+        con.execute(
+            "insert into dataset values (2, ?, ?, 'IMAGE', 0, null, null)",
+            (member_name, "12345678-1234-1234-1234"),
+        )
+        con.execute(
+            "insert into directory values (1, 1, ?)", (str(tar_path.parent),)
+        )
+        con.execute("insert into archive values (1, 1, ?)", (tar_path.name,))
+        con.execute(
+            "insert into replica values (1, 2, 1, 1, 1, ?, 0, 0, ?)",
+            (member_name, len(payload)),
+        )
+        con.execute(
+            "insert into archiveidx values (1, 1, '', 0, ?, ?)",
+            (offset_data, len(payload)),
+        )
+        con.execute(
+            "insert into visualization_sequence values (1, ?, 'image_sequence', '{}')",
+            ("runs/run-a/visualizations/pressure",),
+        )
+        con.execute(
+            "insert into visualization_item values (1, 0, 'IMAGE', ?, '{}')",
+            ("12345678-1234-1234-1234",),
+        )
+        con.execute(
+            "insert into visualization_variable values (1, 1, 'pressure', 'color-by')"
+        )
+        con.commit()
+        con.close()
+
     def test_reads_embedded_video_from_local_archive(self):
         payload = b"\x00\x00\x00\x18ftypmp42-test-video"
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -65,6 +144,20 @@ class CampaignMediaTests(unittest.TestCase):
                 read_embedded_video(str(archive), "12345678-1234-1234")
             )
             self.assertIsNone(read_embedded_video(str(archive), "../outside"))
+
+    def test_reads_image_from_registered_local_tar_member(self):
+        payload = b"\x89PNG\r\n\x1a\nimage-payload"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            campaign = root / "campaign.aca"
+            tar_path = root / "images.tar"
+            self._archive_with_tar_image(campaign, tar_path, payload)
+
+            self.assertEqual(
+                read_archived_image(str(campaign), "12345678-1234-1234-1234"),
+                (payload, "image/png"),
+            )
+            self.assertIsNone(read_archived_image(str(campaign), "../outside"))
 
     def test_byte_ranges_include_open_and_suffix_forms(self):
         self.assertEqual(_byte_range("bytes=2-5", 10), (2, 5))
@@ -102,6 +195,38 @@ class CampaignMediaTests(unittest.TestCase):
                     self.assertEqual(partial.status, 206)
                     self.assertEqual(partial.headers["Content-Range"], f"bytes 4-11/{len(payload)}")
                     self.assertEqual(await partial.read(), payload[4:12])
+                finally:
+                    await client.close()
+
+        import asyncio
+
+        asyncio.run(check_route())
+
+    def test_media_route_serves_registered_tar_image(self):
+        async def check_route():
+            payload = b"\x89PNG\r\n\x1a\nimage-payload"
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                campaign = root / "campaign.aca"
+                self._archive_with_tar_image(campaign, root / "images.tar", payload)
+                callbacks = []
+                server = SimpleNamespace(
+                    controller=SimpleNamespace(
+                        on_server_bind=SimpleNamespace(add=callbacks.append)
+                    )
+                )
+                register_campaign_media_route(server, str(campaign))
+                app = web.Application()
+                callbacks[0](SimpleNamespace(app=app))
+                client = TestClient(TestServer(app))
+                await client.start_server()
+                try:
+                    response = await client.get(
+                        "/pulsar-image/12345678-1234-1234-1234"
+                    )
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.headers["Content-Type"], "image/png")
+                    self.assertEqual(await response.read(), payload)
                 finally:
                     await client.close()
 
@@ -163,6 +288,65 @@ class CampaignMediaTests(unittest.TestCase):
         self.assertEqual(item["item_dataset_uuid"], "12345678-1234-1234")
         self.assertEqual(item["item_metadata"]["time_values"], [0.0, 0.25])
         self.assertEqual(item["display_variables"][0]["name"], "pressure")
+
+    def test_tar_images_are_ingested_as_lazy_image_sequence_sources(self):
+        import ingest_campaign
+
+        class EmptyCampaignReader:
+            def __init__(self, _path):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def available_variables(self):
+                return {}
+
+            def available_attributes(self):
+                return {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            campaign = root / "campaign.aca"
+            self._archive_with_tar_image(
+                campaign,
+                root / "images.tar",
+                b"\x89PNG\r\n\x1a\nimage-payload",
+            )
+            index = _load_visualization_api_index(str(campaign))
+            entry = index["images/vis0/frame.0000.png"]
+            self.assertEqual(entry["image_storage"], "tar")
+
+            collection = open_sqlite_collection(
+                str(campaign), db_path=str(root / "sidecar.sqlite")
+            )
+            original_reader = ingest_campaign.FileReader
+            ingest_campaign.FileReader = EmptyCampaignReader
+            try:
+                parse_campaign(str(campaign), collection)
+                image_docs = list(
+                    collection.find({"variable_type": "image"}, {"_id": 0})
+                )
+                image_docs = [
+                    doc for doc in image_docs if doc.get("image_storage") == "tar"
+                ]
+                self.assertEqual(len(image_docs), 1)
+                self.assertEqual(image_docs[0]["variable_id"], "pressure")
+
+                tiles = CampaignDb(collection).get_first_movie_tiles_for_variable(
+                    "pressure"
+                )
+                self.assertEqual(len(tiles), 1)
+                self.assertEqual(tiles[0]["media_type"], "image")
+                self.assertEqual(
+                    tiles[0]["src"], "/pulsar-image/12345678-1234-1234-1234"
+                )
+            finally:
+                ingest_campaign.FileReader = original_reader
+                collection.close()
 
     def test_video_provenance_repairs_semantic_variable_roles(self):
         variables = _video_variables_from_provenance(

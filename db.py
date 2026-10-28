@@ -3701,6 +3701,94 @@ class CampaignDb:
             self.ok = False
             return ([], 0, [], [], "timestep")
 
+    def get_movie_image_sources_for_stream(
+        self,
+        variable_id: str,
+        visualization_name: str,
+        producer: str,
+        casename: str,
+        file: str = "",
+        source_dataset: str = "",
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit_frames: int = 240,
+    ) -> Tuple[List[str], int, List[int], List[Any], str]:
+        """Return lazy same-origin URLs for a TAR-backed image sequence."""
+        if not self.ok or not variable_id:
+            return ([], 0, [], [], "timestep")
+
+        base_query: Dict[str, Any] = {
+            "variable_id": variable_id,
+            "variable_type": "image",
+            "visualization_name": visualization_name,
+        }
+        if source_dataset:
+            base_query["source_dataset"] = source_dataset
+        elif producer or casename or file:
+            base_query["producer"] = producer
+            base_query["casename"] = casename
+            if file:
+                base_query["file"] = file
+        query = and_filter(base_query, extra_filter)
+
+        try:
+            docs = list(
+                self.collection.find(
+                    query,
+                    {
+                        "visualization_item_uuid": 1,
+                        "image_storage": 1,
+                        "frame_index": 1,
+                        "physical_time": 1,
+                        "time_index": 1,
+                    },
+                ).sort([("frame_index", 1), ("_id", 1)])
+            )
+            docs = [doc for doc in docs if doc.get("image_storage") == "tar"]
+            unique_docs = []
+            seen: Set[int] = set()
+            for doc in docs:
+                if not doc.get("visualization_item_uuid"):
+                    continue
+                try:
+                    frame_index = int(doc.get("frame_index", len(unique_docs)))
+                except (TypeError, ValueError):
+                    frame_index = len(unique_docs)
+                if frame_index in seen:
+                    continue
+                seen.add(frame_index)
+                unique_docs.append((frame_index, doc))
+            total = len(unique_docs)
+            sources: List[str] = []
+            frame_indices: List[int] = []
+            time_values: List[Any] = []
+            has_physical_time = False
+            for frame_index, doc in unique_docs[: max(1, int(limit_frames))]:
+                dataset_uuid = str(doc.get("visualization_item_uuid", "") or "")
+                if not dataset_uuid:
+                    continue
+                sources.append(f"/pulsar-image/{dataset_uuid}")
+                frame_indices.append(frame_index)
+                physical_time = to_float(doc.get("physical_time", None))
+                if physical_time is not None:
+                    time_values.append(physical_time)
+                    has_physical_time = True
+                else:
+                    try:
+                        time_values.append(int(doc.get("time_index")))
+                    except (TypeError, ValueError):
+                        time_values.append(frame_index)
+            return (
+                sources,
+                total,
+                frame_indices,
+                time_values,
+                "physical_time" if has_physical_time else "timestep",
+            )
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return ([], 0, [], [], "timestep")
+
     def get_first_movie_tiles_for_variable(
         self,
         variable_id: str,
@@ -3735,6 +3823,7 @@ class CampaignDb:
             "visualization_name": 1,
             "variable_type": 1,
             "payload_type": 1,
+            "image_storage": 1,
             "visualization_item_type": 1,
             "visualization_item_uuid": 1,
             "scalar_field_metadata": 1,
@@ -3843,28 +3932,55 @@ class CampaignDb:
                     continue
 
                 grouped_schema_source = bool(schema_file_group and schema_mode == "file_per_timestep")
-                frames, total, frame_indices, time_values, time_mode = self.get_movie_frames_for_stream(
-                    variable_id,
-                    visualization_name=vis,
-                    producer="" if grouped_schema_source else producer,
-                    casename="" if grouped_schema_source else casename,
-                    file="" if grouped_schema_source else file,
-                    source_dataset="" if grouped_schema_source else source_dataset,
-                    extra_filter=extra_filter,
-                    limit_frames=limit_frames,
-                    scalar_field_options=scalar_field_options,
-                )
+                frame_sources: List[str] = []
+                if str(doc.get("image_storage", "") or "") == "tar":
+                    frame_sources, total, frame_indices, time_values, time_mode = (
+                        self.get_movie_image_sources_for_stream(
+                            variable_id,
+                            visualization_name=vis,
+                            producer="" if grouped_schema_source else producer,
+                            casename="" if grouped_schema_source else casename,
+                            file="" if grouped_schema_source else file,
+                            source_dataset="" if grouped_schema_source else source_dataset,
+                            extra_filter=extra_filter,
+                            limit_frames=limit_frames,
+                        )
+                    )
+                    frames: List[bytes] = []
+                else:
+                    frames, total, frame_indices, time_values, time_mode = self.get_movie_frames_for_stream(
+                        variable_id,
+                        visualization_name=vis,
+                        producer="" if grouped_schema_source else producer,
+                        casename="" if grouped_schema_source else casename,
+                        file="" if grouped_schema_source else file,
+                        source_dataset="" if grouped_schema_source else source_dataset,
+                        extra_filter=extra_filter,
+                        limit_frames=limit_frames,
+                        scalar_field_options=scalar_field_options,
+                    )
 
                 src = ""
                 media_type = "video"
                 status = "ok"
                 note = ""
-                frame_count = len(frames)
-                frame_sources: List[str] = []
+                frame_count = len(frame_sources) if frame_sources else len(frames)
 
-                if not frames:
+                if not frames and not frame_sources:
                     status = "no-frames"
                     note = "no frames"
+                elif frame_sources and len(frame_sources) == 1:
+                    src = frame_sources[0]
+                    media_type = "image"
+                    note = "1 TAR image"
+                elif frame_sources:
+                    src = frame_sources[0]
+                    media_type = "image_sequence"
+                    note = (
+                        f"{len(frame_sources)} of {total} TAR images"
+                        if total > len(frame_sources)
+                        else f"{len(frame_sources)} TAR images"
+                    )
                 elif len(frames) == 1:
                     src = png_bytes_to_data_uri(frames[0])
                     frame_sources = [src]

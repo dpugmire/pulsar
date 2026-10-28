@@ -1,5 +1,6 @@
 """Serve local media payloads embedded in an ACA campaign."""
 
+import mimetypes
 import re
 import sqlite3
 import zlib
@@ -47,6 +48,63 @@ def read_embedded_video(campaign_path: str, dataset_uuid: str) -> bytes | None:
         return payload
     except (TypeError, ValueError, zlib.error):
         return None
+
+
+def read_archived_image(
+    campaign_path: str, dataset_uuid: str
+) -> tuple[bytes, str] | None:
+    """Read an unencrypted IMAGE member from a locally available TAR archive."""
+    if not _UUID_PATTERN.fullmatch(str(dataset_uuid or "")):
+        return None
+    path = Path(campaign_path).expanduser()
+    if not path.is_file():
+        return None
+
+    try:
+        with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as con:
+            row = con.execute(
+                """
+                select dir.name, a.tarname, ai.offset_data, ai.size, d.name
+                from dataset as d
+                join replica as r on r.datasetid = d.rowid
+                join archiveidx as ai on ai.replicaid = r.rowid
+                                     and ai.archiveid = r.archiveid
+                join archive as a on a.rowid = ai.archiveid
+                join directory as dir on dir.rowid = a.dirid
+                where d.uuid = ? and upper(d.fileformat) = 'IMAGE'
+                  and d.deltime = 0 and r.deltime = 0
+                  and coalesce(r.keyid, 0) = 0 and a.tarname != ''
+                order by r.rowid desc
+                limit 1
+                """,
+                (dataset_uuid,),
+            ).fetchone()
+    except (sqlite3.Error, OSError):
+        return None
+
+    if row is None:
+        return None
+    directory, tarname, offset_data, size, dataset_name = row
+    try:
+        tar_path = Path(str(directory)).expanduser() / str(tarname)
+        offset = int(offset_data)
+        length = int(size)
+        if not tar_path.is_file() or offset < 0 or length <= 0:
+            return None
+        with tar_path.open("rb") as tar_file:
+            tar_file.seek(offset)
+            payload = tar_file.read(length)
+        if len(payload) != length:
+            return None
+    except (OSError, TypeError, ValueError):
+        return None
+
+    mime_type = (
+        mimetypes.guess_type(str(dataset_name))[0] or "application/octet-stream"
+    )
+    if not mime_type.startswith("image/"):
+        return None
+    return payload, mime_type
 
 
 def _byte_range(value: str, size: int) -> tuple[int, int] | None:
@@ -111,8 +169,24 @@ def register_campaign_media_route(server, campaign_path: str) -> None:
                 headers=headers,
             )
 
+        async def image_handler(request):
+            result = read_archived_image(
+                campaign_path, request.match_info.get("dataset_uuid", "")
+            )
+            if result is None:
+                raise web.HTTPNotFound(text="Archived local image is unavailable")
+            payload, mime_type = result
+            return web.Response(
+                body=payload,
+                content_type=mime_type,
+                headers={"Cache-Control": "private, max-age=300"},
+            )
+
         http_server.app.router.add_get(
             "/pulsar-media/{dataset_uuid}", video_handler
+        )
+        http_server.app.router.add_get(
+            "/pulsar-image/{dataset_uuid}", image_handler
         )
 
     server.controller.on_server_bind.add(on_server_bind)
