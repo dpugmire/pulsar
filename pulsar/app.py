@@ -22,6 +22,7 @@ from ui import build_ui
 
 from . import module as pulsar_module
 from .backends import LocalCampaignBackend
+from .campaign_media import register_campaign_media_route
 from .demo_campaign import (
     DEFAULT_DEMO_SOURCE_COUNT,
     MAX_DEMO_SOURCE_COUNT,
@@ -73,6 +74,7 @@ class PulsarApp(TrameApp):
             image_association_schema_path
         )
         self.campaign_schema_path = _expanded_path(campaign_schema_path)
+        register_campaign_media_route(self.server, self.campaign_path)
 
         self.collection = collection or open_sqlite_collection(self.campaign_path)
         print(f"Pulsar sidecar DB: {self.collection.path}")

@@ -19,10 +19,10 @@ from ui import build_ui
 
 class PulsarAppTests(unittest.TestCase):
     def test_browser_assets_use_current_cache_namespace(self):
-        self.assertEqual(pulsar_module.BASE_URL, "pulsar_0_1_11")
+        self.assertEqual(pulsar_module.BASE_URL, "pulsar_0_1_12")
         self.assertEqual(
             pulsar_module.styles,
-            ["pulsar_0_1_11/pulsar.css"],
+            ["pulsar_0_1_12/pulsar.css"],
         )
 
     def test_provenance_panel_styles_enable_bounded_two_axis_resize(self):
@@ -222,6 +222,21 @@ class PulsarAppTests(unittest.TestCase):
         ui = build_ui(server, campaign_name="sample.aca")
 
         self.assertIsInstance(ui, PulsarUI)
+        self.assertEqual(server.state.trame__title, "Pulsar")
+        self.assertEqual(
+            server.state.trame__favicon,
+            f"{pulsar_module.BASE_URL}/pulsar-mark.svg",
+        )
+        favicon_path = (
+            Path(pulsar_module.__file__).parent
+            / "serve"
+            / "pulsar-mark.svg"
+        )
+        self.assertTrue(favicon_path.is_file())
+        self.assertIn(
+            "Pulsar placeholder logo",
+            favicon_path.read_text(encoding="utf-8"),
+        )
         for component in (
             ui.query_toolbar,
             ui.query_assistant,

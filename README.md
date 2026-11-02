@@ -122,6 +122,12 @@ Image sequence bytes are loaded lazily from the ACA file when a preview tile is
 built. The SQLite sidecar stores frame metadata and ADIOS variable paths, not
 copied image blobs.
 
+Embedded campaign `VIDEO` items are served lazily from the local ACA through
+Pulsar's same-origin media endpoint. The sidecar stores the video dataset UUID
+and per-frame timing metadata, not MP4 bytes. Physical frame times synchronize
+video playback with image sequences and plots. Encrypted payloads and videos
+available only from remote or archived replicas are not served.
+
 Install the Python dependencies from this repo:
 
 ```bash

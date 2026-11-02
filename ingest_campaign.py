@@ -2775,13 +2775,66 @@ def _display_visualization_variables(variables: List[Dict[str, Any]]) -> List[Di
     return display_variables or variables
 
 
+def _video_variables_from_provenance(
+    activity_provenance: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Recover semantic video variable associations recorded by renderers."""
+    if not isinstance(activity_provenance, dict):
+        return []
+    activity_metadata = activity_provenance.get("activity_metadata", {})
+    semantic_variables = (
+        activity_metadata.get("semantic_variables", {})
+        if isinstance(activity_metadata, dict)
+        else {}
+    )
+    if not isinstance(semantic_variables, dict):
+        return []
+
+    source_by_name: Dict[str, str] = {}
+    for item in activity_provenance.get("inputs", []) or []:
+        if not isinstance(item, dict):
+            continue
+        source_dataset = str(item.get("source_dataset", "") or "")
+        for candidate in (item.get("name"), item.get("definition")):
+            name = str(candidate or "").strip()
+            if name and source_dataset:
+                source_by_name[name] = source_dataset
+
+    role_names = {
+        "color_by": "color-by",
+        "contour_by": "contour-by",
+        "x_axis": "x-axis",
+        "y_axis": "y-axis",
+    }
+    variables: List[Dict[str, Any]] = []
+    for semantic_role, raw_names in semantic_variables.items():
+        names = raw_names if isinstance(raw_names, (list, tuple)) else [raw_names]
+        if semantic_role == "streamline_by":
+            roles = ("streamline-x", "streamline-y")
+        else:
+            roles = (role_names.get(str(semantic_role), str(semantic_role).replace("_", "-")),)
+        for index, raw_name in enumerate(names):
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            role = roles[min(index, len(roles) - 1)]
+            variables.append(
+                {
+                    "name": name,
+                    "source_dataset": source_by_name.get(name, ""),
+                    "roles": [role],
+                }
+            )
+    return _display_visualization_variables(variables)
+
+
 def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any]]:
     """
     Load hpc-campaign visualization API associations from the ACA SQLite tables.
 
-    FileReader exposes image payloads as ADIOS variables, while SCALAR_FIELD
-    payloads are stored as embedded ACA blobs. In both cases the semantic
-    source-variable association lives in SQLite tables:
+    FileReader exposes ADIOS image payloads as variables. TAR-backed IMAGE
+    datasets, SCALAR_FIELD payloads, and VIDEO payloads are discovered from
+    their ACA metadata. Semantic source-variable associations live in:
 
       visualization_sequence -> visualization_variable -> visualization_item
 
@@ -2808,6 +2861,29 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
         if not _VISUALIZATION_API_TABLES.issubset(available_tables):
             return {}
 
+        tar_image_uuids = set()
+        if {"archiveidx", "archive", "replica"}.issubset(available_tables):
+            try:
+                tar_image_uuids = {
+                    str(row[0] or "")
+                    for row in con.execute(
+                        """
+                        select distinct d.uuid
+                        from dataset as d
+                        join replica as r on r.datasetid = d.rowid
+                        join archiveidx as ai on ai.replicaid = r.rowid
+                                             and ai.archiveid = r.archiveid
+                        join archive as a on a.rowid = ai.archiveid
+                        where upper(d.fileformat) = 'IMAGE'
+                          and d.deltime = 0 and r.deltime = 0
+                          and a.tarname != ''
+                        """
+                    )
+                    if row[0]
+                }
+            except sqlite3.Error:
+                tar_image_uuids = set()
+
         scalar_metadata_select = "sf.metadata as scalar_field_metadata"
         scalar_metadata_join = "left join scalar_field as sf on sf.datasetid = item_dataset.rowid"
         if "scalar_field" not in available_tables:
@@ -2830,6 +2906,7 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                 vi.item_uuid as item_uuid,
                 vi.metadata as item_metadata,
                 item_dataset.name as item_name,
+                item_dataset.uuid as item_dataset_uuid,
                 item_dataset.fileformat as item_fileformat,
                 {scalar_metadata_select},
                 source_dataset.name as source_dataset,
@@ -2841,7 +2918,7 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
             {scalar_metadata_join}
             left join visualization_variable as vv on vv.visid = vs.visid
             left join dataset as source_dataset on source_dataset.rowid = vv.datasetid
-            where upper(vi.item_type) in ('IMAGE', 'SCALAR_FIELD')
+            where upper(vi.item_type) in ('IMAGE', 'SCALAR_FIELD', 'VIDEO')
             order by vs.visid, vi.item_order, vv.variable_name, vv.role
             """
         )
@@ -2869,7 +2946,13 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                     "item_uuid": str(row["item_uuid"] or ""),
                     "item_metadata": _json_object_or_empty(row["item_metadata"]),
                     "item_dataset_name": item_name,
+                    "item_dataset_uuid": str(row["item_dataset_uuid"] or ""),
                     "item_file_format": str(row["item_fileformat"] or ""),
+                    "image_storage": (
+                        "tar"
+                        if str(row["item_uuid"] or "") in tar_image_uuids
+                        else ""
+                    ),
                     "scalar_field_metadata": _json_object_or_empty(row["scalar_field_metadata"]),
                     "variables": [],
                 },
@@ -3740,7 +3823,17 @@ def parse_campaign(
     # still describe rendered output through visualization_* tables.
     legacy_visualization_api_index = _load_visualization_api_index(campaign_path)
     unified_representation_index = _load_unified_representation_index(campaign_path)
-    visualization_api_index = unified_representation_index or legacy_visualization_api_index
+    visualization_api_index = dict(
+        unified_representation_index or legacy_visualization_api_index
+    )
+    for item_name, entry in legacy_visualization_api_index.items():
+        item_type = str(entry.get("item_type", "") or "").upper()
+        if item_type == "VIDEO" or (
+            item_type == "IMAGE" and entry.get("image_storage") == "tar"
+        ):
+            existing_entry = visualization_api_index.setdefault(item_name, entry)
+            if item_type == "IMAGE" and entry.get("image_storage") == "tar":
+                existing_entry.setdefault("image_storage", "tar")
     activity_provenance_index = _load_activity_provenance_index(campaign_path)
     visualization_activity_provenance_index = {
         str(entry.get("visualization_sequence", "") or ""): entry
@@ -4100,7 +4193,228 @@ def parse_campaign(
             collection.insert_one(document)
 
     for visualization_api_entry in visualization_api_index.values():
-        item_type = str(visualization_api_entry.get("item_type", "") or "").strip().upper()
+        item_type = str(
+            visualization_api_entry.get("item_type", "") or ""
+        ).strip().upper()
+        if (
+            item_type == "IMAGE"
+            and visualization_api_entry.get("image_storage") == "tar"
+        ):
+            item_name = str(
+                visualization_api_entry.get("item_dataset_name", "") or ""
+            ).strip("/")
+            item_uuid = str(
+                visualization_api_entry.get("item_dataset_uuid", "") or ""
+            ).strip()
+            if not item_name or not item_uuid:
+                continue
+
+            display_variables = list(
+                visualization_api_entry.get("display_variables", [])
+            )
+            if not display_variables:
+                display_variables = [
+                    {
+                        "name": str(
+                            visualization_api_entry.get("visualization_name", "")
+                            or item_name
+                        ),
+                        "roles": [],
+                        "source_dataset": "",
+                    }
+                ]
+            visual_variables = list(visualization_api_entry.get("variables", []))
+            for api_var in display_variables:
+                physical_var = str(api_var.get("name", "") or "").strip()
+                if not physical_var:
+                    continue
+                source_dataset = str(api_var.get("source_dataset", "") or "")
+                try:
+                    item_order = int(
+                        visualization_api_entry.get("item_order", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    item_order = 0
+                document = {
+                    "campaign_path": campaign_path,
+                    "file": "",
+                    "variable_id": physical_var,
+                    "variable_name": _map_physical_to_logical_name(
+                        physical_var, image_assoc_schema
+                    ),
+                    "variable_name_physical": physical_var,
+                    "source_dataset": source_dataset,
+                    "visualization_source_dataset": source_dataset,
+                    "visualization_name": str(
+                        visualization_api_entry.get("visualization_name", "") or ""
+                    ),
+                    "visualization_kind": str(
+                        visualization_api_entry.get("visualization_kind", "") or ""
+                    ),
+                    "visualization_sequence_name": str(
+                        visualization_api_entry.get("sequence_name", "") or ""
+                    ),
+                    "visualization_sequence_metadata": visualization_api_entry.get(
+                        "sequence_metadata", {}
+                    ),
+                    "visualization_item_metadata": visualization_api_entry.get(
+                        "item_metadata", {}
+                    ),
+                    "visualization_item_uuid": item_uuid,
+                    "visualization_item_order": int(
+                        visualization_api_entry.get("item_order", 0) or 0
+                    ),
+                    "visualization_item_type": "IMAGE",
+                    "visualization_variables": visual_variables,
+                    "visualization_roles": list(api_var.get("roles", [])),
+                    "variable_path": item_name,
+                    "variable_type": "image",
+                    "payload_type": "IMAGE",
+                    "image_storage": "tar",
+                    "frame_index": item_order,
+                    "movie_cache": 1,
+                    "variable_location": "local",
+                    "association_source": str(
+                        visualization_api_entry.get(
+                            "association_source", "visualization-api"
+                        )
+                        or "visualization-api"
+                    ),
+                }
+                document.update(
+                    _schema_metadata_for_variable(
+                        schema_context,
+                        source_dataset,
+                        physical_var,
+                        frame_index=item_order,
+                        include_time_values=False,
+                    )
+                )
+                collection.insert_one(document)
+            continue
+
+        if item_type == "VIDEO":
+            item_name = str(
+                visualization_api_entry.get("item_dataset_name", "") or ""
+            ).strip("/")
+            item_uuid = str(
+                visualization_api_entry.get("item_dataset_uuid", "") or ""
+            ).strip()
+            if not item_name or not item_uuid:
+                continue
+
+            item_metadata = dict(
+                visualization_api_entry.get("item_metadata", {}) or {}
+            )
+            time_values = item_metadata.get("time_values", [])
+            if not isinstance(time_values, list):
+                time_values = []
+            try:
+                frame_count = int(item_metadata.get("frame_count", len(time_values)))
+            except (TypeError, ValueError):
+                frame_count = len(time_values)
+            sequence_name = str(
+                visualization_api_entry.get("sequence_name", "") or ""
+            )
+            activity_provenance = visualization_activity_provenance_index.get(
+                sequence_name
+            )
+            display_variables = _video_variables_from_provenance(
+                activity_provenance
+            ) or list(visualization_api_entry.get("display_variables", []))
+            variable_records = []
+            for api_var in display_variables:
+                physical_var = str(api_var.get("name", "") or "").strip()
+                if not physical_var:
+                    continue
+                variable_records.append(
+                    {
+                        "physical_var": physical_var,
+                        "logical_var": _map_physical_to_logical_name(
+                            physical_var, image_assoc_schema
+                        ),
+                        "source_dataset": str(
+                            api_var.get("source_dataset", "") or ""
+                        ),
+                        "roles": list(api_var.get("roles", [])),
+                    }
+                )
+            if not variable_records:
+                variable_records = [
+                    {
+                        "physical_var": item_name,
+                        "logical_var": _map_physical_to_logical_name(
+                            item_name, image_assoc_schema
+                        ),
+                        "source_dataset": "",
+                        "roles": [],
+                    }
+                ]
+
+            visualization_name = str(
+                visualization_api_entry.get("visualization_name", "") or ""
+            )
+            normalized_video_variables = [
+                {
+                    "name": variable["name"],
+                    "source_dataset": variable.get("source_dataset", ""),
+                    "roles": role,
+                }
+                for variable in display_variables
+                for role in variable.get("roles", [])
+            ]
+            for record in variable_records:
+                physical_var = record["physical_var"]
+                document = {
+                    "campaign_path": campaign_path,
+                    "file": "",
+                    "variable_id": physical_var,
+                    "variable_name": record["logical_var"],
+                    "variable_name_physical": physical_var,
+                    "source_dataset": record["source_dataset"],
+                    "visualization_source_dataset": record["source_dataset"],
+                    "visualization_name": visualization_name,
+                    "visualization_kind": str(
+                        visualization_api_entry.get("visualization_kind", "") or ""
+                    ),
+                    "visualization_sequence_name": sequence_name,
+                    "visualization_sequence_metadata": visualization_api_entry.get(
+                        "sequence_metadata", {}
+                    ),
+                    "visualization_item_metadata": item_metadata,
+                    "visualization_item_uuid": item_uuid,
+                    "visualization_item_order": int(
+                        visualization_api_entry.get("item_order", 0) or 0
+                    ),
+                    "visualization_item_type": "VIDEO",
+                    "visualization_variables": normalized_video_variables,
+                    "visualization_roles": record["roles"],
+                    "variable_path": item_name,
+                    "variable_type": "video",
+                    "payload_type": "VIDEO",
+                    "frame_index": int(
+                        visualization_api_entry.get("item_order", 0) or 0
+                    ),
+                    "frame_count": frame_count,
+                    "frame_indices": list(range(max(0, frame_count))),
+                    "time_values": time_values,
+                    "time_mode": str(
+                        item_metadata.get("time_mode", "timestep") or "timestep"
+                    ),
+                    "time_unit": str(item_metadata.get("time_unit", "") or ""),
+                    "time_source": item_metadata.get("time_source", {}),
+                    "mime_type": str(item_metadata.get("mime_type", "") or ""),
+                    "variable_location": "local",
+                    "association_source": "visualization-api",
+                    "movie_cache": 1,
+                }
+                if activity_provenance:
+                    document["visualization_activity_provenance"] = (
+                        activity_provenance
+                    )
+                collection.insert_one(document)
+            continue
+
         if item_type != SCALAR_FIELD_ITEM_TYPE:
             continue
 

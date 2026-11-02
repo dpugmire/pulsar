@@ -7,7 +7,7 @@ __all__ = ["scripts", "serve", "styles", "vue_use"]
 
 # Browser assets are cached under this namespace. Bump it whenever an existing
 # JavaScript or stylesheet asset changes so a normal reload cannot reuse stale code.
-BASE_URL = "pulsar_0_1_11"
+BASE_URL = "pulsar_0_1_12"
 
 serve = {
     BASE_URL: str(Path(__file__).with_name("serve").resolve()),
