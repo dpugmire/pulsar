@@ -3845,6 +3845,8 @@ class CampaignDb:
             "time_values": 1,
             "time_mode": 1,
             "time_unit": 1,
+            "physical_time": 1,
+            "time_index": 1,
         }
 
         try:

@@ -30,17 +30,23 @@ class CampaignMediaTests(unittest.TestCase):
         con = sqlite3.connect(path)
         con.executescript(
             """
-            create table dataset(name text, uuid text, fileformat text, deltime int);
-            create table replica(datasetid int, deltime int, keyid int);
+            create table dataset(
+              rowid integer primary key, name text, uuid text,
+              fileformat text, deltime int
+            );
+            create table replica(
+              rowid integer primary key, datasetid int, dirid int, archiveid int,
+              name text, deltime int, keyid int, size int
+            );
             create table repfiles(replicaid int, fileid int);
             create table file(fileid integer primary key, compression int, lenorig int, data blob);
             """
         )
         con.execute(
-            "insert into dataset values (?, ?, 'VIDEO', 0)",
+            "insert into dataset values (1, ?, ?, 'VIDEO', 0)",
             ("runs/run-a/movie.mp4", "12345678-1234-1234"),
         )
-        con.execute("insert into replica values (1, 0, ?)", (keyid,))
+        con.execute("insert into replica values (1, 1, 0, 0, '', 0, ?, 0)", (keyid,))
         con.execute(
             "insert into file values (1, 1, ?, ?)",
             (len(payload), zlib.compress(payload)),
@@ -88,6 +94,10 @@ class CampaignMediaTests(unittest.TestCase):
             create table visualization_variable(
               visid integer, datasetid integer, variable_name text, role text
             );
+            create table repfiles(replicaid int, fileid int);
+            create table file(
+              fileid integer primary key, compression int, lenorig int, data blob
+            );
             """
         )
         con.execute(
@@ -121,6 +131,30 @@ class CampaignMediaTests(unittest.TestCase):
         con.execute(
             "insert into visualization_variable values (1, 1, 'pressure', 'color-by')"
         )
+        con.execute(
+            "insert into dataset values (3, ?, ?, 'TEXT', 0, null, null)",
+            ("__campaign_schema.yaml", "schema-uuid"),
+        )
+        schema_text = (
+            "schema_version: 1\n"
+            "name: test-schema\n"
+            "files:\n"
+            "  sources:\n"
+            "    role: time_series\n"
+            "    mode: append\n"
+            "    path: runs/run-a/output.bp\n"
+            "    time:\n"
+            "      variable: time\n"
+        ).encode("utf-8")
+        con.execute(
+            "insert into replica values (2, 3, 1, 0, 0, ?, 0, 0, ?)",
+            ("__campaign_schema.yaml", len(schema_text)),
+        )
+        con.execute(
+            "insert into file values (2, 0, ?, ?)",
+            (len(schema_text), schema_text),
+        )
+        con.execute("insert into repfiles values (2, 2)")
         con.commit()
         con.close()
 
@@ -303,10 +337,22 @@ class CampaignMediaTests(unittest.TestCase):
                 return False
 
             def available_variables(self):
-                return {}
+                return {
+                    "runs/run-a/output.bp/pressure": {
+                        "AvailableStepsCount": "1"
+                    },
+                    "runs/run-a/output.bp/time": {
+                        "AvailableStepsCount": "1"
+                    },
+                }
 
             def available_attributes(self):
                 return {}
+
+            def read(self, path, step_selection=None):
+                if path.endswith("/time"):
+                    return [0.25]
+                raise AssertionError(f"unexpected campaign read: {path}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -335,6 +381,8 @@ class CampaignMediaTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(image_docs), 1)
                 self.assertEqual(image_docs[0]["variable_id"], "pressure")
+                self.assertEqual(image_docs[0]["physical_time"], 0.25)
+                self.assertEqual(image_docs[0]["time_index"], 0)
 
                 tiles = CampaignDb(collection).get_first_movie_tiles_for_variable(
                     "pressure"
@@ -344,6 +392,8 @@ class CampaignMediaTests(unittest.TestCase):
                 self.assertEqual(
                     tiles[0]["src"], "/pulsar-image/12345678-1234-1234-1234"
                 )
+                self.assertEqual(tiles[0]["time_mode"], "physical_time")
+                self.assertEqual(tiles[0]["time_values"], [0.25])
             finally:
                 ingest_campaign.FileReader = original_reader
                 collection.close()

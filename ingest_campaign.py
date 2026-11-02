@@ -4229,6 +4229,12 @@ def parse_campaign(
                 if not physical_var:
                     continue
                 source_dataset = str(api_var.get("source_dataset", "") or "")
+                try:
+                    item_order = int(
+                        visualization_api_entry.get("item_order", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    item_order = 0
                 document = {
                     "campaign_path": campaign_path,
                     "file": "",
@@ -4265,9 +4271,7 @@ def parse_campaign(
                     "variable_type": "image",
                     "payload_type": "IMAGE",
                     "image_storage": "tar",
-                    "frame_index": int(
-                        visualization_api_entry.get("item_order", 0) or 0
-                    ),
+                    "frame_index": item_order,
                     "movie_cache": 1,
                     "variable_location": "local",
                     "association_source": str(
@@ -4277,6 +4281,15 @@ def parse_campaign(
                         or "visualization-api"
                     ),
                 }
+                document.update(
+                    _schema_metadata_for_variable(
+                        schema_context,
+                        source_dataset,
+                        physical_var,
+                        frame_index=item_order,
+                        include_time_values=False,
+                    )
+                )
                 collection.insert_one(document)
             continue
 
