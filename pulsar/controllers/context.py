@@ -21,3 +21,4 @@ class ControllerContext:
     query_translator: Optional[QueryTranslator] = None
     plot_options_translator: Optional[PlotOptionsTranslator] = None
     interaction_log: Optional[Any] = None
+    result_store: Any | None = None

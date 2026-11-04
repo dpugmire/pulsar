@@ -25,6 +25,7 @@ HISTORY_FORMAT = "pulsar-workspace-history"
 HISTORY_VERSION = 1
 
 _CELL_FIELDS = (
+    "working_result_id",
     "variable_id",
     "variable_name",
     "visualization_name",

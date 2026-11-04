@@ -303,6 +303,48 @@ class HelpDialog(TrameComponent):
                     )
 
 
+class PublishResultDialog(TrameComponent):
+    def build(self):
+        ctrl = self.ctrl
+        with (
+            vuetify.VDialog(v_model=("showPublishResult", False), max_width=650),
+            vuetify.VCard(),
+        ):
+            vuetify.VCardTitle("Publish result to campaign")
+            with vuetify.VCardText():
+                html.Div("{{ publishResultCampaign }}", class_="text-caption mb-3")
+                vuetify.VTextField(
+                    v_model=("publishResultTitle", ""),
+                    label="Plot title",
+                    disabled=("publishResultCommitted", False),
+                )
+                vuetify.VAutocomplete(
+                    v_model=("publishResultAssociations", []),
+                    items=("publishResultChoices", []),
+                    label="Associate with source variables (optional)",
+                    multiple=True,
+                    chips=True,
+                    item_title="title",
+                    item_value="value",
+                    disabled=("publishResultCommitted", False),
+                )
+                html.Div(
+                    "The PNG will be embedded in the campaign. Leave associations empty for a standalone plot.",
+                    class_="text-caption",
+                )
+                html.Div(
+                    "{{ publishResultStatus }}",
+                    raw_attrs=['role="status"'],
+                    class_="mt-3",
+                )
+            with vuetify.VCardActions():
+                vuetify.VBtn("Close", click=ctrl.cancel_publish_result)
+                vuetify.VBtn(
+                    "{{ publishResultCommitted ? 'Retry refresh' : 'Publish' }}",
+                    click=ctrl.confirm_publish_result,
+                )
+
+
 class ProvenanceDialog(TrameComponent):
     def build(self):
         ctrl = self.ctrl

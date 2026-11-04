@@ -40,6 +40,7 @@ class ControllerBase:
         self.query_translator = context.query_translator
         self.plot_options_translator = context.plot_options_translator
         self.interaction_log = context.interaction_log
+        self.result_store = context.result_store
         self._interaction_query_id = ""
         self._interaction_assignment_source = ""
         self._interaction_assignments: Dict[str, Dict[str, Any]] = {}

@@ -9,8 +9,10 @@ from pathlib import Path
 _UUID_PATTERN = re.compile(r"^[0-9a-fA-F-]{16,64}$")
 
 
-def read_embedded_video(campaign_path: str, dataset_uuid: str) -> bytes | None:
-    """Read an unencrypted, embedded VIDEO file from a local ACA archive."""
+def _read_embedded_file(
+    campaign_path: str, dataset_uuid: str, fileformat: str
+) -> bytes | None:
+    """Read an unencrypted embedded payload from a local ACA archive."""
     if not _UUID_PATTERN.fullmatch(str(dataset_uuid or "")):
         return None
     path = Path(campaign_path).expanduser()
@@ -26,12 +28,12 @@ def read_embedded_video(campaign_path: str, dataset_uuid: str) -> bytes | None:
                 join replica as r on r.datasetid = d.rowid
                 join repfiles as rf on rf.replicaid = r.rowid
                 join file as f on f.fileid = rf.fileid
-                where d.uuid = ? and upper(d.fileformat) = 'VIDEO'
+                where d.uuid = ? and upper(d.fileformat) = ?
                   and d.deltime = 0 and r.deltime = 0 and coalesce(r.keyid, 0) = 0
                 order by r.rowid desc, f.fileid desc
                 limit 1
                 """,
-                (dataset_uuid,),
+                (dataset_uuid, fileformat),
             ).fetchone()
     except (sqlite3.Error, OSError):
         return None
@@ -50,10 +52,28 @@ def read_embedded_video(campaign_path: str, dataset_uuid: str) -> bytes | None:
         return None
 
 
+def read_embedded_video(campaign_path: str, dataset_uuid: str) -> bytes | None:
+    return _read_embedded_file(campaign_path, dataset_uuid, "VIDEO")
+
+
 def read_archived_image(
     campaign_path: str, dataset_uuid: str
 ) -> tuple[bytes, str] | None:
-    """Read an unencrypted IMAGE member from a locally available TAR archive."""
+    """Read an embedded IMAGE or a member of a locally available TAR archive."""
+    payload = _read_embedded_file(campaign_path, dataset_uuid, "IMAGE")
+    if payload is not None:
+        from io import BytesIO
+
+        from PIL import Image
+
+        try:
+            with Image.open(BytesIO(payload)) as image:
+                mime = Image.MIME.get(image.format)
+                if mime:
+                    return payload, mime
+        except (OSError, ValueError):
+            return None
+
     if not _UUID_PATTERN.fullmatch(str(dataset_uuid or "")):
         return None
     path = Path(campaign_path).expanduser()

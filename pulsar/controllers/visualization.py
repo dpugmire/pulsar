@@ -1,6 +1,7 @@
 """Visualization, plot, scalar-field, and plugin controller behavior."""
 
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -62,6 +63,7 @@ from state_init import fmt
 
 class VisualizationControllerMixin:
     ACTION_BINDINGS = (
+        ("show_working_result_details", "show_working_result_details"),
         ("set_active_axis_selection", "set_active_axis_selection"),
         ("cancel_scalar_plot_generation", "cancel_scalar_plot_generation"),
         ("confirm_scalar_plot_generation", "confirm_scalar_plot_generation"),
@@ -1908,11 +1910,55 @@ class VisualizationControllerMixin:
         self.state.scalarPlotStatus = ""
         return True
 
+    def working_result_cell(self, result_id):
+        """Rebuild a registered image without treating its title as a variable."""
+        try:
+            return self.result_tile(result_id)
+        except (OSError, ValueError) as error:
+            cell = empty_grid_cell()
+            cell.update(
+                {
+                    "working_result_id": result_id,
+                    "publication_status": "unpublished",
+                    "variable_name": "Unavailable working result",
+                    "status": "error",
+                    "note": str(error),
+                }
+            )
+            return cell
+
+    def show_working_result_details(self, cell_index, **_):
+        if not isinstance(cell_index, int) or not self.is_valid_grid_index(cell_index):
+            return
+        cell = list(self.state.gridCells or [])[cell_index]
+        if not cell.get("working_result_id"):
+            return
+        self.state.helpModalTitle = (
+            "Published result"
+            if cell.get("publication_status") == "published"
+            else "Unpublished result"
+        )
+        try:
+            record = self.published_results().get(cell["working_result_id"])
+            self.state.helpModalText = json.dumps(
+                record or self.result_store.get(cell["working_result_id"]), indent=2
+            )
+        except (OSError, ValueError, AttributeError) as error:
+            self.state.helpModalText = str(error)
+        self.state.showHelpModal = True
+
     def refresh_grid_cells(self):
         cells = self.normalize_grid_cells(self.state.gridCells)
         updated: List[Dict[str, Any]] = []
 
         for c in cells:
+            if c.get("working_result_id"):
+                updated.append(
+                    preserve_grid_geometry(
+                        self.working_result_cell(c["working_result_id"]), c
+                    )
+                )
+                continue
             var_id = str(
                 c.get("variable_id", "") or c.get("variable_name", "") or ""
             ).strip()

@@ -3712,7 +3712,7 @@ class CampaignDb:
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
     ) -> Tuple[List[str], int, List[int], List[Any], str]:
-        """Return lazy same-origin URLs for a TAR-backed image sequence."""
+        """Return lazy same-origin URLs for archived or embedded images."""
         if not self.ok or not variable_id:
             return ([], 0, [], [], "timestep")
 
@@ -3743,7 +3743,9 @@ class CampaignDb:
                     },
                 ).sort([("frame_index", 1), ("_id", 1)])
             )
-            docs = [doc for doc in docs if doc.get("image_storage") == "tar"]
+            docs = [
+                doc for doc in docs if doc.get("image_storage") in {"tar", "embedded"}
+            ]
             unique_docs = []
             seen: Set[int] = set()
             for doc in docs:
@@ -3894,7 +3896,9 @@ class CampaignDb:
                     if not frame_indices and frame_count > 0:
                         frame_indices = list(range(frame_count))
                     tile = {
-                        "variable_name": str(doc.get("variable_name", "") or variable_id),
+                        "variable_name": str(
+                            doc.get("variable_name", "") or variable_id
+                        ),
                         "variable_id": variable_id,
                         "visualization_name": vis,
                         "source_dataset": source_dataset,
@@ -3908,22 +3912,37 @@ class CampaignDb:
                         "variable_type": "video",
                         "payload_type": "VIDEO",
                         "visualization_item_type": "VIDEO",
-                        "visualization_kind": str(doc.get("visualization_kind", "") or ""),
-                        "visualization_variables": _list_field(doc.get("visualization_variables", [])),
-                        "visualization_roles": _list_field(doc.get("visualization_roles", [])),
-                        "visualization_sequence_metadata": _dict_field(doc.get("visualization_sequence_metadata", {})),
+                        "visualization_kind": str(
+                            doc.get("visualization_kind", "") or ""
+                        ),
+                        "visualization_variables": _list_field(
+                            doc.get("visualization_variables", [])
+                        ),
+                        "visualization_roles": _list_field(
+                            doc.get("visualization_roles", [])
+                        ),
+                        "visualization_sequence_metadata": _dict_field(
+                            doc.get("visualization_sequence_metadata", {})
+                        ),
                         "visualization_item_metadata": metadata,
-                        "visualization_activity_provenance": _dict_field(doc.get("visualization_activity_provenance", {})),
+                        "visualization_activity_provenance": _dict_field(
+                            doc.get("visualization_activity_provenance", {})
+                        ),
                         "visualization_item_uuid": dataset_uuid,
                         "src": f"/pulsar-media/{dataset_uuid}" if dataset_uuid else "",
                         "media_type": "video",
                         "status": "ok" if dataset_uuid else "unavailable",
                         "note": "" if dataset_uuid else "missing video dataset UUID",
-                        "fps": int(fps),
+                        "fps": float(metadata.get("fps", fps) or fps),
+                        "poster": f"/pulsar-image/{metadata['poster_uuid']}"
+                        if metadata.get("poster_uuid")
+                        else "",
                         "frame_count": frame_count,
                         "frame_indices": frame_indices,
                         "time_values": time_values,
-                        "time_mode": str(doc.get("time_mode", "timestep") or "timestep"),
+                        "time_mode": str(
+                            doc.get("time_mode", "timestep") or "timestep"
+                        ),
                         "time_unit": str(doc.get("time_unit", "") or ""),
                         "frame_sources": [],
                     }
@@ -3935,7 +3954,7 @@ class CampaignDb:
 
                 grouped_schema_source = bool(schema_file_group and schema_mode == "file_per_timestep")
                 frame_sources: List[str] = []
-                if str(doc.get("image_storage", "") or "") == "tar":
+                if str(doc.get("image_storage", "") or "") in {"tar", "embedded"}:
                     frame_sources, total, frame_indices, time_values, time_mode = (
                         self.get_movie_image_sources_for_stream(
                             variable_id,
@@ -3974,7 +3993,11 @@ class CampaignDb:
                 elif frame_sources and len(frame_sources) == 1:
                     src = frame_sources[0]
                     media_type = "image"
-                    note = "1 TAR image"
+                    note = (
+                        "1 TAR image"
+                        if doc.get("image_storage") == "tar"
+                        else "1 campaign image"
+                    )
                 elif frame_sources:
                     src = frame_sources[0]
                     media_type = "image_sequence"
