@@ -13,6 +13,7 @@ from config import (
     PULSAR_LLM_TIMEOUT_SECONDS,
     PULSAR_INTERACTION_LOG_DIR,
     PULSAR_INTERACTION_LOG_MAX_MB,
+    PULSAR_RESULTS_DIR,
 )
 from controllers import attach_controllers
 from db import CampaignDb
@@ -33,6 +34,7 @@ from .demo_campaign import (
 from .learning import InteractionLog
 from .plot_options_assistant import make_chat_completions_plot_options_translator
 from .query_assistant import make_chat_completions_query_translator
+from .results import ResultStore, register_result_media_route
 from .state import init_state
 
 
@@ -65,6 +67,7 @@ class PulsarApp(TrameApp):
         interaction_log=None,
         controller_attacher=attach_controllers,
         ui_builder=build_ui,
+        control_session_path="",
     ):
         super().__init__(server, client_type="vue3")
         self.server.enable_module(pulsar_module)
@@ -75,6 +78,8 @@ class PulsarApp(TrameApp):
         )
         self.campaign_schema_path = _expanded_path(campaign_schema_path)
         register_campaign_media_route(self.server, self.campaign_path)
+        self.result_store = ResultStore(PULSAR_RESULTS_DIR, self.campaign_path)
+        register_result_media_route(self.server, self.result_store)
 
         self.collection = collection or open_sqlite_collection(self.campaign_path)
         print(f"Pulsar sidecar DB: {self.collection.path}")
@@ -118,6 +123,11 @@ class PulsarApp(TrameApp):
         )
         init_state(self.state, self.db)
 
+        control_options = (
+            {"control_session_path": _expanded_path(control_session_path)}
+            if control_session_path
+            else {}
+        )
         self.refresh_variable_list = controller_attacher(
             server=self.server,
             backend=self.backend,
@@ -130,6 +140,8 @@ class PulsarApp(TrameApp):
             query_translator=self.query_translator,
             plot_options_translator=self.plot_options_translator,
             interaction_log=self.interaction_log,
+            result_store=self.result_store,
+            **control_options,
         )
         self.ui = ui_builder(
             self.server,
@@ -157,6 +169,12 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--control-session",
+        default="",
+        metavar="PATH",
+        help="Enable local Python control and write a private session file at PATH.",
+    )
+    parser.add_argument(
         "--image-association-schema",
         default="",
         help="Optional path to image association schema text/YAML file.",
@@ -176,6 +194,9 @@ def main(argv=None):
         parser.error("provide exactly one of campaign_path or --demo")
     if args.demo and (args.image_association_schema or args.campaign_schema):
         parser.error("--demo cannot be combined with external schema options")
+    control_options = (
+        {"control_session_path": args.control_session} if args.control_session else {}
+    )
 
     if args.demo:
         try:
@@ -190,6 +211,7 @@ def main(argv=None):
                     app = PulsarApp(
                         campaign_path=str(demo.campaign_path),
                         collection=collection,
+                        **control_options,
                     )
                     app.server.start()
                 finally:
@@ -202,5 +224,6 @@ def main(argv=None):
         campaign_path=args.campaign_path,
         image_association_schema_path=args.image_association_schema,
         campaign_schema_path=args.campaign_schema,
+        **control_options,
     )
     app.server.start()

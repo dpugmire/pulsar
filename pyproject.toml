@@ -18,6 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+publish = [
+    "hpc-campaign>=0.7.1",
+    "python-dateutil>=2.9",
+]
+
 schema = [
     "PyYAML",
 ]

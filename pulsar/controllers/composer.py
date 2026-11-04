@@ -14,6 +14,7 @@ from .context_menu import ContextMenuControllerMixin
 from .grid import GridControllerMixin
 from .history import HistoryControllerMixin
 from .lifecycle import LifecycleControllerMixin
+from .publication import PublicationControllerMixin
 from .query_assistant import QueryAssistantControllerMixin
 from .sources import SourcesControllerMixin
 from .visualization import VisualizationControllerMixin
@@ -30,6 +31,7 @@ CONTROLLER_TYPES = (
     HistoryControllerMixin,
     WorkspaceControllerMixin,
     LifecycleControllerMixin,
+    PublicationControllerMixin,
 )
 
 
@@ -43,6 +45,7 @@ class PulsarController(
     HistoryControllerMixin,
     WorkspaceControllerMixin,
     LifecycleControllerMixin,
+    PublicationControllerMixin,
     ControllerBase,
 ):
     def __init__(self, context):
@@ -109,6 +112,8 @@ def attach_controllers(
     query_translator=None,
     plot_options_translator=None,
     interaction_log=None,
+    control_session_path="",
+    result_store=None,
 ):
     catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
     context = ControllerContext(
@@ -123,6 +128,11 @@ def attach_controllers(
         query_translator=query_translator,
         plot_options_translator=plot_options_translator,
         interaction_log=interaction_log,
+        result_store=result_store,
     )
     controller = PulsarController(context).register()
+    if control_session_path:
+        from pulsar.control import register_control_api
+
+        register_control_api(server, controller, control_session_path)
     return controller.refresh_variable_list

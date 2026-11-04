@@ -5,6 +5,28 @@ On startup, it reads a `.aca` campaign file into a Pulsar SQLite sidecar DB and
 provides a UI to browse variables, view min/max summaries, filter with a simple
 query language, and preview image sequences as short videos.
 
+## Python control
+
+Use `--control-session /tmp/pulsar-session.json` to enable a local Python client
+alongside the browser. Scripts can inspect the current selection and catalog,
+create tabs, display campaign variables, and register unpublished PNG results
+or MP4 movies with their analysis scripts and provenance. Workspace Save/Load
+preserves their references across server restarts using durable
+`PULSAR_RESULTS_DIR` storage. Pass one `frame_times` value per encoded movie
+frame to preserve physical time during playback and publication.
+
+Publish working results into the open campaign with
+`viewer.publish_result(result_id, ...)`; PNG plots also have a browser
+**Publish** button. Publication embeds the media, a movie's PNG preview, and
+optional source-variable associations, then refreshes the catalogue while
+preserving the workspace. Associated movies appear under their source variables.
+Publishing requires the optional hpc-campaign writer with `Manager.publish_image`
+and `Manager.publish_video`. Scientific provenance remains in working storage;
+publishing it into campaigns is deferred.
+
+See [Local Python control](docs/python-control.md) for startup, examples, and
+the versioned API contract.
+
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a diagram of the browser, Trame,

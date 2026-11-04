@@ -19,10 +19,10 @@ from ui import build_ui
 
 class PulsarAppTests(unittest.TestCase):
     def test_browser_assets_use_current_cache_namespace(self):
-        self.assertEqual(pulsar_module.BASE_URL, "pulsar_0_1_12")
+        self.assertEqual(pulsar_module.BASE_URL, "pulsar_0_1_13")
         self.assertEqual(
             pulsar_module.styles,
-            ["pulsar_0_1_12/pulsar.css"],
+            ["pulsar_0_1_13/pulsar.css"],
         )
 
     def test_provenance_panel_styles_enable_bounded_two_axis_resize(self):
@@ -212,6 +212,15 @@ class PulsarAppTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             main(["--demo", "--campaign-schema", "schema.yaml"])
+
+    def test_cli_control_is_opt_in_and_forwarded_to_application(self):
+        self.assertEqual(build_parser().parse_args(["example.aca"]).control_session, "")
+        with patch("pulsar.app.PulsarApp") as app_class:
+            main(["example.aca", "--control-session", "/tmp/pulsar-session.json"])
+        self.assertEqual(
+            app_class.call_args.kwargs["control_session_path"],
+            "/tmp/pulsar-session.json",
+        )
 
     def test_ui_is_composed_from_trame_components(self):
         server = get_server(
