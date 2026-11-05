@@ -14,6 +14,7 @@ from .context_menu import ContextMenuControllerMixin
 from .grid import GridControllerMixin
 from .history import HistoryControllerMixin
 from .lifecycle import LifecycleControllerMixin
+from .metadata_query import MetadataQueryControllerMixin
 from .publication import PublicationControllerMixin
 from .query_assistant import QueryAssistantControllerMixin
 from .sources import SourcesControllerMixin
@@ -32,6 +33,7 @@ CONTROLLER_TYPES = (
     WorkspaceControllerMixin,
     LifecycleControllerMixin,
     PublicationControllerMixin,
+    MetadataQueryControllerMixin,
 )
 
 
@@ -46,6 +48,7 @@ class PulsarController(
     WorkspaceControllerMixin,
     LifecycleControllerMixin,
     PublicationControllerMixin,
+    MetadataQueryControllerMixin,
     ControllerBase,
 ):
     def __init__(self, context):

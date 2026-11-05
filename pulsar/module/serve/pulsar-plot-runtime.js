@@ -785,6 +785,7 @@
       const plotAxisKey = String(el.getAttribute("data-plot-axis-key") || "");
       if (activeAxisKey && plotAxisKey !== String(activeAxisKey)) {
         meta.cursor.setAttribute("display", "none");
+        meta.cursor.removeAttribute("data-cursor-value");
         continue;
       }
       const cursorValue = normalizedProgress === null
@@ -794,9 +795,11 @@
       const px = meta.sx(clampedValue);
       if (!Number.isFinite(px)) {
         meta.cursor.setAttribute("display", "none");
+        meta.cursor.removeAttribute("data-cursor-value");
         continue;
       }
       meta.cursor.removeAttribute("display");
+      meta.cursor.setAttribute("data-cursor-value", String(clampedValue));
       meta.cursor.setAttribute("x1", String(px));
       meta.cursor.setAttribute("x2", String(px));
     }

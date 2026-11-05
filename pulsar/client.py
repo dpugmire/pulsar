@@ -143,6 +143,34 @@ class PulsarClient:
         """List variables in the current (possibly filtered) catalog."""
         return self._request("/catalog")
 
+    def query_schema(self) -> dict[str, Any]:
+        """Discover read-only metadata SQL views, their grain, joins, and limits."""
+        return self._request("/query-schema")
+
+    def query(self, sql: str, parameters=None, request: str = "") -> dict[str, Any]:
+        """Execute metadata SQL over the whole campaign and save its bounded result.
+
+        parameters is a dictionary for named bindings or a list for positional
+        bindings. Querying never changes the current catalog filter/workspace.
+        """
+        return self._request(
+            "/queries", {"sql": sql, "parameters": parameters, "request": request}
+        )
+
+    def queries(self) -> list[dict[str, Any]]:
+        """List durable metadata-query snapshots for this campaign."""
+        return self._request("/queries")
+
+    def query_result(self, query_id: str) -> dict[str, Any]:
+        """Read a saved result, including whether its campaign fingerprint changed."""
+        from uuid import UUID
+
+        return self._request("/queries/" + str(UUID(query_id)))
+
+    def show_query(self, query_id: str, *, tab_id: str) -> dict[str, Any]:
+        """Add a saved query table to a tab without replacing existing tiles."""
+        return self._request("/query-views", {"query_id": query_id, "tab_id": tab_id})
+
     def tabs(self) -> list[dict[str, Any]]:
         """List workspace tabs and their visualization summaries."""
         return self._request("/tabs")
@@ -151,15 +179,31 @@ class PulsarClient:
         """Create and activate a tab, in the active pane by default."""
         return self._request("/tabs", {"title": title, "pane_id": pane_id})
 
-    def add_visualization(self, variable_id: str, *, tab_id: str) -> dict[str, Any]:
+    def set_time(self, physical_time: float, *, tab_id: str) -> dict[str, Any]:
+        """Pause and seek a tab's physical-time slider, awaiting a browser receipt.
+
+        The slider selects the nearest driver sample (clamped to its range).
+        The receipt reports the time actually selected for each displayed plot.
+        A connected browser is required. A timeout can leave the outcome unknown.
+        """
+        return self._request(
+            "/time", {"physical_time": physical_time, "tab_id": tab_id}
+        )
+
+    def add_visualization(
+        self, variable_id: str, *, tab_id: str, source_ref: str | None = None
+    ) -> dict[str, Any]:
         """Add a variable using the viewer's current filters/defaults.
 
+        source_ref selects an exact source from a metadata-query result instead
+        of the viewer's source selection. The current catalog query still applies.
         The target tab is activated. Existing tiles are never replaced. This
         returns after the server updates state, before browser render completion.
         """
-        return self._request(
-            "/visualizations", {"variable_id": variable_id, "tab_id": tab_id}
-        )
+        payload = {"variable_id": variable_id, "tab_id": tab_id}
+        if source_ref is not None:
+            payload["source_ref"] = source_ref
+        return self._request("/visualizations", payload)
 
     def register_result(
         self,

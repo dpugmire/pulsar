@@ -47,21 +47,40 @@ Browser-local playback position, pan/zoom state, image bytes, and plot arrays
 are not included.
 
 `create_tab(title, pane_id=None)` creates and activates a tab in the active pane
-or a named pane. `add_visualization(variable_id, tab_id=...)` activates the
+or a named pane. `add_visualization(variable_id, tab_id=..., source_ref=None)` activates the
 specified tab and uses the same assignment, source-selection, rendering, and
 default-visualization rules as the browser. Freeform uses normal canvas
 placement; Uniform and Spanning use an empty visible cell. A full workspace
 returns an error rather than replacing an existing tile. Each successful
 operation is one normal workspace undo step.
 
-The API uses the current query, source selection, and visualization defaults.
-Version 1 does not provide per-call source filters or visualization options.
+By default, the API uses the current query, source selection, and visualization
+defaults. Pass an opaque `source_ref` returned by a metadata query to choose an
+exact source for that call instead of the current source selection:
+
+```python
+result = viewer.query(
+    "select source_ref from q_sources where source_dataset=:source",
+    {"source": "rusanov_128/output.bp"},
+)
+plot = viewer.add_visualization(
+    "current_z", tab_id=tab["tab_id"], source_ref=result["rows"][0][0],
+)
+```
+
+References can come from a query over another variable, such as ranking pressure
+and then displaying `current_z` for each matching source. The requested variable
+must exist in that source within the current catalog query. An unavailable
+reference returns `source_not_found` (404); an ambiguous match returns
+`ambiguous_source` (409). Both leave the workspace unchanged. Omit `source_ref`
+to retain the default behavior. There are no per-call visualization options.
 If raw scalar generation is set to Ask, an operation requiring confirmation
 fails without leaving a pending dialog or partial plot. Select Always in the
 viewer if automatic generation is desired. Existing pending confirmations
 must be resolved before adding another visualization.
 
-Responses describe server-applied state. Browser rendering can finish later.
+Responses describe server-applied state. Browser rendering can finish later;
+`set_time()` additionally waits for a browser to confirm its seek.
 Both the scientist and scripts can edit the workspace; use returned tab IDs
 instead of relying on the active tab remaining unchanged between calls.
 The existing workspace Save/Load controls persist the resulting arrangements.
@@ -69,6 +88,12 @@ Generated PNG plots and MP4 movies can be registered, displayed, and explicitly
 published into the campaign as described below.
 
 ## Unpublished working results
+
+For read-only SQL over campaign metadata and sortable result tables, see
+[Metadata SQL queries](metadata-queries.md). The Python client provides
+`query_schema()`, `query()`, `queries()`, `query_result()`, and `show_query()`.
+Queries are independent of the current catalog filter and require no raw data
+reads. Saved query tables participate in workspace Save/Load and undo/redo.
 
 Register a generated PNG, an optional analysis script, and the scientific
 context supplied by the caller:
@@ -314,6 +339,44 @@ The client uses the Python standard library; the server reuses Trame's
 existing aiohttp server. Publishing additionally uses the optional
 hpc-campaign writer described above.
 
+## Set physical time
+
+```python
+receipt = viewer.set_time(0.5, tab_id=tab["tab_id"])
+print(receipt["requested_time"], receipt["physical_time"])
+for plot in receipt["plots"]:
+    print(plot["source_dataset"], plot["physical_time"], plot["status"])
+```
+
+The call activates the target tab, pauses playback, and seeks its existing
+physical-time slider. It uses the slider's current driver and selects the nearest
+driver sample; ties choose the earlier sample, and requests outside the driver's
+range clamp to an endpoint. The argument uses the displayed timeline's physical
+time units. It is not a frame ordinal or source step. Non-time selection axes
+(such as shot number) and tabs without a physical timeline return
+`time_unavailable` (409).
+
+The receipt includes `requested_time`, the applied slider `physical_time`,
+`slider_index`, and a `plots` list with cell/source identities, time units, and
+the actual physical time used. Existing synchronization rules apply: image
+sequences hold the latest sample at or before the slider time, and mapped movies
+select their nearest physical-time frame. `sample_index` is the frame ordinal;
+`frame_index` is the stored frame index when available. A plot with a continuous
+time cursor returns status `cursor`, rather than claiming a sampled field value.
+Media without a physical mapping or with an incompatible selection axis report
+`no_physical_time` or `incompatible_axis` and a null physical time. A cursor that
+has not rendered reports `not_ready`; rendered cursor times respect the plot's
+current displayed bounds.
+
+A connected viewer with the current frontend is required. The call waits up to
+10 seconds for a browser receipt. No confirmation returns `seek_timeout` (504),
+with the outcome unknown; reconnect/reload the viewer before retrying. Requests
+are not automatically retried. Concurrent seeks return `seek_busy` (409), and
+switching tabs or changing a source during a seek can return `workspace_changed`
+(409). Completed and timed-out commands are cleared so they cannot replay on a
+later browser connection. Time seeking does not add a workspace undo step, and
+the playback position remains outside saved workspace documents.
+
 ## HTTP contract
 
 All endpoints are under `/pulsar-api/v1`, accept loopback clients only, and
@@ -327,7 +390,8 @@ Successful responses are `{"api_version": 1, "result": ...}`. Errors use
 | GET | `/catalog` | None |
 | GET | `/tabs` | None |
 | POST | `/tabs` | `title`, optional `pane_id` |
-| POST | `/visualizations` | `variable_id`, `tab_id` |
+| POST | `/time` | `physical_time`, `tab_id`; waits for a browser seek receipt |
+| POST | `/visualizations` | `variable_id`, `tab_id`, optional `source_ref` |
 | GET | `/results` | None |
 | GET | `/results/{result_id}` | None |
 | POST | `/results` | `title`, `image_path`, optional `video_path`, `frame_times`, `time_unit`, `time_source`, `script_path`, `parameters`, `provenance` |

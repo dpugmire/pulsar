@@ -401,6 +401,7 @@ class GridControllerMixin:
             "source_collection_label": str(
                 row.get("source_collection_label", "") or ""
             ),
+            "schema_name": str(row.get("schema_name", "") or ""),
             "schema_file_group": str(row.get("schema_file_group", "") or ""),
             "schema_pattern": str(row.get("schema_pattern", "") or ""),
             "schema_mode": str(row.get("schema_mode", "") or ""),
@@ -408,7 +409,10 @@ class GridControllerMixin:
             "casename": str(row.get("casename", "") or ""),
             "file": str(row.get("file", "") or ""),
         }
-        target["_key"] = source_key_for_fields(target)
+        source_id = str(row.get("source_id", "") or row.get("id", "") or "")
+        if source_id:
+            target["source_id"] = source_id
+        target["_key"] = source_id or source_key_for_fields(target)
         return target
 
     def normalize_grid_cells(
@@ -934,6 +938,7 @@ class GridControllerMixin:
         geometry_payload=None,
         *,
         sync_selection: bool = False,
+        source_row: Optional[Dict[str, Any]] = None,
     ) -> int:
         var = str(var_name or "").strip()
         if not var or self.normalize_grid_layout_mode() != "freeform":
@@ -985,7 +990,9 @@ class GridControllerMixin:
         cells.append(placeholder)
         self.state.gridCells = cells
         target = len(cells) - 1
-        self.assign_var_to_grid_cell(target, var, sync_selection=sync_selection)
+        self.assign_var_to_grid_cell(
+            target, var, sync_selection=sync_selection, source_row=source_row
+        )
 
         cells = self.normalize_grid_cells(self.state.gridCells)
         if 0 <= target < len(cells):
@@ -1314,7 +1321,7 @@ class GridControllerMixin:
         except Exception:
             use_multi = False
 
-        if cells[idx].get("working_result_id"):
+        if cells[idx].get("working_result_id") or cells[idx].get("query_result_id"):
             selected = self.normalize_grid_selection(cells=cells) if use_multi else []
             self.set_grid_selection(sorted(set(selected + [idx])), active=idx)
             self.state.selectedVar = ""
@@ -1966,7 +1973,8 @@ class GridControllerMixin:
         self.update_grid_cell_span(cell_index, row_span=1, col_span=1)
 
     def assign_var_to_grid_cell(
-        self, cell_index: int, var_name: str, sync_selection: bool = True, **_
+        self, cell_index: int, var_name: str, sync_selection: bool = True,
+        *, source_row: Optional[Dict[str, Any]] = None, **_
     ):
         try:
             idx = int(cell_index)
@@ -1984,11 +1992,12 @@ class GridControllerMixin:
             return
 
         cells = self.normalize_grid_cells(self.state.gridCells)
-        source_row = {}
-        if str(self.state.detailsSelectedVarId or "") == var:
-            source_row = self.source_row_for_key(
-                (self.state.selectedSourceKeys or [""])[0]
-            )
+        if source_row is None:
+            source_row = {}
+            if str(self.state.detailsSelectedVarId or "") == var:
+                source_row = self.source_row_for_key(
+                    (self.state.selectedSourceKeys or [""])[0]
+                )
         if self.maybe_handle_generated_scalar_plot(
             var,
             idx,

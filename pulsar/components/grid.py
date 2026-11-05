@@ -17,6 +17,7 @@ from .dialogs import (
     ScalarPlotDialog,
     SourceDialog,
 )
+from .query_results import build_query_table
 
 
 def _build_grid_size_picker(ctrl):
@@ -560,6 +561,7 @@ def _build_inactive_workspace_grids(ctrl):
                                         classes="pulsar-workspace-preview-title",
                                     )
                                     with html.Div(classes="pulsar-workspace-preview-media"):
+                                        build_query_table()
                                         with vuetify.Template(v_if="tile.media_type === 'plot1d'"):
                                             html.Div(
                                                 classes="pulsar-plot1d",
@@ -722,6 +724,15 @@ class GridWorkspace(TrameComponent):
                     ),
                 ):
                     self.runtime = GridRuntime()
+                    html.Div(
+                        "",
+                        id="pulsar-timeline-seek-request",
+                        style="display:none;",
+                        raw_attrs=[
+                            ':data-timeline-seek-request="JSON.stringify(timelineSeekRequest || {})"',
+                            ':data-active-tab-id="workspaceActiveTabId"',
+                        ],
+                    )
                     html.Div(
                         "",
                         id="pulsar-reset-view-request",
@@ -960,6 +971,7 @@ class GridWorkspace(TrameComponent):
                                 classes="pulsar-dropcell",
                                 raw_attrs=[
                                     ':data-cell-index="i"',
+                                    ':data-source-id="(tile && tile.source_id) || \'\'"',
                                     ':data-pane-id="workspaceActivePaneId"',
                                     ':data-tab-id="workspaceActiveTabId"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
@@ -1121,6 +1133,13 @@ class GridWorkspace(TrameComponent):
                                             style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                         )
                                         html.Button(
+                                            "Inspect query",
+                                            v_if="tile.query_result_id",
+                                            click=(ctrl.show_metadata_query_details, "[i]"),
+                                            raw_attrs=['type="button"', "@pointerdown.stop"],
+                                            style="font-size:0.7rem; padding:1px 5px; border:1px solid currentColor; border-radius:3px; white-space:nowrap;",
+                                        )
+                                        html.Button(
                                             "{{ tile.publication_status === 'published' ? 'Published' : 'Unpublished' }}",
                                             v_if="tile.working_result_id",
                                             classes="pulsar-working-result-badge",
@@ -1224,6 +1243,7 @@ class GridWorkspace(TrameComponent):
                                     with html.Div(
                                         style="width:100%; flex:1 1 auto; min-height:0; background:#111; position:relative; overflow:hidden;",
                                     ):
+                                        build_query_table()
                                         with vuetify.Template(v_if="tile.media_type === 'plot1d'"):
                                             html.Div(
                                                 classes="pulsar-plot1d",
@@ -1268,7 +1288,7 @@ class GridWorkspace(TrameComponent):
                                                                 "{{ item.source_label || item.source_key || ('Series ' + (j + 1)) }}",
                                                                 classes="pulsar-plot-legend-label",
                                                             )
-                                        with vuetify.Template(v_if="tile.media_type !== 'plot1d'"):
+                                        with vuetify.Template(v_if="tile.media_type !== 'plot1d' && tile.media_type !== 'query_table'"):
                                             with vuetify.Template(v_if="tile.src"):
                                                 with vuetify.Template(
                                                     v_if=(

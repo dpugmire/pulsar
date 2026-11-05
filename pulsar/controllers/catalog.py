@@ -2001,12 +2001,30 @@ Notes:
             if key in all_keys
         ]
         preferred_key = str(preferred_source_key or "")
+        plot_source_requested = False
+        if (
+            selected_provenance_tile
+            and not preferred_keys
+            and preferred_key not in all_keys
+        ):
+            # Old workspaces can contain variable-specific source keys. Resolve
+            # those from the tile's recorded identity, not the last UI selection.
+            source_fields = self.source_fields_list_from_cell(selected_provenance_tile)
+            plot_source_requested = bool(source_fields)
+            preferred_keys = normalize_source_keys(
+                [
+                    str(self.source_row_for_cell(fields).get("_key", "") or "")
+                    for fields in source_fields
+                ]
+            )
         if preferred_keys:
             self.state.selectedSourceKeys = (
                 preferred_keys if allow_multi_sources else preferred_keys[:1]
             )
         elif preferred_key and preferred_key in all_keys:
             self.state.selectedSourceKeys = [preferred_key]
+        elif plot_source_requested:
+            self.state.selectedSourceKeys = []
         elif previous_var != var_id:
             self.state.selectedSourceKeys = [all_keys[0]] if all_keys else []
         else:

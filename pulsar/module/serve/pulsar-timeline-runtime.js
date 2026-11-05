@@ -1721,6 +1721,146 @@
     updatePlotCursors(gridVcrState.syncTime || 0, getGridVideos());
   }
 
+  let lastSeekRequestId = "";
+
+  function currentSeekRequest() {
+    const element = gridRuntimeElementById("pulsar-timeline-seek-request");
+    try {
+      return JSON.parse(element && element.getAttribute("data-timeline-seek-request") || "{}");
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  function seekRequestIsCurrent(request) {
+    const element = gridRuntimeElementById("pulsar-timeline-seek-request");
+    return !!element
+      && currentSeekRequest().request_id === request.request_id
+      && element.getAttribute("data-active-tab-id") === request.tab_id;
+  }
+
+  function waitForVideoEvent(video, event, ready) {
+    if (ready()) return Promise.resolve();
+    return new Promise(function(resolve, reject) {
+      const timeout = setTimeout(function() {
+        cleanup();
+        reject(new Error("Video did not become ready for the requested time"));
+      }, 2000);
+      function cleanup() {
+        clearTimeout(timeout);
+        video.removeEventListener(event, done);
+        video.removeEventListener("error", failed);
+      }
+      function done() { cleanup(); resolve(); }
+      function failed() { cleanup(); reject(new Error("Video failed to load")); }
+      video.addEventListener(event, done, { once: true });
+      video.addEventListener("error", failed, { once: true });
+    });
+  }
+
+  async function seekPhysicalTime(request) {
+    if (!seekRequestIsCurrent(request)) throw new Error("The active tab changed while seeking");
+    const axis = getActiveSelectionAxis();
+    if (axis && axis.explicit && !["time", "physical_time"].includes(axis.kind)) {
+      throw new Error("The active slider axis is not physical time");
+    }
+    const cells = Array.from(gridRuntimeQueryAll(".pulsar-dropcell")).filter(function(cell) {
+      return isVisibleGridCell(cell) && cell.getAttribute("data-tab-id") === request.tab_id;
+    });
+    function inTargetTab(element) {
+      return cells.includes(element.closest(".pulsar-dropcell"));
+    }
+    const sequences = getGridImageSequences().filter(inTargetTab);
+    const videos = getGridVideos().filter(inTargetTab);
+    const plots = getGridPlots().filter(inTargetTab);
+    const timeline = getPhysicalTimeline(sequences, plots);
+    const mappedMedia = sequences.some(imageSequenceHasPhysicalTime)
+      || videos.some(videoHasPhysicalTime) || collectPlotTimeValues(plots).length;
+    if (!timeline.length || !mappedMedia) {
+      throw new Error("This tab has no seekable physical-time timeline");
+    }
+    await Promise.all(videos.map(function(video) {
+      return waitForVideoEvent(video, "loadedmetadata", function() { return video.readyState >= 1; });
+    }));
+    if (videos.some(function(video) { return !Number.isFinite(video.duration) || video.duration <= 0; })) {
+      throw new Error("Video duration is unavailable for physical-time seeking");
+    }
+    if (!seekRequestIsCurrent(request)) throw new Error("The active tab changed while seeking");
+    const index = timelineIndexNearest(request.physical_time, timeline);
+    const target = timeline[index];
+    setGridVcrPlaying(false);
+    stopSyncTimer();
+    pauseAllVideos(videos);
+    // Initialize the axis key before applying the seek; an axis change otherwise
+    // resets the label and slider to the axis's initial sample.
+    updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos, plots);
+    applyPhysicalTimelineTime(target, sequences, videos, plots);
+    await Promise.all(videos.map(function(video) {
+      return waitForVideoEvent(video, "seeked", function() { return !video.seeking; });
+    }));
+    if (!seekRequestIsCurrent(request)) throw new Error("The active tab changed while seeking");
+    if (getVcrSliderFrameValue() !== index) throw new Error("The slider changed while seeking");
+
+    const samples = [];
+    for (const cell of cells) {
+      const sequence = cell.querySelector('img[data-grid-image-sequence="1"]');
+      const video = cell.querySelector('video[data-grid-video="1"]');
+      const plot = cell.querySelector(".pulsar-plot1d");
+      if (!sequence && !video && !plot) continue;
+      const sample = {
+        cell_index: Number(cell.getAttribute("data-cell-index")),
+        source_id: cell.getAttribute("data-source-id") || "",
+        physical_time: null, sample_index: null, frame_index: null,
+        status: "no_physical_time",
+      };
+      const media = sequence || video || plot;
+      if (
+        !elementMatchesActiveAxis(media, axis)
+        || (plot && axis && axis.explicit && plot.getAttribute("data-plot-axis-key") !== axis.key)
+      ) {
+        sample.status = "incompatible_axis";
+      } else if (sequence && imageSequenceHasPhysicalTime(sequence)) {
+        sample.sample_index = Number(sequence.getAttribute("data-current-frame") || 0);
+        sample.physical_time = parseImageSequenceTimeValues(sequence)[sample.sample_index];
+        sample.frame_index = parseImageSequenceFrameIndices(sequence)[sample.sample_index] ?? null;
+        sample.status = "sample";
+      } else if (video && videoHasPhysicalTime(video)) {
+        const times = parseVideoTimeValues(video);
+        const count = getVideoFrameCount(video) || times.length;
+        sample.sample_index = Math.max(0, Math.min(
+          Math.round(video.currentTime * count / video.duration), times.length - 1
+        ));
+        sample.physical_time = times[sample.sample_index];
+        sample.frame_index = parseImageSequenceFrameIndices(video)[sample.sample_index] ?? null;
+        sample.status = "sample";
+      } else if (plot && collectPlotTimeValues([plot]).length) {
+        const cursor = plot.__pulsarPlotMeta && plot.__pulsarPlotMeta.cursor;
+        const value = cursor && cursor.getAttribute("data-cursor-value");
+        sample.physical_time = value === null || value === undefined ? null : Number(value);
+        sample.status = sample.physical_time === null ? "not_ready" : "cursor";
+      }
+      samples.push(sample);
+    }
+    return { physical_time: target, slider_index: index, plots: samples };
+  }
+
+  function applySeekRequest() {
+    const request = currentSeekRequest();
+    if (!request.request_id || request.request_id === lastSeekRequestId) return;
+    lastSeekRequestId = request.request_id;
+    seekPhysicalTime(request).then(function(result) {
+      return Object.assign({}, request, result);
+    }, function(error) {
+      return Object.assign({}, request, { error: String(error.message || error) });
+    }).then(function(receipt) {
+      // A timed-out request must not be replayed when another viewer connects.
+      if (currentSeekRequest().request_id !== request.request_id) return;
+      if (window.trame && window.trame.trigger) {
+        window.trame.trigger("pulsar_timeline_seek_result", [receipt]);
+      }
+    });
+  }
+
   function unmountTimelineRuntime(root) {
     if (!root || root !== runtimeRoot) return;
     root.removeEventListener("input", onGridRuntimeSlider, true);
@@ -1737,6 +1877,7 @@
       gridMediaSyncTimer = null;
     }
     stopSyncTimer();
+    lastSeekRequestId = "";
     root.removeAttribute("data-pulsar-timeline-runtime-owner");
     runtimeRoot = null;
   }
@@ -1753,6 +1894,7 @@
     root.addEventListener("loadedmetadata", onGridVideoLoadedMetadata, true);
     root.addEventListener("ended", onGridVideoEnded, true);
     gridMediaObserver = new MutationObserver(function(mutations) {
+      applySeekRequest();
       if ((mutations || []).some(mutationTouchesGridMedia)) {
         scheduleGridMediaSyncToCurrentVcrTime();
       }
@@ -1761,9 +1903,10 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-plot-axis-key", "data-selection-axis", "data-cell-active", "data-timeline-driver"],
+      attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-plot-axis-key", "data-selection-axis", "data-cell-active", "data-timeline-driver", "data-timeline-seek-request", "data-active-tab-id"],
     });
     scheduleGridMediaSyncToCurrentVcrTime();
+    applySeekRequest();
   }
 
   const pulsar = window.pulsar = window.pulsar || {};
