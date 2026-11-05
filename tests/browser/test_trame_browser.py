@@ -50,7 +50,7 @@ def test_browser_tab_uses_pulsar_title_and_favicon(page, pulsar_server):
     assert page.title() == "Pulsar"
     favicon = page.locator('link[rel="icon"]')
     favicon_url = favicon.evaluate("element => element.href")
-    assert favicon_url.endswith("/pulsar_0_1_13/pulsar-mark.svg")
+    assert favicon_url.endswith("/pulsar_0_1_14/pulsar-mark.svg")
     response = page.request.get(favicon_url)
     assert response.ok
     assert "Pulsar placeholder logo" in response.text()

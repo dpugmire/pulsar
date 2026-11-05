@@ -73,6 +73,7 @@ def defaults():
         "selectedGridCellIndices": [],
         "selectedGridCellMap": {},
         "timelineDriverCell": -1,
+        "timelineSeekRequest": {},
         "resetViewRequest": {},
         "resetViewRequestNonce": 0,
     }

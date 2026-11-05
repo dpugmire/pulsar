@@ -8,7 +8,7 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from aiohttp import web
@@ -22,6 +22,7 @@ from pulsar.control import API_PATH, ControlError, ViewerControl, register_contr
 from pulsar.controllers.composer import PulsarController
 from pulsar.controllers.context import ControllerContext
 from pulsar.models.grid import empty_grid_cell
+from pulsar.models.source_selection import source_fields_from_row
 from pulsar.models.workspace_state import parse_workspace_document, workspace_json
 from pulsar.results import ResultStore, register_result_media_route
 from pulsar.state import init_state
@@ -87,6 +88,34 @@ class ControlFixture:
         self.controller.maybe_handle_generated_scalar_plot = Mock(return_value=False)
         self.state = self.server.state
 
+    def add_rusanov_sources(self):
+        for index, source in enumerate(("rusanov_128/output.bp", "rusanov_64/output.bp")):
+            self.collection.insert_one(
+                {
+                    "variable_id": "density",
+                    "variable_name": "density",
+                    "variable_type": "variable",
+                    "source_dataset": source,
+                    "metadata": {"Shape": "2,2"},
+                }
+            )
+            self.collection.insert_one(
+                {
+                    "variable_id": "pressure",
+                    "variable_type": "variable",
+                    "source_dataset": source,
+                    "max": 3 - index,
+                }
+            )
+        render = self.controller.build_grid_cell_for_variable.side_effect
+
+        def render_source(*args, **kwargs):
+            tile = render(*args, **kwargs)
+            tile.update(source_fields_from_row(kwargs.get("source_row") or {}))
+            return tile
+
+        self.controller.build_grid_cell_for_variable.side_effect = render_source
+
 
 class ViewerControlTests(ControlFixture, unittest.TestCase):
     def setUp(self):
@@ -101,6 +130,52 @@ class ViewerControlTests(ControlFixture, unittest.TestCase):
             image_path=path,
             provenance={"intent": "Inspect resolution sensitivity"},
         )
+
+    def test_query_table_is_undoable_and_restores_without_cache_rows(self):
+        result = asyncio.run(self.control.query(
+            "select variable_id,maximum from q_variables", request="Variable maxima"
+        ))
+        self.assertEqual(result["rows"], [["density", None]])
+        # Querying is independent of the active catalog and makes no workspace edit.
+        self.assertEqual(len(self.controller.history.undo_entries), 0)
+        self.assertEqual(self.control.results(), [])
+        tab = self.control.create_tab("Metadata")
+        tile = self.control.show_query(result["query_id"], tab["tab_id"])
+        self.assertEqual(tile["media_type"], "query_table")
+        self.controller.set_active_grid_cell(tile["cell_index"])
+        self.assertEqual(self.state.selectedVar, "")
+        self.controller.show_metadata_query_details(tile["cell_index"])
+        self.assertIn("select variable_id", self.state.helpModalText)
+        self.assertTrue(self.controller.undo_workspace())
+        self.assertEqual(self.control.tabs()[-1]["tiles"], [])
+        self.assertTrue(self.controller.redo_workspace())
+        document = self.control.workspace()
+        encoded = json.dumps(document)
+        self.assertNotIn("query_rows", encoded)
+        self.assertNotIn("query_csv_uri", encoded)
+        self.collection.drop()
+        self.control.restore_workspace(document)
+        self.assertEqual(self.state.gridCells[0]["query_rows"], [{"c0": "density", "c1": None}])
+        self.assertEqual(self.state.gridCells[0]["status"], "ok")
+
+    def test_query_freeform_placement_full_grid_and_missing_snapshot(self):
+        result = asyncio.run(self.control.query("select 1 as value"))
+        tab = self.control.tabs()[0]
+        self.controller.set_grid_layout_mode("freeform")
+        one = self.control.show_query(result["query_id"], tab["tab_id"])
+        two = self.control.show_query(result["query_id"], tab["tab_id"])
+        self.assertNotEqual(one["tile_id"], two["tile_id"])
+        self.controller.set_grid_layout_mode("uniform")
+        self.controller.set_grid_layout_size(1, 1)
+        before = self.controller.capture_workspace_history()
+        with self.assertRaises(ControlError) as error:
+            self.control.show_query(result["query_id"], tab["tab_id"])
+        self.assertEqual(error.exception.code, "workspace_full")
+        self.assertEqual(self.controller.capture_workspace_history(), before)
+        (self.controller.query_result_store().directory / result["query_id"] / "query.json").unlink()
+        self.controller.refresh_grid_cells()
+        self.assertEqual(self.state.gridCells[0]["status"], "error")
+        self.assertEqual(self.state.gridCells[0]["query_result_id"], result["query_id"])
 
     def test_working_result_coexists_with_campaign_tile_and_is_undoable(self):
         tab = self.control.tabs()[0]
@@ -201,6 +276,89 @@ class ViewerControlTests(ControlFixture, unittest.TestCase):
         self.assertTrue(one["tile_id"])
         self.assertNotEqual(one["tile_id"], two["tile_id"])
         self.assertEqual(len(self.control.tabs()[0]["tiles"]), 2)
+
+    def test_query_source_refs_select_distinct_sources_in_both_layouts(self):
+        self.add_rusanov_sources()
+        result = asyncio.run(self.control.query(
+            "select source_ref,source_dataset from q_variables join q_sources using(source_ref) "
+            "where variable_id='pressure' order by maximum desc"
+        ))
+        for mode in ("uniform", "freeform"):
+            with self.subTest(mode=mode):
+                tab = self.control.create_tab(mode)
+                self.controller.set_grid_layout_mode(mode)
+                for ref, source in result["rows"] + result["rows"][:1]:
+                    tile = self.control.add_visualization(
+                        "density", tab["tab_id"], source_ref=ref
+                    )
+                    self.assertEqual(tile["source_dataset"], source)
+                    self.assertTrue(
+                        tile["source_id"].startswith("local-source:v1:")
+                    )
+                    self.assertEqual(tile["source_id"], tile["_source_key"])
+                    scalar_call = (
+                        self.controller.maybe_handle_generated_scalar_plot.call_args
+                    )
+                    self.assertEqual(
+                        scalar_call.kwargs["source_row"]["source_dataset"], source
+                    )
+                tiles = self.control.tabs()[-1]["tiles"]
+                self.assertNotEqual(tiles[0]["source_id"], tiles[1]["source_id"])
+                self.assertEqual(tiles[0]["source_id"], tiles[2]["source_id"])
+                self.assertTrue(self.controller.undo_workspace())
+                self.assertEqual(len(self.control.tabs()[-1]["tiles"]), 2)
+                self.assertTrue(self.controller.redo_workspace())
+                self.assertEqual(len(self.control.tabs()[-1]["tiles"]), 3)
+
+    def test_invalid_or_ambiguous_source_ref_preserves_workspace(self):
+        self.add_rusanov_sources()
+        self.collection.insert_one({
+            "variable_id": "pressure", "variable_type": "variable",
+            "source_dataset": "pressure-only.bp",
+        })
+        tab = self.control.tabs()[0]
+        before = self.controller.capture_workspace_history()
+        for ref, code in (
+            ("", "invalid_request"),
+            ([], "invalid_request"),
+            ("not a reference", "source_not_found"),
+            ('["dataset","missing/output.bp"]', "source_not_found"),
+            ('["dataset","pressure-only.bp"]', "source_not_found"),
+        ):
+            with self.subTest(ref=ref), self.assertRaises(ControlError) as error:
+                self.control.add_visualization("density", tab["tab_id"], source_ref=ref)
+            self.assertEqual(error.exception.code, code)
+            self.assertEqual(self.controller.capture_workspace_history(), before)
+        summary = self.controller.application.get_source_summary(
+            {"variable_id": "density"}
+        )
+        source = summary["sources"][0]
+        with patch.object(
+            self.controller.application, "get_source_summary",
+            return_value={"sources": [source, source]},
+        ):
+            with self.assertRaises(ControlError) as error:
+                self.control.add_visualization(
+                    "density", tab["tab_id"],
+                    source_ref=json.dumps(
+                        ["dataset", source["source_dataset"]], separators=(",", ":")
+                    ),
+                )
+        self.assertEqual(error.exception.code, "ambiguous_source")
+        self.assertEqual(self.controller.capture_workspace_history(), before)
+
+    def test_explicit_source_still_obeys_current_catalog_query(self):
+        self.add_rusanov_sources()
+        tab = self.control.tabs()[0]
+        self.state.queryFilter = {"source_dataset": "rusanov_64/output.bp"}
+        before = self.controller.capture_workspace_history()
+        with self.assertRaises(ControlError) as error:
+            self.control.add_visualization(
+                "density", tab["tab_id"],
+                source_ref='["dataset","rusanov_128/output.bp"]',
+            )
+        self.assertEqual(error.exception.code, "source_not_found")
+        self.assertEqual(self.controller.capture_workspace_history(), before)
 
     def test_invalid_requests_do_not_change_workspace(self):
         before = self.controller.capture_workspace_history()
@@ -309,6 +467,209 @@ class ControlHttpTests(ControlFixture, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.code, "not_found")
 
         await asyncio.to_thread(workflow)
+
+    async def test_python_client_adds_sources_returned_by_query(self):
+        self.add_rusanov_sources()
+
+        def workflow():
+            client = connect(session_file=self.session_path)
+            result = client.query(
+                "select source_ref,source_dataset from q_variables join q_sources using(source_ref) "
+                "where variable_id='pressure' order by maximum desc"
+            )
+            tab = client.create_tab("Query sources")
+            for ref, source in result["rows"]:
+                tile = client.add_visualization(
+                    "density", tab_id=tab["tab_id"], source_ref=ref
+                )
+                self.assertEqual(tile["source_dataset"], source)
+            tiles = client.tabs()[-1]["tiles"]
+            self.assertNotEqual(tiles[0]["source_id"], tiles[1]["source_id"])
+            with self.assertRaises(PulsarClientError) as error:
+                client.add_visualization(
+                    "density", tab_id=tab["tab_id"], source_ref="unknown"
+                )
+            self.assertEqual(error.exception.code, "source_not_found")
+            self.assertEqual(len(client.tabs()[-1]["tiles"]), 2)
+
+        await asyncio.to_thread(workflow)
+
+    async def wait_for_time_request(self):
+        for _ in range(100):
+            request = self.state.timelineSeekRequest
+            if request:
+                return dict(request)
+            await asyncio.sleep(0.001)
+        self.fail("Time request was not sent to the browser")
+
+    async def test_time_client_waits_for_browser_and_returns_actual_samples(self):
+        tab = self.control.create_tab("Time")
+        self.control.add_visualization("density", tab["tab_id"])
+        client = await asyncio.to_thread(connect, session_file=self.session_path)
+        task = asyncio.create_task(asyncio.to_thread(
+            client.set_time, 0.6, tab_id=tab["tab_id"]
+        ))
+        request = await self.wait_for_time_request()
+        self.assertFalse(task.done())
+        # The HTTP server remains responsive while the browser is seeking.
+        context = await asyncio.to_thread(client.context)
+        self.assertEqual(context["active_tab_id"], tab["tab_id"])
+        with self.assertRaises(ControlError) as error:
+            await self.control.set_time(0.7, tab["tab_id"])
+        self.assertEqual(error.exception.code, "seek_busy")
+        self.control.complete_time_seek({**request, "request_id": "old-request"})
+        self.assertFalse(task.done())
+        self.control.complete_time_seek({
+            **request, "physical_time": 0.5, "slider_index": 2,
+            "plots": [{
+                "cell_index": 0, "source_id": "", "physical_time": 0.4,
+                "sample_index": 1, "frame_index": 7, "status": "sample",
+            }],
+        })
+        receipt = await task
+        self.assertEqual(receipt["requested_time"], 0.6)
+        self.assertEqual(receipt["physical_time"], 0.5)
+        self.assertEqual(receipt["plots"][0]["physical_time"], 0.4)
+        self.assertEqual(receipt["plots"][0]["frame_index"], 7)
+        self.assertEqual(receipt["plots"][0]["variable_id"], "density")
+        self.assertEqual(self.state.timelineSeekRequest, {})
+
+    async def test_time_validation_browser_errors_timeout_and_cancel(self):
+        tab = self.control.tabs()[0]
+        before = self.controller.capture_workspace_history()
+        for value in (None, "0.5", True, float("inf"), float("nan"), 1 << 2048):
+            with self.subTest(value=value), self.assertRaises(ControlError):
+                await self.control.set_time(value, tab["tab_id"])
+        with self.assertRaises(ControlError):
+            await self.control.set_time(0.5, "missing")
+        self.assertEqual(self.controller.capture_workspace_history(), before)
+        response = await self.http.post(
+            API_PATH + "/time", headers=self.headers, json={"tab_id": tab["tab_id"]}
+        )
+        self.assertEqual(response.status, 400)
+        for message in ("No physical-time timeline", None):
+            task = asyncio.create_task(self.control.set_time(0.5, tab["tab_id"]))
+            request = await self.wait_for_time_request()
+            if message:
+                self.control.complete_time_seek({**request, "error": message})
+            else:
+                # A receipt from a tab that was switched away cannot claim success.
+                self.control.complete_time_seek({**request, "tab_id": "another-tab"})
+            with self.assertRaises(ControlError):
+                await task
+            self.assertEqual(self.state.timelineSeekRequest, {})
+        with patch("pulsar.control.TIMELINE_SEEK_TIMEOUT", 0.01):
+            with self.assertRaises(ControlError) as error:
+                await self.control.set_time(0.5, tab["tab_id"])
+            self.assertEqual(error.exception.code, "seek_timeout")
+        self.assertEqual(self.state.timelineSeekRequest, {})
+        task = asyncio.create_task(self.control.set_time(0.5, tab["tab_id"]))
+        request = await self.wait_for_time_request()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.control.complete_time_seek({**request, "physical_time": 0.5})
+        self.assertEqual(self.state.timelineSeekRequest, {})
+        self.assertIsNone(self.control._pending_seek)
+
+    async def test_time_receipt_rejects_replaced_plot(self):
+        tab = self.control.tabs()[0]
+        self.control.add_visualization("density", tab["tab_id"])
+        task = asyncio.create_task(self.control.set_time(0.5, tab["tab_id"]))
+        request = await self.wait_for_time_request()
+        cells = deepcopy(self.state.gridCells)
+        cells[0]["selected_visualization"] = "another-visualization"
+        self.state.gridCells = cells
+        self.control.complete_time_seek({
+            **request, "physical_time": 0.5, "slider_index": 1,
+            "plots": [{"cell_index": 0, "source_id": "", "status": "sample"}],
+        })
+        with self.assertRaises(ControlError) as error:
+            await task
+        self.assertEqual(error.exception.code, "workspace_changed")
+        self.assertEqual(self.state.timelineSeekRequest, {})
+
+    async def test_metadata_query_client_workflow_and_errors(self):
+        def workflow():
+            client = connect(session_file=self.session_path)
+            self.assertEqual(client.query_schema()["scope"], "campaign")
+            result = client.query("select variable_id from q_variables where variable_id=:id",
+                                  {"id": "density"}, "Find density")
+            self.assertEqual(result["rows"], [["density"]])
+            tab = client.create_tab("Query")
+            client.show_query(result["query_id"], tab_id=tab["tab_id"])
+            self.assertEqual(client.tabs()[-1]["tiles"][0]["query_result_id"], result["query_id"])
+            fresh = connect(session_file=self.session_path)
+            self.assertEqual(fresh.queries()[0]["query_id"], result["query_id"])
+            self.assertEqual(fresh.query_result(result["query_id"])["sql"], result["sql"])
+            with self.assertRaises(PulsarClientError) as error:
+                fresh.query("delete from campaign_entries")
+            self.assertEqual(error.exception.code, "query_failed")
+            self.assertEqual(len(fresh.queries()), 1)
+            return result
+
+        await asyncio.to_thread(workflow)
+        response = await self.http.post(API_PATH + "/queries", headers=self.headers,
+                                        json={"sql": "select 1", "unexpected": True})
+        self.assertEqual(response.status, 400)
+        response = await self.http.get(API_PATH + "/query-schema")
+        self.assertEqual(response.status, 401)
+
+    async def test_missing_or_invalid_sql_returns_bad_request_without_changes(self):
+        before = self.controller.capture_workspace_history()
+        queries = self.control.queries()
+        for payload in (
+            {},
+            {"parameters": {}, "request": "Missing SQL"},
+            {"sql": None},
+            {"sql": ""},
+            {"sql": "   "},
+            {"sql": 17},
+        ):
+            with self.subTest(payload=payload):
+                response = await self.http.post(
+                    API_PATH + "/queries", headers=self.headers, json=payload
+                )
+                self.assertEqual(response.status, 400)
+                error = (await response.json())["error"]
+                self.assertEqual(error["code"], "query_failed")
+                self.assertIn("SQL must be nonempty text", error["message"])
+                self.assertEqual(self.control.queries(), queries)
+                self.assertEqual(self.controller.capture_workspace_history(), before)
+
+        response = await self.http.post(
+            API_PATH + "/queries", headers=self.headers, json={"sql": "select 1"}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["result"]["rows"], [[1]])
+
+    async def test_running_metadata_query_does_not_block_context_and_can_cancel(self):
+        from threading import Event
+
+        from pulsar.metadata_query import MetadataQueryError
+
+        started = Event()
+
+        def execute(_sql, _parameters, _request, *, cancel):
+            started.set()
+            cancel.wait(2)
+            raise MetadataQueryError("Query cancelled")
+
+        engine = SimpleNamespace(execute=execute)
+        self.controller.metadata_query_engine = lambda: engine
+        task = asyncio.create_task(self.control.query("select 1"))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            response = await self.http.get(API_PATH + "/context", headers=self.headers)
+            self.assertEqual(response.status, 200)
+            with self.assertRaises(ControlError) as error:
+                await self.control.query("select 2")
+            self.assertEqual(error.exception.code, "query_busy")
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertEqual(self.control.queries(), [])
 
     async def test_authentication_and_instance_identity(self):
         response = await self.http.get(API_PATH + "/context")

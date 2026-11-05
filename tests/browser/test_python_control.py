@@ -1,14 +1,18 @@
 """Verify Python commands against a real campaign and mounted Pulsar browser."""
 
+import base64
+import csv
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import adios2
 import numpy as np
@@ -16,7 +20,8 @@ import pytest
 from PIL import Image
 from playwright.sync_api import expect
 
-from pulsar.client import connect
+from pulsar.client import PulsarClientError, connect
+from pulsar.models.grid import empty_grid_cell
 
 pytestmark = [
     pytest.mark.browser,
@@ -28,7 +33,7 @@ pytestmark = [
 
 
 @contextmanager
-def _running_viewer(campaign, root, number):
+def _running_viewer(campaign, root, number, *, initial_state=None):
     session_path = root / f"session-{number}.json"
     env = {
         **os.environ,
@@ -38,10 +43,21 @@ def _running_viewer(campaign, root, number):
         "PULSAR_INTERACTION_LOG_DIR": "",
         "TRAME_SERVER": "true",
     }
-    script = "import sys; from pulsar.app import PulsarApp; app=PulsarApp(sys.argv[1],control_session_path=sys.argv[2]); app.server.start(port=0,host='127.0.0.1',open_browser=False,timeout=0)"
+    initial_path = root / f"initial-{number}.json"
+    initial_path.write_text(json.dumps(initial_state or {}))
+    script = """
+import json, sys
+from pulsar.app import PulsarApp
+app = PulsarApp(sys.argv[1], control_session_path=sys.argv[2])
+def seed(**_):
+    with open(sys.argv[3]) as source, app.server.state:
+        app.server.state.update(json.load(source))
+app.server.controller.on_server_ready.add(seed)
+app.server.start(port=0, host='127.0.0.1', open_browser=False, timeout=0)
+"""
     with (root / f"server-{number}.log").open("w+") as output:
         process = subprocess.Popen(
-            [sys.executable, "-c", script, str(campaign), str(session_path)],
+            [sys.executable, "-c", script, str(campaign), str(session_path), str(initial_path)],
             cwd=Path(__file__).resolve().parents[2],
             env=env,
             stdout=output,
@@ -74,6 +90,236 @@ def _running_viewer(campaign, root, number):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+
+
+def test_python_time_seek_reports_different_source_samples(page, tmp_path, monkeypatch):
+    Manager = pytest.importorskip("hpc_campaign").Manager
+    monkeypatch.chdir(tmp_path)
+    campaign = tmp_path / "time.aca"
+    manager = Manager(archive=str(campaign))
+    manager.open(create=True)
+    manager.close()
+    frames = []
+    for color in ("red", "green", "blue", "yellow"):
+        output = io.BytesIO()
+        Image.new("RGB", (16, 16), color).save(output, format="PNG")
+        frames.append("data:image/png;base64," + base64.b64encode(output.getvalue()).decode())
+    cells = []
+    for source, times, indices in (
+        ("run-a", [0, 0.5, 1], [0, 5, 10]),
+        ("run-b", [0, 0.4, 0.9, 1], [0, 4, 9, 10]),
+    ):
+        cell = empty_grid_cell()
+        cell.update(
+            variable_id="current_z", variable_name="current_z",
+            source_id=source, source_dataset=source + "/output.bp",
+            media_type="image_sequence", status="ok", src=frames[0], fps=2,
+            frame_count=len(times), frame_sources=frames[:len(times)],
+            frame_indices=indices, time_values=times, time_mode="physical_time", time_unit="s",
+        )
+        cells.append(cell)
+    cursor = empty_grid_cell()
+    cursor.update(
+        variable_id="pressure", variable_name="pressure", source_id="run-a",
+        source_dataset="run-a/output.bp", media_type="plot1d", status="ok", time_unit="s",
+        plot={
+            "x_label": "time", "y_label": "pressure",
+            "x_min": 0, "x_max": 0.75, "y_min": 0, "y_max": 3,
+            "data_x_min": 0, "data_x_max": 1, "data_y_min": 0, "data_y_max": 3,
+            "series": [{"x": [0, 0.5, 1], "y": [1, 2, 3], "color": "#1565c0"}],
+        },
+    )
+    cells.append(cursor)
+    initial = {"gridCells": cells, "timelineDriverCell": 0}
+    with _running_viewer(campaign, tmp_path, 1, initial_state=initial) as (viewer, url):
+        page.goto(url, wait_until="networkidle")
+        images = page.locator('img[data-grid-image-sequence="1"]')
+        expect(images).to_have_count(2)
+        # Seeking an inactive tab activates it and uses that tab's driver.
+        tab_id = viewer.tabs()[0]["tab_id"]
+        viewer.create_tab("Other")
+        receipt = viewer.set_time(0.6, tab_id=tab_id)
+        assert receipt["requested_time"] == 0.6
+        assert receipt["physical_time"] == 0.5
+        assert [item["physical_time"] for item in receipt["plots"]] == [0.5, 0.4, 0.5]
+        assert [item["status"] for item in receipt["plots"]] == ["sample", "sample", "cursor"]
+        assert [item["frame_index"] for item in receipt["plots"][:2]] == [5, 4]
+        assert [item["source_dataset"] for item in receipt["plots"][:2]] == [
+            "run-a/output.bp", "run-b/output.bp",
+        ]
+        expect(page.get_by_text("Time = 0.5", exact=True)).to_be_visible()
+        expect(images.nth(0)).to_have_attribute("data-current-frame", "1")
+        expect(images.nth(1)).to_have_attribute("data-current-frame", "1")
+        expect(images.nth(0)).to_have_attribute("src", frames[1])
+        page.get_by_title("Forward step", exact=True).click()
+        expect(page.get_by_text("Time = 1", exact=True)).to_be_visible()
+        # A completed command must not override subsequent manual slider use.
+        assert viewer.set_time(-100, tab_id=tab_id)["physical_time"] == 0
+        page.get_by_title("Play all", exact=True).click()
+        end = viewer.set_time(100, tab_id=tab_id)
+        assert end["physical_time"] == 1
+        assert end["plots"][2]["physical_time"] == 0.75
+        expect(page.get_by_title("Play all", exact=True)).to_be_visible()
+        expect(images.nth(0)).to_have_attribute("data-current-frame", "2")
+        expect(images.nth(1)).to_have_attribute("data-current-frame", "3")
+
+
+@pytest.mark.parametrize("axis_kind", [None, "shot"])
+def test_python_time_seek_rejects_nonphysical_axes(page, tmp_path, monkeypatch, axis_kind):
+    Manager = pytest.importorskip("hpc_campaign").Manager
+    monkeypatch.chdir(tmp_path)
+    campaign = tmp_path / "steps.aca"
+    manager = Manager(archive=str(campaign))
+    manager.open(create=True)
+    manager.close()
+    cell = empty_grid_cell()
+    output = io.BytesIO()
+    Image.new("RGB", (16, 16), "red").save(output, format="PNG")
+    frame = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode()
+    cell.update(
+        variable_id="frame", variable_name="frame", media_type="image_sequence",
+        status="ok", src=frame, frame_sources=[frame],
+        frame_count=1, time_values=[15], time_mode="timestep",
+    )
+    if axis_kind:
+        cell["selection_axis"] = {"id": "shot", "key": "shot", "kind": axis_kind,
+                                  "values": [15, 16], "index": 0}
+    with _running_viewer(campaign, tmp_path, 1, initial_state={"gridCells": [cell]}) as (viewer, url):
+        page.goto(url, wait_until="networkidle")
+        with pytest.raises(PulsarClientError) as error:
+            viewer.set_time(0.5, tab_id=viewer.tabs()[0]["tab_id"])
+        assert error.value.code == "time_unavailable"
+
+
+def test_metadata_table_sort_inspection_csv_and_restart(page, tmp_path, monkeypatch):
+    hpc_campaign = pytest.importorskip("hpc_campaign")
+    monkeypatch.chdir(tmp_path)
+    with adios2.Stream(str(tmp_path / "output.bp"), "w") as stream:
+        stream.write("temperature", np.linspace(1.0, 4.0, 16))
+    campaign = tmp_path / "metadata.aca"
+    manager = hpc_campaign.Manager(archive=str(campaign))
+    try:
+        manager.data("output.bp", name="output.bp")
+    finally:
+        manager.close()
+    workspace = tmp_path / "metadata.workspace.json"
+    sql = "select variable_id,maximum as value from q_variables union all select variable_id,minimum from q_variables"
+    for number in (1, 2):
+        with _running_viewer(campaign, tmp_path, number) as (viewer, url):
+            page.goto(url, wait_until="networkidle")
+            page.locator("#pulsar-variable-column").wait_for(state="visible")
+            if number == 1:
+                result = viewer.query(sql, request="Temperature metadata range")
+                assert sorted(row[1] for row in result["rows"]) == [1.0, 4.0]
+                tab = viewer.create_tab("Metadata results")
+                viewer.show_query(result["query_id"], tab_id=tab["tab_id"])
+            else:
+                viewer.load_workspace(workspace)
+                assert viewer.query_result(result["query_id"])["rows"] == result["rows"]
+            table = page.locator(".pulsar-query-result")
+            expect(table).to_be_visible()
+            expect(table.locator("tbody tr")).to_have_count(2)
+            table.get_by_role("columnheader", name="value").click()
+            expect(table.locator("tbody tr").first.locator("td").last).to_have_text("1")
+            with page.expect_download() as download:
+                table.get_by_role("link", name="Export CSV").click()
+            with Path(download.value.path()).open(newline="") as stream:
+                exported = list(csv.reader(stream))
+            assert exported[0] == ["variable_id", "value"]
+            assert sorted(float(row[1]) for row in exported[1:]) == [1.0, 4.0]
+            page.get_by_role("button", name="Inspect query", exact=True).click()
+            dialog = page.get_by_role("dialog")
+            expect(dialog.locator("textarea").first).to_have_value(
+                re.compile("select variable_id")
+            )
+            dialog.get_by_role("button", name="Close", exact=True).click()
+            expect(dialog).not_to_be_visible()
+            viewer.save_workspace(workspace)
+            page.screenshot(path=str(tmp_path / "metadata-table.png"))
+
+
+def test_plot_sources_follow_each_tile_and_restore_legacy_keys(
+    page, tmp_path, monkeypatch
+):
+    Manager = pytest.importorskip("hpc_campaign").Manager
+    if not hasattr(Manager, "publish_image"):
+        pytest.skip("requires the atomic image writer")
+    monkeypatch.chdir(tmp_path)
+    campaign = tmp_path / "source-bindings.aca"
+    sources = ["rusanov_128/output.bp", "rusanov_64/output.bp"]
+    manager = Manager(archive=str(campaign))
+    try:
+        for value, (source, color) in enumerate(zip(sources, ("red", "blue"))):
+            path = tmp_path / source
+            path.parent.mkdir()
+            with adios2.Stream(str(path), "w") as stream:
+                stream.write("current_z", np.full((2, 2), float(value)))
+            manager.data(source, name=source)
+            output = io.BytesIO()
+            Image.new("RGB", (16, 16), color).save(output, format="PNG")
+            manager.publish_image(
+                output.getvalue(),
+                publication_id=str(uuid4()),
+                title=f"current_z {source}",
+                variables=[{"name": "current_z", "source_dataset": source}],
+            )
+    finally:
+        manager.close()
+    workspace = tmp_path / "legacy-sources.workspace.json"
+    for number in (1, 2):
+        with _running_viewer(campaign, tmp_path, number) as (viewer, url):
+            page.goto(url, wait_until="networkidle")
+            page.locator("#pulsar-variable-column").wait_for(state="visible")
+            if number == 1:
+                tab = viewer.create_tab("Sources comparison")
+                result = viewer.query(
+                    "select source_dataset,source_ref from q_sources "
+                    "where source_dataset like 'rusanov_%'"
+                )
+                source_refs = dict(result["rows"])
+                for index, source in enumerate(sources):
+                    viewer.add_visualization(
+                        "current_z", tab_id=tab["tab_id"],
+                        source_ref=source_refs[source],
+                    )
+                    tile = viewer.tabs()[-1]["tiles"][index]
+                    assert tile["source_dataset"] == source
+                    assert tile["source_id"].startswith("local-source:v1:")
+            else:
+                viewer.load_workspace(workspace)
+            for index in (0, 1, 0):
+                page.locator(
+                    f'.pulsar-dropcell[data-cell-index="{index}"] .pulsar-tile-header'
+                ).click()
+                page.get_by_role("button", name="SOURCES(2)", exact=True).click()
+                dialog = page.get_by_role("dialog")
+                row = dialog.get_by_role("row").filter(has_text=sources[index])
+                expect(row.get_by_role("radio")).to_be_checked()
+                expect(
+                    dialog.get_by_role("radio").locator("visible=true")
+                ).to_have_count(2)
+                assert (
+                    viewer.context()["selected_sources"][0]["source_dataset"]
+                    == sources[index]
+                )
+                dialog.get_by_role("button", name="Close", exact=True).click()
+                expect(dialog).not_to_be_visible()
+            if number == 1:
+                viewer.save_workspace(workspace)
+                document = json.loads(workspace.read_text())
+                grids = [document["state"]["grid"]]
+                grids.extend(
+                    tab["grid"]
+                    for pane in document["state"]["workspace"]["panes"]
+                    for tab in pane["tabs"]
+                )
+                for grid in grids:
+                    for cell in grid["cells"]:
+                        if cell.get("variable_id") == "current_z":
+                            cell["source_id"] = cell["_source_key"] = (
+                                "legacy|" + cell["source_dataset"]
+                            )
+                workspace.write_text(json.dumps(document))
 
 
 def test_unpublished_result_and_provenance_survive_server_restart(
@@ -491,6 +737,11 @@ def test_physical_movie_times_survive_publication_and_restart(page, tmp_path):
         video = page.locator("video[data-grid-video]")
         expect(video).to_have_attribute("data-time-mode", "physical_time")
         expect(video).to_have_js_property("readyState", 4)
+        seek = viewer.set_time(2.75, tab_id=tab["tab_id"])
+        assert seek["physical_time"] == 2.75
+        assert seek["plots"][0]["physical_time"] == 2.75
+        assert seek["plots"][0]["sample_index"] == 2
+        expect(video).to_have_js_property("currentTime", 2)
         page.get_by_title("Play all", exact=True).click()
         expect(video).to_have_js_property("paused", False)
         expect(page.get_by_text("Time = 2.75", exact=True)).to_be_visible()

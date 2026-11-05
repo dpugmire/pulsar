@@ -192,48 +192,32 @@ class SourcesControllerMixin:
         return {}
 
     def source_row_for_cell(self, cell: Dict[str, Any]) -> Dict[str, str]:
-        key = str(cell.get("_source_key", "") or "")
-        if key:
+        for key in normalize_source_keys(
+            [cell.get("source_id", ""), cell.get("_source_key", "")]
+        ):
             row = self.source_row_for_key(key)
             if row:
                 return row
 
-        source_collection_id = str(
-            cell.get("source_collection_id", "") or ""
-        )
-        source_dataset = str(cell.get("source_dataset", "") or "")
-        schema_file_group = str(cell.get("schema_file_group", "") or "")
-        schema_mode = str(cell.get("schema_mode", "") or "")
-        producer = str(cell.get("producer", "") or "")
-        casename = str(cell.get("casename", "") or "")
-        file_name = str(cell.get("file", "") or "")
-        for row in self.all_source_rows():
-            if (
-                source_collection_id
-                and str(row.get("source_collection_id", "") or "")
-                == source_collection_id
-            ):
-                return row
-            if (
-                schema_file_group
-                and schema_mode
-                and str(row.get("schema_file_group", "") or "") == schema_file_group
-                and str(row.get("schema_mode", "") or "") == schema_mode
-            ):
-                return row
-            if (
-                source_dataset
-                and str(row.get("source_dataset", "") or "") == source_dataset
-            ):
-                return row
-            if (
-                (producer or casename or file_name)
-                and str(row.get("producer", "") or "") == producer
-                and str(row.get("casename", "") or "") == casename
-                and str(row.get("file", "") or "") == file_name
-            ):
-                return row
-        return {}
+        # Use the same identity precedence as rendering. In append mode a
+        # shared schema group (e.g. "output") does not identify a source run.
+        fields = self.source_filter_from_cell(cell)
+        if not fields:
+            return {}
+        if "source_collection_id" in fields or "schema_file_group" in fields:
+            schema_name = str(cell.get("schema_name", "") or "")
+            if schema_name:
+                fields["schema_name"] = schema_name
+        matches = [
+            row
+            for row in self.all_source_rows()
+            if all(
+                str(row.get(key, "") or "") == str(value or "")
+                for key, value in fields.items()
+            )
+        ]
+        identities = {str(row.get("_key", "") or "") for row in matches}
+        return matches[0] if matches and len(identities) == 1 else {}
 
     def visualization_names_for_source_filter(
         self, variable_id: str, source_filter: Dict[str, Any]

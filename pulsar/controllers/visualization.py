@@ -1752,10 +1752,23 @@ class VisualizationControllerMixin:
                 cell["status"] = "no-frames"
                 cell["note"] = f'No movie for "{selected_vis}"'
 
-        if not str(cell.get("_source_key", "") or ""):
-            row = self.source_row_for_cell(cell)
-            if row:
-                cell.update(source_fields_from_row(row))
+        row = source_row or self.source_row_for_cell(cell)
+        if not row and selected_vis:
+            # On a cold workspace restore the Sources panel may not be loaded
+            # yet. Resolve the recorded source through the backend directly.
+            recorded_source = self.source_filter_from_cell(cell)
+            if recorded_source:
+                source = self.application.find_source(
+                    {
+                        "variable_id": var_id,
+                        "visualization_name": selected_vis,
+                        "query": and_filter(qf, recorded_source),
+                    }
+                )
+                if source:
+                    row = self.source_row_from_descriptor(source, var_id)
+        if row:
+            cell.update(source_fields_from_row(row))
 
         cell["variable_id"] = var_id
         cell["variable_name"] = label
@@ -1952,6 +1965,11 @@ class VisualizationControllerMixin:
         updated: List[Dict[str, Any]] = []
 
         for c in cells:
+            if c.get("query_result_id"):
+                updated.append(
+                    preserve_grid_geometry(self.query_result_cell(c["query_result_id"]), c)
+                )
+                continue
             if c.get("working_result_id"):
                 updated.append(
                     preserve_grid_geometry(
