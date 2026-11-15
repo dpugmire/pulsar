@@ -7,6 +7,11 @@ from pulsar.controllers.composer import CONTROLLER_TYPES
 
 
 NON_HISTORICAL_ACTIONS = {
+    "explore_campaign_dataset",
+    "inspect_campaign_result",
+    "inspect_campaign_file",
+    "select_campaign_overview_entry",
+    "select_campaign",
     "activate_workspace_tab",
     "adjust_canvas_default_tile_width",
     "adjust_canvas_zoom",
@@ -96,9 +101,9 @@ NON_HISTORICAL_TRIGGERS = {
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 123,
+            "ACTION_BINDINGS": 128,
             "TRIGGER_BINDINGS": 20,
-            "STATE_CHANGE_BINDINGS": 4,
+            "STATE_CHANGE_BINDINGS": 5,
         }
 
         for attribute, expected_count in expected_counts.items():

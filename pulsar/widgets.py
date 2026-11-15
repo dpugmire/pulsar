@@ -36,3 +36,12 @@ class HistoryRuntime(AbstractElement):
 
     def __init__(self, children=None, **kwargs):
         super().__init__("pulsar-history-runtime", children, **kwargs)
+
+
+class CampaignBrowser(AbstractElement):
+    """Campaign inventory with browser-local display and sorting preferences."""
+
+    def __init__(self, children=None, **kwargs):
+        super().__init__("pulsar-campaign-browser", children, **kwargs)
+        self._attr_names += ["campaigns", "selection"]
+        self._event_names += ["select", "open", "inspect", "details"]

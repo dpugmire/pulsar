@@ -3,6 +3,7 @@
 from trame.app import TrameComponent
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
+from trame.widgets import html
 
 from pulsar import module as pulsar_module
 from pulsar.widgets import (
@@ -13,6 +14,7 @@ from pulsar.widgets import (
 )
 
 from .context_menu import ContextMenu
+from .campaigns import CampaignOverview
 from .dialogs import HelpDialog
 from .grid import GridWorkspace
 from .query_assistant import QueryAssistantDialog
@@ -35,6 +37,7 @@ class PulsarUI(TrameComponent):
         self.variable_panel = VariablePanel(server)
         self.grid_workspace = GridWorkspace(server)
         self.context_menu = ContextMenu(server)
+        self.campaign_overview = CampaignOverview(server)
         self.interaction_runtime = None
         self.canvas_runtime = None
         self.resize_runtime = None
@@ -58,7 +61,8 @@ class PulsarUI(TrameComponent):
             layout.drawer = drawer
 
             with layout.toolbar:
-                self.query_toolbar.build()
+                with vuetify.Template(v_if="campaignDisplay === 'workspace'"):
+                    self.query_toolbar.build()
 
             with layout.content:
                 self.interaction_runtime = InteractionRuntime()
@@ -67,8 +71,17 @@ class PulsarUI(TrameComponent):
                 self.history_runtime = HistoryRuntime()
                 self.help_dialog.build()
                 self.query_assistant.build()
+                with html.Div(classes="d-flex align-center px-4 pt-2", style="gap:16px;"):
+                    with vuetify.VBtnToggle(v_model=("campaignDisplay",), mandatory=True, density="compact", variant="outlined"):
+                        vuetify.VBtn("Campaigns", value="overview", size="small")
+                        vuetify.VBtn("Workspace", value="workspace", size="small")
+                    with html.Div(v_if="campaignDisplay === 'workspace' && campaignDatasetPath", classes="text-caption"):
+                        html.Span("Dataset: {{ campaignDatasetPath }}")
+                        vuetify.VBtn("All data", size="x-small", variant="text", click=(self.ctrl.select_campaign, "[selectedCampaignPath]"))
+                with html.Div(v_show="campaignDisplay === 'overview'"):
+                    self.campaign_overview.build()
                 with vuetify.VContainer(fluid=True, class_="pa-2"):
-                    with vuetify.VRow(classes="pulsar-main-row", no_gutters=True):
+                    with vuetify.VRow(v_show="campaignDisplay === 'workspace'", classes="pulsar-main-row", no_gutters=True):
                         self.variable_panel.build()
                         self.grid_workspace.build()
                 self.context_menu.build()

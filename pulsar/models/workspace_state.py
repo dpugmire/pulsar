@@ -36,6 +36,7 @@ _CELL_FIELDS = (
     "_source_keys",
     "_source_fields_list",
     "source_dataset",
+    "campaign_path",
     "source_collection_id",
     "source_collection_label",
     "schema_name",

@@ -22,6 +22,7 @@ from sqlite_store import open_sqlite_collection
 from ui import build_ui
 
 from . import module as pulsar_module
+from .campaign_directory import discover_campaign_archives
 from .backends import LocalCampaignBackend
 from .campaign_media import register_campaign_media_route
 from .demo_campaign import (
@@ -68,20 +69,31 @@ class PulsarApp(TrameApp):
         controller_attacher=attach_controllers,
         ui_builder=build_ui,
         control_session_path="",
+        campaign_paths=(),
     ):
         super().__init__(server, client_type="vue3")
         self.server.enable_module(pulsar_module)
 
-        self.campaign_path = _expanded_path(campaign_path)
+        self.campaign_paths = tuple(
+            _expanded_path(path) for path in (campaign_paths or (campaign_path,))
+        )
+        self.campaign_path = self.campaign_paths[0]
+        self.multi_campaign = len(self.campaign_paths) > 1
+        self.campaign_directory_path = (
+            _expanded_path(campaign_path) if self.multi_campaign else ""
+        )
         self.image_association_schema_path = _expanded_path(
             image_association_schema_path
         )
         self.campaign_schema_path = _expanded_path(campaign_schema_path)
-        register_campaign_media_route(self.server, self.campaign_path)
+        register_campaign_media_route(
+            self.server, self.campaign_paths if self.multi_campaign else self.campaign_path
+        )
         self.result_store = ResultStore(PULSAR_RESULTS_DIR, self.campaign_path)
         register_result_media_route(self.server, self.result_store)
 
-        self.collection = collection or open_sqlite_collection(self.campaign_path)
+        collection_identity = campaign_path if self.multi_campaign else self.campaign_path
+        self.collection = collection or open_sqlite_collection(collection_identity)
         print(f"Pulsar sidecar DB: {self.collection.path}")
 
         self.db = db or CampaignDb(self.collection)
@@ -122,6 +134,8 @@ class PulsarApp(TrameApp):
             )
         )
         init_state(self.state, self.db)
+        if campaign_paths:
+            self.state.campaignDisplay = "overview"
 
         control_options = (
             {"control_session_path": _expanded_path(control_session_path)}
@@ -135,6 +149,7 @@ class PulsarApp(TrameApp):
             collection=self.collection,
             parse_campaign=parse_campaign,
             campaign_path=self.campaign_path,
+            campaign_paths=self.campaign_paths,
             image_association_schema_path=self.image_association_schema_path,
             campaign_schema_path=self.campaign_schema_path,
             query_translator=self.query_translator,
@@ -143,10 +158,22 @@ class PulsarApp(TrameApp):
             result_store=self.result_store,
             **control_options,
         )
+        if self.multi_campaign:
+            self.state.campaignChoices = [
+                {"title": "All campaigns", "value": ""},
+                *[
+                    {"title": Path(path).stem, "value": path}
+                    for path in self.campaign_paths
+                ],
+            ]
         self.ui = ui_builder(
             self.server,
             self.refresh_variable_list,
-            campaign_name=Path(self.campaign_path).name,
+            campaign_name=(
+                f"{Path(self.campaign_directory_path).name} ({len(self.campaign_paths)} campaigns)"
+                if self.multi_campaign
+                else Path(self.campaign_path).name
+            ),
         )
 
 
@@ -167,6 +194,12 @@ def build_parser():
             "Generate an ephemeral synthetic campaign with SOURCE_COUNT sources "
             f"(default: {DEFAULT_DEMO_SOURCE_COUNT}, maximum: {MAX_DEMO_SOURCE_COUNT})."
         ),
+    )
+    parser.add_argument(
+        "--campaign-directory",
+        default="",
+        metavar="PATH",
+        help="Load all .aca campaign archives in this directory.",
     )
     parser.add_argument(
         "--control-session",
@@ -190,8 +223,9 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
-    if bool(args.campaign_path) == bool(args.demo):
-        parser.error("provide exactly one of campaign_path or --demo")
+    modes = sum(bool(value) for value in (args.campaign_path, args.demo, args.campaign_directory))
+    if modes != 1:
+        parser.error("provide exactly one of campaign_path, --campaign-directory, or --demo")
     if args.demo and (args.image_association_schema or args.campaign_schema):
         parser.error("--demo cannot be combined with external schema options")
     control_options = (
@@ -219,6 +253,23 @@ def main(argv=None):
             return
         except DemoDependencyError as exc:
             parser.error(str(exc))
+
+    if args.campaign_directory:
+        try:
+            campaign_paths = discover_campaign_archives(args.campaign_directory)
+        except (OSError, NotADirectoryError) as exc:
+            parser.error(str(exc))
+        if not campaign_paths:
+            parser.error(f"no .aca campaign archives found in {args.campaign_directory}")
+        app = PulsarApp(
+            campaign_path=args.campaign_directory,
+            campaign_paths=campaign_paths,
+            image_association_schema_path=args.image_association_schema,
+            campaign_schema_path=args.campaign_schema,
+            **control_options,
+        )
+        app.server.start()
+        return
 
     app = PulsarApp(
         campaign_path=args.campaign_path,

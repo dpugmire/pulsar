@@ -965,13 +965,16 @@
         : "";
       clearExternalDrop();
       if (!item) return;
-      trameTrigger("add_var_to_canvas_trigger", [
+      const args = [
         item,
         JSON.stringify(geometryOnly(target.geometry)),
         canvas.dataset.paneId || "",
         canvas.dataset.tabId || "",
         layoutPayload,
-      ]);
+      ];
+      const campaignPath = event.dataTransfer.getData("application/x-pulsar-campaign") || "";
+      if (campaignPath) args.push(campaignPath);
+      trameTrigger("add_var_to_canvas_trigger", args);
     }
 
     function dragLeave(event) {

@@ -16,6 +16,7 @@ class ControllerContext:
     collection: Any
     parse_campaign: Callable[..., Any]
     campaign_path: str
+    campaign_paths: tuple[str, ...] = ()
     image_association_schema_path: str = ""
     campaign_schema_path: str = ""
     query_translator: Optional[QueryTranslator] = None
