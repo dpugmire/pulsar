@@ -23,7 +23,7 @@ except ModuleNotFoundError:
 from application import PulsarApplication
 from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
-from query_parser import python_query_to_filters, python_query_to_mongo
+from query_parser import and_filter, python_query_to_filters, python_query_to_mongo
 from pulsar.controllers.catalog import _filter_variable_groups
 from pulsar.controllers.composer import CONTROLLER_TYPES
 from pulsar.models.workspace_state import parse_workspace_document, workspace_json
@@ -846,6 +846,11 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(controller.actions),
             {
+                "explore_campaign_dataset",
+                "inspect_campaign_result",
+                "inspect_campaign_file",
+                "select_campaign_overview_entry",
+                "select_campaign",
                 "activate_workspace_tab",
                 "adjust_canvas_default_tile_width",
                 "adjust_canvas_zoom",
@@ -1075,6 +1080,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(state.change_callbacks),
             {
+                "selectedCampaignPath",
                 "selectedVar",
                 "showOnlyVisualizedVars",
                 "variablePaneView",
@@ -1857,6 +1863,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                             "label": "temperature",
                             "path": "temperature",
                             "source_dataset": "run-a/scalars.bp",
+                            "campaign_path": "/campaign/example.aca",
                         }
                     ],
                 },
@@ -1869,6 +1876,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                             "label": "density",
                             "path": "density",
                             "source_dataset": "run-a/output.bp",
+                            "campaign_path": "/campaign/example.aca",
                         }
                     ],
                 },
@@ -2206,7 +2214,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(summary["count"], 1)
         self.assertEqual(
             summary["filter"],
-            {"source_dataset": {"$in": ["run-128/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["run-128/output.bp"]}}),
         )
 
     def test_source_restriction_preserves_concrete_source_when_producer_is_shared(self):
@@ -2256,7 +2264,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(restriction["count"], 1)
         self.assertEqual(
             restriction["filter"],
-            {"source_dataset": {"$in": ["mhd-low/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["mhd-low/output.bp"]}}),
         )
         self.assertEqual(
             [source["source_dataset"] for source in pressure_summary["sources"]],
@@ -2312,7 +2320,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(restriction["count"], 1)
         self.assertEqual(
             restriction["filter"],
-            {"source_dataset": {"$in": ["mhd-low/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["mhd-low/output.bp"]}}),
         )
         self.assertEqual(
             [source["source_dataset"] for source in pressure_summary["sources"]],
@@ -2361,7 +2369,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(restriction["count"], 1)
         self.assertEqual(
             restriction["filter"],
-            {"source_dataset": {"$in": ["mhd-rounded/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["mhd-rounded/output.bp"]}}),
         )
 
     def test_application_file_navigation_uses_file_nodes(self):

@@ -1,5 +1,6 @@
 """Pure source-row identity and selection operations."""
 
+import hashlib
 from typing import Any, Dict, Iterable, List
 
 
@@ -82,6 +83,8 @@ def select_visible_sources(
 
 def source_filter_from_row(row: Dict[str, Any]) -> Dict[str, str]:
     filt: Dict[str, str] = {}
+    if row.get("campaign_path"):
+        filt["campaign_path"] = str(row["campaign_path"])
     variable_id = str(row.get("variable_id", "") or "")
     if variable_id:
         filt["variable_id"] = variable_id
@@ -123,7 +126,7 @@ def source_fields_from_row(row: Dict[str, Any]) -> Dict[str, str]:
         or row.get("_key", "")
         or ""
     )
-    return {
+    fields = {
         "source_id": source_id,
         "_source_key": source_id,
         "source_dataset": str(row.get("source_dataset", "") or ""),
@@ -136,9 +139,16 @@ def source_fields_from_row(row: Dict[str, Any]) -> Dict[str, str]:
         "casename": str(row.get("casename", "") or ""),
         "file": str(row.get("file", "") or ""),
     }
+    if row.get("campaign_path"):
+        fields["campaign_path"] = str(row["campaign_path"])
+    return fields
 
 
 def source_key_for_fields(row: Dict[str, Any]) -> str:
+    if row.get("campaign_path"):
+        path = str(row["campaign_path"])
+        legacy = {key: value for key, value in row.items() if key != "campaign_path"}
+        return f"campaign:{hashlib.sha256(path.encode()).hexdigest()}|{source_key_for_fields(legacy)}"
     source_collection_id = str(row.get("source_collection_id", "") or "")
     if source_collection_id:
         return f"collection|{row.get('variable_id', '')}|{source_collection_id}"

@@ -789,6 +789,8 @@
         if (!item) return;
         event.dataTransfer.setData("text/plain", item);
         event.dataTransfer.setData("application/x-pulsar-var", item);
+        const campaignPath = variable.getAttribute("data-campaign-path") || "";
+        if (campaignPath) event.dataTransfer.setData("application/x-pulsar-campaign", campaignPath);
         event.dataTransfer.effectAllowed = "copy";
         variable.style.opacity = "0.45";
         return;
@@ -984,7 +986,8 @@
           ""
         : "";
       if (item && targetIndex !== null) {
-        trameTrigger("assign_var_to_grid_cell_trigger", [item, targetIndex]);
+        const campaignPath = event.dataTransfer.getData("application/x-pulsar-campaign") || "";
+        trameTrigger("assign_var_to_grid_cell_trigger", campaignPath ? [item, targetIndex, campaignPath] : [item, targetIndex]);
       }
     }
 
@@ -1017,11 +1020,14 @@
         event.preventDefault();
         const item = variable.getAttribute("data-item") || "";
         if (item) {
-          trameTrigger("show_item_context_menu", [
+          const args = [
             item,
             event.clientX || 0,
             event.clientY || 0,
-          ]);
+          ];
+          const campaignPath = variable.getAttribute("data-campaign-path") || "";
+          if (campaignPath) args.push(campaignPath);
+          trameTrigger("show_item_context_menu", args);
         }
         return;
       }

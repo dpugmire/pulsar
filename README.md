@@ -198,6 +198,9 @@ Example:
 ```bash
 python app.py campaign.aca
 
+# Browse the contents of all campaign archives in a directory
+python app.py --campaign-directory /path/to/campaigns
+
 # Generate an ephemeral synthetic campaign and launch it
 python app.py --demo
 # Optionally choose a source count from 1 through 49
@@ -214,6 +217,13 @@ python app.py /path/to/lasernet.aca \
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
+
+Directory mode opens a sortable campaign list with expandable directory groups.
+Select a campaign, directory, or BP file to see its metadata and visualization
+samples in the preview pane. A gallery view is also available. View, column,
+and sort preferences are remembered by the browser. Select a result to inspect its
+recorded inputs, linked files, and metadata. See [Campaign browser](docs/campaign-browser.md)
+for data exploration and archive compatibility details.
 
 Demo mode creates 20 time steps for five deterministic sources by default;
 `--demo SOURCE_COUNT` accepts counts from 1 through 49. Each source contains

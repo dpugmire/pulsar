@@ -1,9 +1,14 @@
 """Serve local media payloads embedded in an ACA campaign."""
 
+import asyncio
 import mimetypes
+import math
 import re
 import sqlite3
+import subprocess
+import tempfile
 import zlib
+from io import BytesIO
 from pathlib import Path
 
 _UUID_PATTERN = re.compile(r"^[0-9a-fA-F-]{16,64}$")
@@ -150,13 +155,26 @@ def _byte_range(value: str, size: int) -> tuple[int, int] | None:
 
 def register_campaign_media_route(server, campaign_path: str) -> None:
     """Add the same-origin HTTP endpoint used by browser video elements."""
+    campaign_paths = (
+        tuple(campaign_path)
+        if isinstance(campaign_path, (list, tuple))
+        else (campaign_path,)
+    )
 
     def on_server_bind(http_server):
         from aiohttp import web
+        from pulsar.campaign_overview import campaign_key
+
+        def request_paths(request):
+            selected = request.query.get("campaign", "")
+            return tuple(path for path in campaign_paths if not selected or campaign_key(path) == selected)
 
         async def video_handler(request):
-            payload = read_embedded_video(
-                campaign_path, request.match_info.get("dataset_uuid", "")
+            dataset_uuid = request.match_info.get("dataset_uuid", "")
+            payload = next(
+                (value for path in request_paths(request)
+                 if (value := read_embedded_video(path, dataset_uuid)) is not None),
+                None,
             )
             if payload is None:
                 raise web.HTTPNotFound(text="Embedded local video is unavailable")
@@ -190,8 +208,11 @@ def register_campaign_media_route(server, campaign_path: str) -> None:
             )
 
         async def image_handler(request):
-            result = read_archived_image(
-                campaign_path, request.match_info.get("dataset_uuid", "")
+            dataset_uuid = request.match_info.get("dataset_uuid", "")
+            result = next(
+                (value for path in request_paths(request)
+                 if (value := read_archived_image(path, dataset_uuid)) is not None),
+                None,
             )
             if result is None:
                 raise web.HTTPNotFound(text="Archived local image is unavailable")
@@ -210,3 +231,86 @@ def register_campaign_media_route(server, campaign_path: str) -> None:
         )
 
     server.controller.on_server_bind.add(on_server_bind)
+
+
+def _video_preview_bytes(payload, frame_index=None):
+    """Extract one movie frame using the existing FFmpeg dependency."""
+    try:
+        with tempfile.TemporaryDirectory(prefix="pulsar_preview_") as directory:
+            movie = Path(directory) / "preview.mp4"
+            movie.write_bytes(payload)
+            options = []
+            if frame_index is None:
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", str(movie)],
+                    capture_output=True, text=True, check=True, timeout=15,
+                )
+                duration = float(probe.stdout.strip())
+                if not math.isfinite(duration) or duration <= 0:
+                    return None
+                options = ["-ss", str(duration / 2)]
+            command = ["ffmpeg", "-hide_banner", "-loglevel", "error", *options, "-i", str(movie)]
+            if frame_index is not None:
+                command.extend(["-vf", f"select=eq(n\\,{int(frame_index)})"])
+            command.extend(["-frames:v", "1", "-an", "-f", "image2pipe", "-vcodec", "png", "pipe:1"])
+            frame = subprocess.run(command, capture_output=True, check=True, timeout=30)
+            return frame.stdout or None
+    except (OSError, subprocess.SubprocessError, ValueError, OverflowError):
+        return None
+
+
+def read_campaign_preview(descriptor):
+    """Read one thumbnail on demand; metadata ingestion never calls this."""
+    from PIL import Image
+
+    payload = None
+    if descriptor.get("video_uuid"):
+        movie = read_embedded_video(descriptor["campaign_path"], descriptor["video_uuid"])
+        if movie:
+            payload = _video_preview_bytes(movie, descriptor.get("video_frame_index"))
+    if payload is None and descriptor.get("uuid"):
+        result = read_archived_image(descriptor["campaign_path"], descriptor["uuid"])
+        if result:
+            payload = result[0]
+    if payload is None and descriptor.get("variable_path"):
+        from adios2 import FileReader
+        from db import adios_image_to_png_bytes
+
+        with FileReader(descriptor["campaign_path"]) as reader:
+            payload = adios_image_to_png_bytes(reader.read(descriptor["variable_path"]))
+    if payload is None:
+        return None
+    with Image.open(BytesIO(payload)) as image:
+        image.thumbnail((1280, 960))
+        buffer = BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=85)
+        return buffer.getvalue()
+
+
+def register_campaign_preview_route(server, results):
+    """Serve previews only for result IDs from the loaded campaign inventory."""
+    def on_server_bind(http_server):
+        from aiohttp import web
+
+        async def preview_handler(request):
+            result = results.get(request.match_info["result_id"])
+            if result is None:
+                raise web.HTTPNotFound()
+            try:
+                descriptor = result["_preview"]
+                if descriptor.get("video_uuid"):
+                    payload = await asyncio.to_thread(read_campaign_preview, descriptor)
+                else:
+                    payload = read_campaign_preview(descriptor)
+            except (OSError, ValueError, RuntimeError, KeyError):
+                payload = None
+            if payload is None:
+                raise web.HTTPNotFound(text="No recorded preview is available")
+            return web.Response(body=payload, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+        http_server.app.router.add_get("/pulsar-campaign-preview/{result_id}", preview_handler)
+
+    event = getattr(server.controller, "on_server_bind", None)
+    if event is not None:
+        event.add(on_server_bind)

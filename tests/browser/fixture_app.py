@@ -295,6 +295,38 @@ def _scalar_field_cell(background):
     return cell
 
 
+def _campaign_browser_fixture(server):
+    from pulsar.campaign_overview import campaign_overview_card, campaign_summary
+    from pulsar.controllers.campaigns import CampaignOverviewControllerMixin
+
+    path = "/campaign-browser-fixture.aca"
+    inventory = {"uuid": "fixture", "error": "", "datasets": [
+        {"name": f"hll_{resolution}/output.bp", "uuid": str(resolution), "fileformat": "ADIOS",
+         "modified_at": modified, "added_at": modified}
+        for resolution, modified in [(128, "2024-01-01T00:00:00+00:00"),
+                                     (8, ""), (64, "2025-01-01T00:00:00+00:00")]
+    ]}
+    docs = [
+        {"variable_type": "variable", "variable_id": "pressure", "source_dataset": dataset["name"],
+         "metadata": {"Type": "double", "Shape": "64, 64", "AvailableStepsCount": "3"},
+         "time_values": [0, 2, 4], "time_unit": "ms"}
+        for dataset in inventory["datasets"]
+    ]
+    docs.append({"variable_type": "image", "variable_id": "pressure", "source_dataset": "hll_128/output.bp",
+                 "visualization_name": "Pressure", "physical_time": 2, "time_unit": "ms"})
+    campaign = campaign_summary(path, docs, inventory)
+    campaign["results"][0]["preview"] = _image_source("#2e7d32")
+    controller = CampaignOverviewControllerMixin()
+    controller.state = server.state
+    controller._campaign_overview_records = [campaign]
+    controller._campaign_result_records = {result["id"]: result for result in campaign["results"]}
+    controller.refresh_variable_list = lambda: None
+    for name, method in controller.ACTION_BINDINGS:
+        server.controller.set(name)(getattr(controller, method))
+    server.state.campaignDisplay = "overview"
+    server.state.campaignOverview = [campaign_overview_card(campaign)]
+
+
 def build_fixture_server(mode):
     server = get_server(f"pulsar-browser-{mode}", client_type="vue3")
     server.enable_module(pulsar_module)
@@ -1581,6 +1613,8 @@ def build_fixture_server(mode):
     server.controller.add("translate_query_request")(translate_query_request)
     server.controller.add("validate_query_proposal")(validate_query_proposal)
     server.controller.add("apply_query_proposal")(apply_query_proposal)
+    if mode == "campaigns":
+        _campaign_browser_fixture(server)
     build_ui(server, campaign_name=f"browser-{mode}.aca")
     return server
 
@@ -1591,6 +1625,7 @@ def main():
     parser.add_argument(
         "--mode",
         choices=(
+            "campaigns",
             "step",
             "physical",
             "video-only",

@@ -1038,6 +1038,7 @@ class GridControllerMixin:
         pane_id="",
         tab_id="",
         layout_payload="",
+        campaign_path="",
         **_,
     ):
         if pane_id and str(pane_id) != str(self.state.workspaceActivePaneId or ""):
@@ -1050,7 +1051,10 @@ class GridControllerMixin:
             tab_id=tab_id,
         ):
             return
-        self.add_var_to_canvas(var_name, geometry_payload, sync_selection=False)
+        source_row = self.first_query_source_row_for_variable(var_name, campaign_path=campaign_path) if campaign_path else None
+        if campaign_path and not source_row:
+            return
+        self.add_var_to_canvas(var_name, geometry_payload, sync_selection=False, source_row=source_row)
         self.state.selectedVar = ""
         self.state.draggedVar = ""
 
@@ -1220,12 +1224,15 @@ class GridControllerMixin:
 
         self.set_grid_layout(new_rows, new_cols, new_cells, new_active)
 
-    def add_var_to_grid(self, var_name: str, **_):
+    def add_var_to_grid(self, var_name: str, campaign_path: str = "", **_):
         var = str(var_name or "").strip()
         if not var:
             return
+        scoped_row = self.first_query_source_row_for_variable(var, campaign_path=campaign_path) if campaign_path else None
+        if campaign_path and not scoped_row:
+            return
         if self.normalize_grid_layout_mode() == "freeform":
-            self.add_var_to_canvas(var, {}, sync_selection=True)
+            self.add_var_to_canvas(var, {}, sync_selection=True, source_row=scoped_row)
             return
 
         cells = self.normalize_grid_cells(self.state.gridCells)
@@ -1255,8 +1262,8 @@ class GridControllerMixin:
         if target < 0:
             target = active if self.is_valid_grid_index(active) else 0
 
-        source_row = {}
-        if str(self.state.detailsSelectedVarId or "") == var:
+        source_row = scoped_row or {}
+        if not source_row and str(self.state.detailsSelectedVarId or "") == var:
             source_row = self.source_row_for_key(
                 (self.state.selectedSourceKeys or [""])[0]
             )
@@ -1974,7 +1981,7 @@ class GridControllerMixin:
 
     def assign_var_to_grid_cell(
         self, cell_index: int, var_name: str, sync_selection: bool = True,
-        *, source_row: Optional[Dict[str, Any]] = None, **_
+        *, source_row: Optional[Dict[str, Any]] = None, campaign_path: str = "", **_
     ):
         try:
             idx = int(cell_index)
@@ -1992,6 +1999,10 @@ class GridControllerMixin:
             return
 
         cells = self.normalize_grid_cells(self.state.gridCells)
+        if source_row is None and campaign_path:
+            source_row = self.first_query_source_row_for_variable(var, campaign_path=campaign_path)
+            if not source_row:
+                return
         if source_row is None:
             source_row = {}
             if str(self.state.detailsSelectedVarId or "") == var:
@@ -2041,8 +2052,8 @@ class GridControllerMixin:
             or ("grid_drop" if not sync_selection else "cell_assignment"),
         )
 
-    def assign_var_to_grid_cell_trigger(self, var_name, cell_index, **_):
-        self.assign_var_to_grid_cell(cell_index, var_name, sync_selection=False)
+    def assign_var_to_grid_cell_trigger(self, var_name, cell_index, campaign_path="", **_):
+        self.assign_var_to_grid_cell(cell_index, var_name, sync_selection=False, campaign_path=campaign_path)
         # After drag/drop, clear variable highlight in the left panel.
         self.state.selectedVar = ""
         self.state.draggedVar = ""

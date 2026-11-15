@@ -199,6 +199,8 @@ class LocalCampaignBackend:
                 "casename": str(source.get("casename", "") or ""),
                 "file": str(source.get("file", "") or ""),
             }
+        if source.get("campaign_path"):
+            identity["campaign_path"] = str(source["campaign_path"])
         encoded = json.dumps(
             identity,
             ensure_ascii=True,
@@ -290,6 +292,7 @@ class LocalCampaignBackend:
     @staticmethod
     def _variable_navigation(groups: List[Dict[str, Any]]) -> List[NavigationNode]:
         navigation: List[NavigationNode] = []
+        campaigns = {variable.get("campaign_path", "") for group in groups for variable in group.get("variables", [])} - {""}
         for group in groups:
             group_label = str(group.get("name", "") or "")
             children: List[NavigationNode] = []
@@ -311,9 +314,11 @@ class LocalCampaignBackend:
                         variable.get("source_dataset", "") or ""
                     ),
                 }
+                if variable.get("campaign_path"):
+                    resource["campaign_path"] = str(variable["campaign_path"])
                 children.append(
                     {
-                        "id": f"variable:{variable_id}",
+                        "id": f"variable:{variable_id}" + (f":{variable.get('campaign_path', '')}" if len(campaigns) > 1 else ""),
                         "kind": "variable",
                         "label": label,
                         "resource": resource,
@@ -341,6 +346,7 @@ class LocalCampaignBackend:
     @staticmethod
     def _file_navigation(groups: List[Dict[str, Any]]) -> List[NavigationNode]:
         navigation: List[NavigationNode] = []
+        campaigns = {group.get("campaign_path", "") for group in groups} - {""}
         for group in groups:
             source_label = str(group.get("name", "") or "")
             source_dataset = str(group.get("source_dataset", "") or "")
@@ -364,10 +370,11 @@ class LocalCampaignBackend:
                     "label": label,
                     "path": str(variable.get("path", "") or ""),
                     "source_dataset": variable_source,
+                    "campaign_path": str(variable.get("campaign_path", "") or group.get("campaign_path", "")),
                 }
                 children.append(
                     {
-                        "id": f"file-variable:{source_label}:{variable_id}",
+                        "id": f"file-variable:{source_label}:{variable_id}" + (f":{variable.get('campaign_path', '')}" if len(campaigns) > 1 else ""),
                         "kind": "variable",
                         "label": label,
                         "resource": resource,
@@ -381,6 +388,7 @@ class LocalCampaignBackend:
                 continue
             group_resource: NavigationResource = {
                 "source_dataset": source_dataset,
+                "campaign_path": str(group.get("campaign_path", "") or ""),
             }
             if file_count > 1:
                 group_resource["file_count"] = file_count

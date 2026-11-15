@@ -9,6 +9,7 @@ from pulsar.history import WorkspaceMutationCoordinator
 
 from .base import ControllerBase
 from .catalog import CatalogControllerMixin
+from .campaigns import CampaignOverviewControllerMixin
 from .context import ControllerContext
 from .context_menu import ContextMenuControllerMixin
 from .grid import GridControllerMixin
@@ -23,6 +24,7 @@ from .workspace import WorkspaceControllerMixin
 
 
 CONTROLLER_TYPES = (
+    CampaignOverviewControllerMixin,
     CatalogControllerMixin,
     QueryAssistantControllerMixin,
     SourcesControllerMixin,
@@ -38,6 +40,7 @@ CONTROLLER_TYPES = (
 
 
 class PulsarController(
+    CampaignOverviewControllerMixin,
     CatalogControllerMixin,
     QueryAssistantControllerMixin,
     SourcesControllerMixin,
@@ -53,6 +56,12 @@ class PulsarController(
 ):
     def __init__(self, context):
         super().__init__(context)
+        from pulsar.campaign_media import register_campaign_preview_route
+
+        self._campaign_result_records = {}
+        self._campaign_overview_records = []
+        self._campaign_load_errors = {}
+        register_campaign_preview_route(self.server, self._campaign_result_records)
         self.history = WorkspaceMutationCoordinator(
             self.state,
             self.capture_workspace_history,
@@ -117,6 +126,7 @@ def attach_controllers(
     interaction_log=None,
     control_session_path="",
     result_store=None,
+    campaign_paths=(),
 ):
     catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
     context = ControllerContext(
@@ -126,6 +136,7 @@ def attach_controllers(
         collection=collection,
         parse_campaign=parse_campaign,
         campaign_path=campaign_path,
+        campaign_paths=tuple(campaign_paths or (campaign_path,)),
         image_association_schema_path=image_association_schema_path,
         campaign_schema_path=campaign_schema_path,
         query_translator=query_translator,

@@ -128,6 +128,8 @@ class SourcesControllerMixin:
                         "casename": str(raw_item.get("casename", "") or ""),
                         "file": str(raw_item.get("file", "") or ""),
                     }
+                    if raw_item.get("campaign_path"):
+                        fields["campaign_path"] = str(raw_item["campaign_path"])
                     if any(fields.values()):
                         fields_list.append(fields)
 
@@ -151,18 +153,21 @@ class SourcesControllerMixin:
                 "casename": str(cell.get("casename", "") or ""),
                 "file": str(cell.get("file", "") or ""),
             }
+            if cell.get("campaign_path"):
+                fields["campaign_path"] = str(cell["campaign_path"])
             if any(fields.values()):
                 fields_list.append(fields)
         return fields_list
 
     def source_filter_from_cell(self, cell: Dict[str, Any]) -> Dict[str, str]:
+        scope = {"campaign_path": str(cell["campaign_path"])} if cell.get("campaign_path") else {}
         source_collection_id = str(cell.get("source_collection_id", "") or "")
         if source_collection_id:
             filt = {"source_collection_id": source_collection_id}
             variable_id = str(cell.get("variable_id", "") or "")
             if variable_id:
                 filt["variable_id"] = variable_id
-            return filt
+            return {**scope, **filt}
 
         schema_file_group = str(cell.get("schema_file_group", "") or "")
         schema_mode = str(cell.get("schema_mode", "") or "")
@@ -171,7 +176,7 @@ class SourcesControllerMixin:
             variable_id = str(cell.get("variable_id", "") or "")
             if variable_id:
                 filt["variable_id"] = variable_id
-            return filt
+            return {**scope, **filt}
 
         source_dataset = str(cell.get("source_dataset", "") or "")
         if source_dataset:
@@ -179,7 +184,7 @@ class SourcesControllerMixin:
             variable_id = str(cell.get("variable_id", "") or "")
             if variable_id:
                 filt["variable_id"] = variable_id
-            return filt
+            return {**scope, **filt}
 
         producer = str(cell.get("producer", "") or "")
         casename = str(cell.get("casename", "") or "")
@@ -188,8 +193,8 @@ class SourcesControllerMixin:
             filt = {"producer": producer, "casename": casename}
             if file_name:
                 filt["file"] = file_name
-            return filt
-        return {}
+            return {**scope, **filt}
+        return scope
 
     def source_row_for_cell(self, cell: Dict[str, Any]) -> Dict[str, str]:
         for key in normalize_source_keys(
@@ -222,7 +227,7 @@ class SourcesControllerMixin:
     def visualization_names_for_source_filter(
         self, variable_id: str, source_filter: Dict[str, Any]
     ) -> List[str]:
-        qf = self.active_query_filter()
+        qf = self.query_filter_for_sources(source_filter)
         active_filter = (
             and_filter(qf, source_filter)
             if qf and source_filter
@@ -234,11 +239,12 @@ class SourcesControllerMixin:
 
     def plugin_source_variables_cache_key(
         self, source_fields: Dict[str, Any]
-    ) -> Tuple[str, str, str, str, str, str]:
+    ) -> Tuple[str, ...]:
         fields = dict(source_fields or {})
         return tuple(
             str(fields.get(key, "") or "")
             for key in (
+                "campaign_path",
                 "source_dataset",
                 "schema_file_group",
                 "schema_mode",
@@ -257,6 +263,8 @@ class SourcesControllerMixin:
             return list(self.plugin_source_variables_cache[cache_key])
 
         query: Dict[str, Any] = {"variable_type": "variable"}
+        if source_fields.get("campaign_path"):
+            query["campaign_path"] = str(source_fields["campaign_path"])
         source_dataset = str(source_fields.get("source_dataset", "") or "")
         schema_file_group = str(source_fields.get("schema_file_group", "") or "")
         schema_mode = str(source_fields.get("schema_mode", "") or "")
@@ -306,7 +314,7 @@ class SourcesControllerMixin:
         return variables
 
     def source_row_for_visualization_pick(
-        self, variable_id: str, visualization_name: str
+        self, variable_id: str, visualization_name: str, campaign_path: str = ""
     ) -> Dict[str, str]:
         var_id = str(variable_id or "").strip()
         vis = str(visualization_name or "").strip()
@@ -318,7 +326,7 @@ class SourcesControllerMixin:
             {
                 "variable_id": var_id,
                 "visualization_name": vis,
-                "query": self.active_query_filter() or {},
+                "query": self.active_query_filter(campaign_path=campaign_path or None) or {},
             }
         )
         return self.source_row_from_descriptor(source or {}, var_id) if source else {}
@@ -425,7 +433,7 @@ class SourcesControllerMixin:
         return row
 
     def first_query_source_row_for_variable(
-        self, variable_id: str, preferred_vis: str = ""
+        self, variable_id: str, preferred_vis: str = "", campaign_path: str = ""
     ) -> Dict[str, Any]:
         var_id = str(variable_id or "").strip()
         vis = str(preferred_vis or "").strip()
@@ -433,14 +441,14 @@ class SourcesControllerMixin:
             return {}
 
         if vis and vis != GENERATED_SCALAR_PLOT_VIS:
-            row = self.source_row_for_visualization_pick(var_id, vis)
+            row = self.source_row_for_visualization_pick(var_id, vis, campaign_path)
             if row:
                 return row
 
         summary = self.application.get_source_summary(
             {
                 "variable_id": var_id,
-                "query": self.active_query_filter() or {},
+                "query": self.active_query_filter(campaign_path=campaign_path or None) or {},
             }
         )
         for source in summary.get("sources", []) or []:
@@ -516,7 +524,7 @@ class SourcesControllerMixin:
         if not var_id or not source_filter:
             return None, None
 
-        qf = self.active_query_filter()
+        qf = self.query_filter_for_sources(source_filter)
         extra_filter = and_filter(qf, source_filter) if qf else source_filter
         summary = self.application.get_source_summary(
             {"variable_id": var_id, "query": extra_filter or {}}
@@ -623,6 +631,14 @@ class SourcesControllerMixin:
         cell["variable_id"] = str(variable_id or "")
         return self.source_filter_from_cell(cell)
 
+    def query_filter_for_sources(self, source_fields):
+        """Keep recorded plot sources independent of the campaign navigation filter."""
+        fields = source_fields if isinstance(source_fields, list) else [source_fields]
+        paths = {str(item.get("campaign_path")) for item in fields if item and item.get("campaign_path")}
+        if not paths:
+            return self.active_query_filter()
+        return self.active_query_filter(campaign_path=next(iter(paths)) if len(paths) == 1 else "")
+
     def source_filter_for_assignment(
         self,
         variable_id: str,
@@ -648,6 +664,7 @@ class SourcesControllerMixin:
             return source_fields
         source_filter = self.active_source_filter_for_variable(variable_id)
         return {
+            **({"campaign_path": str(source_filter["campaign_path"])} if source_filter.get("campaign_path") else {}),
             "source_dataset": str(source_filter.get("source_dataset", "") or ""),
             "source_collection_id": str(
                 source_filter.get("source_collection_id", "") or ""
@@ -689,7 +706,7 @@ class SourcesControllerMixin:
                 self.campaign_path,
                 variable_id,
                 source_filters=source_filters,
-                extra_filter=self.active_query_filter(),
+                extra_filter=self.query_filter_for_sources(source_fields_list),
             )
         except Exception as e:
             tile = {}
@@ -761,7 +778,7 @@ class SourcesControllerMixin:
                 self.campaign_path,
                 var_id,
                 source_filters=source_filters,
-                extra_filter=self.active_query_filter(),
+                extra_filter=self.query_filter_for_sources(source_fields_list),
             )
             if not tile:
                 raise ValueError(
@@ -787,7 +804,7 @@ class SourcesControllerMixin:
                 self.campaign_path,
                 var_id,
                 source_filter=source_filter or None,
-                extra_filter=self.active_query_filter(),
+                extra_filter=self.query_filter_for_sources(source_fields),
             )
             if not tile:
                 raise ValueError("Could not generate scalar plot for this source")
