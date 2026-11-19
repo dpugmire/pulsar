@@ -147,12 +147,62 @@ def _parse_indices(raw, n_profile):
 
 
 def _x_axis(ctx, helpers, x_axis_name, steps_count):
+    axes = ctx.get("axes", {}) or {}
+    plot_axis_name = str(ctx.get("plot_x_axis", "") or "")
+    plot_axis = axes.get(plot_axis_name, {})
+    if x_axis_name in {"time", "adios_step"}:
+        timeline_values = ctx.get("time_values", [])
+        if isinstance(timeline_values, (list, tuple, np.ndarray)):
+            x = np.asarray(timeline_values, dtype=float).reshape(-1)
+            if x.size == steps_count and np.all(np.isfinite(x)):
+                label = (
+                    str(plot_axis.get("label", "") or "Time")
+                    if isinstance(plot_axis, dict)
+                    else "Time"
+                )
+                return x, label
+
+    if isinstance(plot_axis, dict):
+        axis_kind = str(plot_axis.get("kind", "") or "").strip().lower()
+        if axis_kind in {"time", "time_series", "physical_time"}:
+            label = str(plot_axis.get("label", "") or "Time")
+            for raw_values in (
+                ctx.get("time_values", []),
+                plot_axis.get("values", []),
+            ):
+                if isinstance(raw_values, (list, tuple, np.ndarray)):
+                    x = np.asarray(raw_values, dtype=float).reshape(-1)
+                    if x.size == steps_count and np.all(np.isfinite(x)):
+                        return x, label
+
+            variable_name = str(plot_axis.get("variable", "") or "").strip()
+            if variable_name:
+                try:
+                    values = helpers.read_source_variable(
+                        variable_name,
+                        step_selection=(0, steps_count),
+                    )
+                    x = np.asarray(values, dtype=float).reshape(-1)
+                    if x.size == steps_count and np.all(np.isfinite(x)):
+                        return x, label
+                except Exception:
+                    pass
+
     if x_axis_name == "adios_step":
         return np.arange(steps_count, dtype=float), "adios_step"
 
+    variable_name = x_axis_name
+    label = x_axis_name
+    if x_axis_name == "time":
+        metadata = ctx.get("metadata", {}) or {}
+        variable_name = str(
+            metadata.get("time_axis_variable", "") or x_axis_name
+        ).strip()
+        label = "Time" if variable_name != x_axis_name else x_axis_name
+
     try:
         values = helpers.read_source_variable(
-            x_axis_name,
+            variable_name,
             step_selection=(0, steps_count),
         )
     except Exception:
@@ -162,7 +212,7 @@ def _x_axis(ctx, helpers, x_axis_name, steps_count):
         return np.arange(steps_count, dtype=float), "adios_step"
     if not np.all(np.isfinite(x)):
         return np.arange(steps_count, dtype=float), "adios_step"
-    return x, x_axis_name
+    return x, label
 
 
 def _normalize(values):

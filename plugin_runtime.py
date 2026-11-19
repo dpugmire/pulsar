@@ -630,6 +630,7 @@ def build_plugin_meta(candidate: Dict[str, Any]) -> Dict[str, Any]:
         "source_dataset": str((candidate.get("source_fields", {}) or {}).get("source_dataset", "") or ""),
         "source_fields": dict(candidate.get("source_fields", {}) or {}),
         "source_variables": list(candidate.get("source_variables", []) or []),
+        "time_values": list(candidate.get("time_values", []) or []),
         "metadata": metadata,
         "ndims": metadata_ndims(metadata),
         "steps_count": metadata_steps_count(metadata),

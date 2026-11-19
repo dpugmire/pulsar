@@ -2184,24 +2184,60 @@ def _schema_metadata_for_variable(
     frame_index: Optional[int] = None,
     include_time_values: bool = True,
 ) -> Dict[str, Any]:
+    dataset = str(source_dataset or "").strip("/")
+    variable = str(variable_id or "").strip("/")
+    if dataset and variable.startswith(dataset + "/"):
+        variable = variable[len(dataset) + 1 :]
+
+    if schema_context and dataset and variable:
+        full_variable_path = f"{dataset}/{variable}".strip("/")
+        dataset_metadata = schema_context.get("dataset_metadata", {}) or {}
+        if dataset not in dataset_metadata:
+            for candidate_dataset in sorted(
+                dataset_metadata,
+                key=lambda value: len(str(value)),
+                reverse=True,
+            ):
+                prefix = f"{str(candidate_dataset).strip('/')}/"
+                if full_variable_path.startswith(prefix):
+                    dataset = str(candidate_dataset).strip("/")
+                    variable = full_variable_path[len(prefix) :]
+                    break
+
     metadata = _schema_metadata_for_file(
         schema_context,
-        source_dataset,
+        dataset,
         frame_index=frame_index,
         include_time_values=True,
     )
     if not schema_context:
         return metadata
 
-    dataset = str(source_dataset or "").strip("/")
-    variable = str(variable_id or "").strip("/")
-    if dataset and variable.startswith(dataset + "/"):
-        variable = variable[len(dataset) + 1 :]
     variable_metadata = (
         schema_context.get("variable_metadata", {})
         .get(dataset, {})
         .get(variable)
     )
+    if not isinstance(variable_metadata, dict) and dataset and variable:
+        full_variable_path = f"{dataset}/{variable}".strip("/")
+        all_variable_metadata = schema_context.get("variable_metadata", {}) or {}
+        for candidate_dataset in sorted(
+            all_variable_metadata,
+            key=lambda value: len(str(value)),
+            reverse=True,
+        ):
+            prefix = f"{str(candidate_dataset).strip('/')}/"
+            if not full_variable_path.startswith(prefix):
+                continue
+            candidate_variable = full_variable_path[len(prefix) :]
+            candidate_metadata = all_variable_metadata.get(
+                candidate_dataset, {}
+            ).get(candidate_variable)
+            if isinstance(candidate_metadata, dict):
+                dataset = str(candidate_dataset).strip("/")
+                variable = candidate_variable
+                variable_metadata = candidate_metadata
+                break
     if not isinstance(variable_metadata, dict):
         return _finalize_schema_axis_metadata(
             metadata,
