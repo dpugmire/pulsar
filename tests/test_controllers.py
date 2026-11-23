@@ -56,6 +56,10 @@ NON_HISTORICAL_ACTIONS = {
     "set_dragged_var",
     "show_query_help",
     "show_source_filter_help",
+    "show_working_result_details",
+    "open_publish_result",
+    "cancel_publish_result",
+    "confirm_publish_result",
     "sort_sources",
     "source_dialog_select",
     "toggle_add_source",
@@ -91,7 +95,7 @@ NON_HISTORICAL_TRIGGERS = {
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 118,
+            "ACTION_BINDINGS": 122,
             "TRIGGER_BINDINGS": 20,
             "STATE_CHANGE_BINDINGS": 4,
         }

@@ -136,7 +136,7 @@ class ContextMenuControllerMixin:
             str(
                 cell.get("variable_id", "") or cell.get("variable_name", "") or ""
             ).strip()
-        )
+        ) and not cell.get("working_result_id")
         label = str(cell.get("variable_name", "") or "").strip() or f"Cell {idx + 1}"
         vis_opts = []
         for raw_vis in cell.get("visualization_options", []) or []:
@@ -160,7 +160,7 @@ class ContextMenuControllerMixin:
         )
         can_scalar_field_settings = has_var and self.is_scalar_field_cell(cell)
         media_type = str(cell.get("media_type", "") or "")
-        can_reset_view = has_var and (
+        can_reset_view = (has_var or bool(cell.get("working_result_id"))) and (
             media_type == "plot1d"
             or (bool(str(cell.get("src", "") or "").strip()) and media_type != "plot1d")
         )

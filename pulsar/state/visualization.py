@@ -18,6 +18,14 @@ STANDARD_PLOT_COLORS = [
 
 def defaults():
     return {
+        "showPublishResult": False,
+        "publishResultId": "",
+        "publishResultCampaign": "",
+        "publishResultTitle": "",
+        "publishResultAssociations": [],
+        "publishResultChoices": [],
+        "publishResultStatus": "",
+        "publishResultCommitted": False,
         "scalarPlotPolicy": "always",
         "scalarPlotAlwaysForSession": False,
         "showScalarPlotDialog": False,

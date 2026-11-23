@@ -2,6 +2,7 @@ import os
 
 PULSAR_SQLITE_DB = os.getenv("PULSAR_SQLITE_DB", "")
 PULSAR_CACHE_DIR = os.getenv("PULSAR_CACHE_DIR", "~/.cache/pulsar")
+PULSAR_RESULTS_DIR = os.getenv("PULSAR_RESULTS_DIR", "~/.local/share/pulsar/results")
 PULSAR_INTERACTION_LOG_DIR = os.getenv("PULSAR_INTERACTION_LOG_DIR", "").strip()
 PULSAR_INTERACTION_LOG_MAX_MB = int(
     os.getenv("PULSAR_INTERACTION_LOG_MAX_MB", "64")

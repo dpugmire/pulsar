@@ -11,6 +11,7 @@ from .dialogs import (
     PlotSettingsPanel,
     PluginOptionsPanel,
     ProvenanceDialog,
+    PublishResultDialog,
     ScalarFieldAssistantPanel,
     ScalarFieldSettingsPanel,
     ScalarPlotDialog,
@@ -695,6 +696,7 @@ class GridWorkspace(TrameComponent):
         self.runtime = None
         self.provenance_dialog = ProvenanceDialog(server)
         self.source_dialog = SourceDialog(server)
+        self.publish_result_dialog = PublishResultDialog(server)
         self.scalar_plot_dialog = ScalarPlotDialog(server)
         self.plot_settings_panel = PlotSettingsPanel(server)
         self.plugin_options_panel = PluginOptionsPanel(server)
@@ -1119,6 +1121,32 @@ class GridWorkspace(TrameComponent):
                                             style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                         )
                                         html.Button(
+                                            "{{ tile.publication_status === 'published' ? 'Published' : 'Unpublished' }}",
+                                            v_if="tile.working_result_id",
+                                            classes="pulsar-working-result-badge",
+                                            click=(
+                                                ctrl.show_working_result_details,
+                                                "[i]",
+                                            ),
+                                            raw_attrs=[
+                                                'type="button"',
+                                                ":aria-label=\"tile.publication_status === 'published' ? 'Inspect published result' : 'Inspect unpublished result'\"",
+                                                "@pointerdown.stop",
+                                            ],
+                                            style="font-size:0.7rem; padding:1px 5px; border:1px solid currentColor; border-radius:3px; white-space:nowrap;",
+                                        )
+                                        html.Button(
+                                            "Publish",
+                                            v_if="tile.working_result_id && tile.publication_status !== 'published' && tile.media_type !== 'video'",
+                                            click=(ctrl.open_publish_result, "[i]"),
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'aria-label="Publish result"',
+                                                "@pointerdown.stop",
+                                            ],
+                                            style="font-size:0.7rem; padding:1px 5px; border:1px solid currentColor; border-radius:3px;",
+                                        )
+                                        html.Button(
                                             "AI",
                                             v_if=(
                                                 "scalarFieldAssistantAvailable"
@@ -1436,6 +1464,9 @@ class GridWorkspace(TrameComponent):
                                                             html.Video(
                                                                 src=("tile.src",),
                                                                 class_="pulsar-grid-video",
+                                                                poster=(
+                                                                    "tile.poster || undefined",
+                                                                ),
                                                                 controls=False,
                                                                 autoplay=False,
                                                                 loop=False,
@@ -1444,9 +1475,9 @@ class GridWorkspace(TrameComponent):
                                                                     'data-grid-video="1"',
                                                                     ':data-fps="tile.fps || 2"',
                                                                     ':data-frame-count="tile.frame_count || 0"',
-                                                                    ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
-                                                                    ':data-time-values="(tile.time_values || []).join(\',\')"',
-                                                                    ':data-time-mode="tile.time_mode || \'timestep\'"',
+                                                                    ":data-frame-indices=\"(tile.frame_indices || []).join(',')\"",
+                                                                    ":data-time-values=\"(tile.time_values || []).join(',')\"",
+                                                                    ":data-time-mode=\"tile.time_mode || 'timestep'\"",
                                                                     "playsinline",
                                                                     "webkit-playsinline",
                                                                 ],
@@ -1568,6 +1599,7 @@ class GridWorkspace(TrameComponent):
                         html.Div("Select a variable", class_="text-caption")
             self.provenance_dialog.build()
             self.source_dialog.build()
+            self.publish_result_dialog.build()
             self.scalar_plot_dialog.build()
             self.plot_settings_panel.build()
             self.plugin_options_panel.build()

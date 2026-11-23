@@ -3793,6 +3793,15 @@ def parse_campaign(
     image_association_schema_path: Optional[str] = None,
     campaign_schema_path: Optional[str] = None,
 ):
+    from pulsar.publications import load_publications, publication_documents
+
+    publications = load_publications(campaign_path)
+    published_dataset_names = {
+        name
+        for record in publications.values()
+        for name in (record["image_name"], record.get("video_name", ""))
+        if name
+    }
     print("reading: ", campaign_path)
     schema_file, _schema_text = _load_image_association_schema_text(image_association_schema_path)
     image_assoc_schema = None
@@ -3887,6 +3896,11 @@ def parse_campaign(
         )
 
         for varname, varinfo in vars_dict.items():
+            if any(
+                varname == name or varname.startswith(name + "/")
+                for name in published_dataset_names
+            ):
+                continue
             if any(
                 varname == schema_name or varname.startswith(schema_name + "/")
                 for schema_name in _CAMPAIGN_SCHEMA_DATASET_NAMES
@@ -4193,6 +4207,8 @@ def parse_campaign(
             collection.insert_one(document)
 
     for visualization_api_entry in visualization_api_index.values():
+        if visualization_api_entry.get("item_dataset_name") in published_dataset_names:
+            continue
         item_type = str(
             visualization_api_entry.get("item_type", "") or ""
         ).strip().upper()
@@ -4529,6 +4545,9 @@ def parse_campaign(
             )
             collection.insert_one(document)
             scalar_field_visualization_count += 1
+
+    for document in publication_documents(campaign_path, publications):
+        collection.insert_one(document)
 
     print('Add statistics')
     for v in var_stats.items() :

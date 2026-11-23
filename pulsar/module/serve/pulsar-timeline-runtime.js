@@ -885,6 +885,17 @@
     for (const v of videos) {
       const t = Number(v && v.currentTime);
       if (Number.isFinite(t) && t >= 0) {
+        if (videoHasPhysicalTime(v)) {
+          const times = parseVideoTimeValues(v);
+          const duration = Number(v.duration);
+          const fps = Number.isFinite(duration) && duration > 0
+            ? times.length / duration
+            : inferFpsForVideos([v]);
+          const index = Math.max(0, Math.min(
+            Math.floor(t * fps + 1e-9), times.length - 1
+          ));
+          return times[index];
+        }
         return t;
       }
     }
@@ -1055,6 +1066,7 @@
         const nextIndex = Math.max(0, Math.min(Math.floor(nextPosition + 1e-9), timeline.length - 1));
         const nextTime = timeline[nextIndex];
         setImageSequencesForTime(nextTime, sequences);
+        if (videos.length) setAllVideoTimes(videos, nextTime);
         gridVcrState.timelinePosition = nextPosition;
         gridVcrState.syncTime = nextTime;
         updateVcrTimeLabelFromSeconds(nextTime, videos, plots);
@@ -1143,6 +1155,22 @@
         setGridVcrPlaying(false);
         stopSyncTimer();
       }
+      return;
+    }
+
+    const physicalRef = videos.find(videoHasPhysicalTime);
+    if (physicalRef) {
+      const physicalTime = getReferenceTime([physicalRef]);
+      // Leave the reference playhead running through repeated frames and holds.
+      // Other movies can use different frame rates and encoded durations.
+      for (const video of videos) {
+        if (video !== physicalRef && getReferenceTime([video]) !== physicalTime) {
+          setAllVideoTimes([video], physicalTime);
+        }
+      }
+      gridVcrState.syncTime = physicalTime;
+      updatePlotCursors(physicalTime, videos);
+      updateVcrTimeLabelFromSeconds(physicalTime, videos);
       return;
     }
 
@@ -1490,6 +1518,7 @@
       applyPhysicalTimelineTime(base, sequences, videos, plots);
       gridVcrState.timelinePosition = timelineIndexNearest(base, timeline);
       setGridVcrPlaying(true);
+      if (!sequences.length) playAllVideos(videos);
       gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
       startSyncTimer();
       return;
@@ -1529,7 +1558,11 @@
     }
     const timeline = getPhysicalTimeline(sequences, plots);
     if (timeline.length) {
-      gridVcrState.syncTime = clampTimeForMedia(gridVcrState.syncTime, videos, plots);
+      gridVcrState.syncTime = clampTimeForMedia(
+        !sequences.length && videos.length ? getReferenceTime(videos) : gridVcrState.syncTime,
+        videos,
+        plots
+      );
       gridVcrState.timelinePosition = timelineIndexNearest(gridVcrState.syncTime, timeline);
       setImageSequencesForTime(gridVcrState.syncTime, sequences);
     } else {
@@ -1660,7 +1693,9 @@
     setGridVcrPlaying(false);
     stopSyncTimer();
     pauseAllVideos(videos);
-    const endTime = getCommonEndTime(videos);
+    const endTime = videos.some(videoHasPhysicalTime)
+      ? getReferenceTime([target])
+      : getCommonEndTime(videos);
     const t = setAllVideoTimes(
       videos,
       endTime !== null ? endTime : getReferenceTime(videos)

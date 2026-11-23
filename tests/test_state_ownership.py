@@ -20,7 +20,7 @@ class StateOwnershipTests(unittest.TestCase):
         state = SimpleNamespace()
         init_state(state, SimpleNamespace(ok=True, last_error=""))
 
-        self.assertEqual(len(vars(state)), 230)
+        self.assertEqual(len(vars(state)), 238)
         self.assertEqual(state.gridLayoutMode, "uniform")
         self.assertEqual(set(vars(state)) - {"dbOk", "dbStatus"}, set(owner_by_key))
 

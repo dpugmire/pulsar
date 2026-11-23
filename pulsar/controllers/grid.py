@@ -1314,6 +1314,13 @@ class GridControllerMixin:
         except Exception:
             use_multi = False
 
+        if cells[idx].get("working_result_id"):
+            selected = self.normalize_grid_selection(cells=cells) if use_multi else []
+            self.set_grid_selection(sorted(set(selected + [idx])), active=idx)
+            self.state.selectedVar = ""
+            self.state.draggedVar = ""
+            return
+
         if use_multi:
             if not is_selectable_grid_cell(cells, idx):
                 return
