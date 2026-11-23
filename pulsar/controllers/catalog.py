@@ -1,6 +1,7 @@
 """Catalog, query, and variable-selection controller behavior."""
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from application import NavigationNode
@@ -19,6 +20,10 @@ def _variable_groups_from_navigation(
     nodes: List[NavigationNode],
 ) -> List[Dict[str, Any]]:
     groups: List[Dict[str, Any]] = []
+    campaigns = {
+        str((child.get("resource") or {}).get("campaign_path", ""))
+        for node in nodes for child in node.get("children", []) or []
+    } - {""}
     for node in nodes:
         variables: List[Dict[str, str]] = []
         for child in node.get("children", []) or []:
@@ -39,6 +44,7 @@ def _variable_groups_from_navigation(
                     ),
                     "path": str(resource.get("path", "") or ""),
                     "source_dataset": str(resource.get("source_dataset", "") or ""),
+                    "campaign_path": str(resource.get("campaign_path", "") or ""),
                 }
             )
         if variables:
@@ -46,11 +52,25 @@ def _variable_groups_from_navigation(
                 "name": str(node.get("label", "") or ""),
                 "variables": variables,
             }
+            group_resource = node.get("resource") or {}
+            if len(campaigns) > 1 and group_resource.get("campaign_path"):
+                group["name"] = f"{Path(str(group_resource['campaign_path'])).stem} / {group['name']}"
             resource = node.get("resource") or {}
             file_count = int(resource.get("file_count", 0) or 0)
             if file_count > 1:
                 group["file_count"] = file_count
             groups.append(group)
+    campaigns_by_variable = {}
+    for group in groups:
+        for variable in group["variables"]:
+            key = (variable.get("id", ""), variable.get("label", ""))
+            campaigns_by_variable.setdefault(key, set()).add(variable.get("campaign_path", ""))
+    for group in groups:
+        for variable in group["variables"]:
+            key = (variable.get("id", ""), variable.get("label", ""))
+            if len(campaigns_by_variable.get(key, set())) > 1 and variable.get("campaign_path"):
+                campaign = Path(variable["campaign_path"]).stem
+                variable["label"] = f"{variable['label']} [{campaign}]"
     return groups
 
 
@@ -1720,6 +1740,7 @@ def _details_provenance_summary(
 
 class CatalogControllerMixin:
     ACTION_BINDINGS = (
+        ("select_campaign", "select_campaign"),
         ("pick_var", "pick_var"),
         ("select_var", "select_var"),
         ("set_dragged_var", "set_dragged_var"),
@@ -1735,18 +1756,39 @@ class CatalogControllerMixin:
     )
     TRIGGER_BINDINGS = ()
     STATE_CHANGE_BINDINGS = (
+        (("selectedCampaignPath",), "on_selected_campaign"),
         (("showOnlyVisualizedVars",), "on_show_only_visualized_vars"),
         (("variablePaneView",), "on_variable_pane_view"),
         (("variableSearchText",), "on_variable_search_text"),
         (("selectedVar",), "on_selected_var"),
     )
 
-    def active_query_filter(self) -> Optional[Dict[str, Any]]:
+    def active_query_filter(self, campaign_path=None) -> Optional[Dict[str, Any]]:
         query_filter = self.state.queryFilter or None
         source_restriction = self.state.querySourceRestrictionFilter or None
-        if query_filter and source_restriction:
-            return and_filter(query_filter, source_restriction)
-        return query_filter or source_restriction or None
+        use_navigation_scope = campaign_path is None
+        campaign_path = str(getattr(self.state, "selectedCampaignPath", "") or "") if use_navigation_scope else str(campaign_path)
+        campaign_filter = {"campaign_path": campaign_path} if campaign_path else None
+        dataset = str(getattr(self.state, "campaignDatasetPath", "") or "")
+        if dataset and use_navigation_scope:
+            query_filter = and_filter(query_filter, {"source_dataset": dataset})
+        result = query_filter
+        if result and source_restriction:
+            result = and_filter(result, source_restriction)
+        else:
+            result = result or source_restriction
+        if result and campaign_filter:
+            return and_filter(result, campaign_filter)
+        return result or campaign_filter
+
+    def on_selected_campaign(self, **_kwargs) -> None:
+        self.refresh_variable_list()
+
+    def select_campaign(self, campaign_path: str = "", **_kwargs) -> None:
+        self.state.selectedVar = ""
+        self.state.campaignDatasetPath = ""
+        self.state.selectedCampaignPath = str(campaign_path or "")
+        self.on_selected_campaign()
 
     @staticmethod
     def combined_query_filter(
@@ -1952,6 +1994,8 @@ Notes:
                 )
                 if candidate_variable == var_id and candidate_visualization:
                     selected_provenance_tile = candidate_tile
+        if selected_provenance_tile:
+            qf = self.query_filter_for_sources(self.source_fields_list_from_cell(selected_provenance_tile))
         summary = self.application.get_source_summary(
             {"variable_id": var_id, "query": qf or {}}
         )
@@ -2001,12 +2045,30 @@ Notes:
             if key in all_keys
         ]
         preferred_key = str(preferred_source_key or "")
+        plot_source_requested = False
+        if (
+            selected_provenance_tile
+            and not preferred_keys
+            and preferred_key not in all_keys
+        ):
+            # Old workspaces can contain variable-specific source keys. Resolve
+            # those from the tile's recorded identity, not the last UI selection.
+            source_fields = self.source_fields_list_from_cell(selected_provenance_tile)
+            plot_source_requested = bool(source_fields)
+            preferred_keys = normalize_source_keys(
+                [
+                    str(self.source_row_for_cell(fields).get("_key", "") or "")
+                    for fields in source_fields
+                ]
+            )
         if preferred_keys:
             self.state.selectedSourceKeys = (
                 preferred_keys if allow_multi_sources else preferred_keys[:1]
             )
         elif preferred_key and preferred_key in all_keys:
             self.state.selectedSourceKeys = [preferred_key]
+        elif plot_source_requested:
+            self.state.selectedSourceKeys = []
         elif previous_var != var_id:
             self.state.selectedSourceKeys = [all_keys[0]] if all_keys else []
         else:
@@ -2203,8 +2265,11 @@ Notes:
             "visualization" if include_visualization else "variable"
         )
 
-    def pick_var(self, var_name: str, **_):
+    def pick_var(self, var_name: str, campaign_path: str = "", **_):
         picked = str(var_name or "")
+        if campaign_path and self.state.selectedCampaignPath != campaign_path:
+            self.state.selectedCampaignPath = str(campaign_path)
+            self.refresh_variable_list()
         self.set_details_provenance_context(False)
         if str(self.state.selectedVar or "") == picked:
             self.state.selectedVar = ""

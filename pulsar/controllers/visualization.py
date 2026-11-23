@@ -284,7 +284,7 @@ class VisualizationControllerMixin:
                 self.campaign_path,
                 variable_id,
                 source_filters=source_filters,
-                extra_filter=self.active_query_filter(),
+                extra_filter=self.query_filter_for_sources(source_fields_list),
                 selection_index=selection_index,
             )
         else:
@@ -297,7 +297,7 @@ class VisualizationControllerMixin:
                     source_fields,
                 )
                 or None,
-                extra_filter=self.active_query_filter(),
+                extra_filter=self.query_filter_for_sources(source_fields),
                 selection_index=selection_index,
             )
         if not tile:
@@ -411,6 +411,7 @@ class VisualizationControllerMixin:
         source_fields = dict(source_fields_items[0] if source_fields_items else {})
         if not source_fields:
             source_fields = {
+                **({"campaign_path": str(cell["campaign_path"])} if cell.get("campaign_path") else {}),
                 "_source_key": str(cell.get("_source_key", "") or ""),
                 "source_dataset": str(cell.get("source_dataset", "") or ""),
                 "schema_file_group": str(cell.get("schema_file_group", "") or ""),
@@ -440,6 +441,7 @@ class VisualizationControllerMixin:
                 or ""
             ),
             "source_fields": source_fields,
+            "campaign_path": str(source_fields.get("campaign_path", "") or ""),
             "source_variables": source_variables,
             "metadata": dict(metadata),
             "ndims": None,
@@ -496,7 +498,7 @@ class VisualizationControllerMixin:
             ),
             options=options,
             renderer=lambda: render_source_plugin_tile(
-                self.campaign_path,
+                str(source_fields.get("campaign_path") or self.campaign_path),
                 plugin,
                 meta,
                 options=options,
@@ -1568,7 +1570,7 @@ class VisualizationControllerMixin:
         else:
             source_filter = self.active_source_filter_for_variable(var_id)
 
-        query_filter = self.active_query_filter()
+        query_filter = self.query_filter_for_sources(source_filter)
         candidate = self.plugin_candidate(
             var_id,
             source_filter=source_filter or None,
@@ -1592,7 +1594,7 @@ class VisualizationControllerMixin:
             source_dataset=str(meta.get("source_dataset", "") or ""),
             options=options,
             renderer=lambda: render_plugin_tile(
-                self.campaign_path,
+                str(candidate.get("campaign_path") or self.campaign_path),
                 plugin_id,
                 candidate,
                 options=options,
@@ -1650,13 +1652,13 @@ class VisualizationControllerMixin:
         label = self.variable_label(var_id)
         scalar_settings = self.existing_scalar_field_settings(existing_cell, var_id)
 
-        qf = self.active_query_filter()
         source_fields: Dict[str, str] = {}
         if source_row:
             source_fields = source_fields_from_row(source_row)
             source_filter = source_filter_from_row(source_row)
         elif existing_cell:
             source_fields = {
+                **({"campaign_path": str(existing_cell["campaign_path"])} if existing_cell.get("campaign_path") else {}),
                 "_source_key": str(existing_cell.get("_source_key", "") or ""),
                 "source_dataset": str(existing_cell.get("source_dataset", "") or ""),
                 "source_collection_id": str(
@@ -1673,6 +1675,7 @@ class VisualizationControllerMixin:
             source_filter = self.source_filter_from_cell(existing_cell)
         else:
             source_filter = self.active_source_filter_for_variable(var_id)
+        qf = self.query_filter_for_sources(source_filter)
         active_filter = (
             and_filter(qf, source_filter)
             if qf and source_filter
@@ -1685,7 +1688,7 @@ class VisualizationControllerMixin:
         )
         if existing_cell and not source_row and source_filter and not vis_names:
             fallback_row = self.first_query_source_row_for_variable(
-                var_id, preferred_vis
+                var_id, preferred_vis, campaign_path=str(source_filter.get("campaign_path", "") or "")
             )
             if fallback_row:
                 source_fields = source_fields_from_row(fallback_row)
@@ -1752,10 +1755,23 @@ class VisualizationControllerMixin:
                 cell["status"] = "no-frames"
                 cell["note"] = f'No movie for "{selected_vis}"'
 
-        if not str(cell.get("_source_key", "") or ""):
-            row = self.source_row_for_cell(cell)
-            if row:
-                cell.update(source_fields_from_row(row))
+        row = source_row or self.source_row_for_cell(cell)
+        if not row and selected_vis:
+            # On a cold workspace restore the Sources panel may not be loaded
+            # yet. Resolve the recorded source through the backend directly.
+            recorded_source = self.source_filter_from_cell(cell)
+            if recorded_source:
+                source = self.application.find_source(
+                    {
+                        "variable_id": var_id,
+                        "visualization_name": selected_vis,
+                        "query": and_filter(qf, recorded_source),
+                    }
+                )
+                if source:
+                    row = self.source_row_from_descriptor(source, var_id)
+        if row:
+            cell.update(source_fields_from_row(row))
 
         cell["variable_id"] = var_id
         cell["variable_name"] = label
@@ -1796,7 +1812,7 @@ class VisualizationControllerMixin:
                 self.campaign_path,
                 variable_id,
                 source_filter=source_filter or None,
-                extra_filter=self.active_query_filter(),
+                extra_filter=self.query_filter_for_sources(source_fields),
             )
         except Exception as e:
             tile = {}
@@ -1809,6 +1825,8 @@ class VisualizationControllerMixin:
         if tile:
             tile.update({k: v for k, v in source_fields.items() if v})
             source_key = str(source_fields.get("_source_key", "") or "")
+            tile["_source_keys"] = [source_key] if source_key else []
+            tile["_source_fields_list"] = [source_fields] if source_fields else []
             self.assign_plot_series_keys(tile, [source_key] if source_key else [])
             tile["plot_settings"] = self.normalize_plot_settings(tile, prior_settings)
             tile["visualization_name"] = str(
@@ -1847,7 +1865,7 @@ class VisualizationControllerMixin:
         source_filter = self.source_filter_for_assignment(
             variable_id, source_row=source_row
         )
-        qf = self.active_query_filter()
+        qf = self.query_filter_for_sources(source_filter)
         active_filter = (
             and_filter(qf, source_filter)
             if qf and source_filter
@@ -1952,6 +1970,11 @@ class VisualizationControllerMixin:
         updated: List[Dict[str, Any]] = []
 
         for c in cells:
+            if c.get("query_result_id"):
+                updated.append(
+                    preserve_grid_geometry(self.query_result_cell(c["query_result_id"]), c)
+                )
+                continue
             if c.get("working_result_id"):
                 updated.append(
                     preserve_grid_geometry(
@@ -2016,7 +2039,7 @@ class VisualizationControllerMixin:
                             if self.db.scalar_plot_candidate(
                                 var_id,
                                 source_filter=source_filter or None,
-                                extra_filter=self.active_query_filter(),
+                                extra_filter=self.query_filter_for_sources(fields),
                             ):
                                 valid_source_fields_list.append(fields)
                                 source_key = str(fields.get("_source_key", "") or "")
@@ -2036,7 +2059,7 @@ class VisualizationControllerMixin:
                             self.campaign_path,
                             var_id,
                             source_filters=source_filters,
-                            extra_filter=self.active_query_filter(),
+                            extra_filter=self.query_filter_for_sources(source_fields_list),
                         )
                         if not tile:
                             raise ValueError(
@@ -2068,7 +2091,7 @@ class VisualizationControllerMixin:
                                 var_id, source_fields
                             )
                             or None,
-                            extra_filter=self.active_query_filter(),
+                            extra_filter=self.query_filter_for_sources(source_fields),
                         )
                         if not tile:
                             raise ValueError(
@@ -2085,7 +2108,7 @@ class VisualizationControllerMixin:
                     updated.append(preserve_grid_geometry(tile, c))
                 except Exception as e:
                     fallback_row = self.first_query_source_row_for_variable(
-                        var_id, GENERATED_SCALAR_PLOT_VIS
+                        var_id, GENERATED_SCALAR_PLOT_VIS, campaign_path=str(c.get("campaign_path", "") or "")
                     )
                     try:
                         if not fallback_row:
@@ -2099,7 +2122,7 @@ class VisualizationControllerMixin:
                                 var_id, source_fields
                             )
                             or None,
-                            extra_filter=self.active_query_filter(),
+                            extra_filter=self.query_filter_for_sources(source_fields),
                         )
                         if not tile:
                             raise e
@@ -2122,6 +2145,8 @@ class VisualizationControllerMixin:
                         err_cell = self.no_visualization_grid_cell(
                             var_id, f"{type(fallback_e).__name__}: {fallback_e}"
                         )
+                        err_cell.update(source_fields_from_row(c))
+                        err_cell["_source_fields_list"] = self.source_fields_list_from_cell(c)
                         updated.append(preserve_grid_geometry(err_cell, c))
                 continue
 
@@ -2141,6 +2166,8 @@ class VisualizationControllerMixin:
                 err_cell["variable_name"] = self.variable_label(var_id)
                 err_cell["status"] = "error"
                 err_cell["note"] = f"{type(e).__name__}: {e}"
+                err_cell.update(source_fields_from_row(c))
+                err_cell["_source_fields_list"] = self.source_fields_list_from_cell(c)
                 updated.append(preserve_grid_geometry(err_cell, c))
 
         self.state.gridCells = self.normalize_grid_cells(updated)
@@ -2150,6 +2177,7 @@ class VisualizationControllerMixin:
         except Exception:
             idx = -1
         self.state.activeGridCell = idx if self.is_valid_grid_index(idx) else -1
+
 
     def cancel_scalar_plot_generation(self, **_):
         self.clear_pending_scalar_plot()

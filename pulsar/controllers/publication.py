@@ -114,6 +114,10 @@ class PublicationControllerMixin:
         self._stash_active_workspace_grid()
 
     def publish_result(self, result_id, *, title=None, associations=None):
+        if len(self.campaign_paths) > 1:
+            raise PublicationError(
+                "Publishing is disabled while browsing multiple campaigns; open one campaign directly to publish."
+            )
         result_id = publication_id(result_id)
         existing = self.published_results().get(result_id)
         if existing is None:
@@ -186,6 +190,11 @@ class PublicationControllerMixin:
         return response
 
     def open_publish_result(self, cell_index, **_):
+        if len(self.campaign_paths) > 1:
+            self.state.publishResultError = (
+                "Publishing is disabled while browsing multiple campaigns."
+            )
+            return
         if not isinstance(cell_index, int) or not self.is_valid_grid_index(cell_index):
             return
         cell = self.state.gridCells[cell_index]

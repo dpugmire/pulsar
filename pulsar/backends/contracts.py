@@ -19,6 +19,7 @@ class NavigationResource(TypedDict, total=False):
     label: str
     path: str
     source_dataset: str
+    campaign_path: str
 
 
 class NavigationNode(TypedDict):

@@ -1,3 +1,4 @@
+import io
 import json
 import sys
 import tempfile
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+from PIL import Image
 
 
 try:
@@ -21,7 +23,7 @@ except ModuleNotFoundError:
 from application import PulsarApplication
 from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
-from query_parser import python_query_to_filters, python_query_to_mongo
+from query_parser import and_filter, python_query_to_filters, python_query_to_mongo
 from pulsar.controllers.catalog import _filter_variable_groups
 from pulsar.controllers.composer import CONTROLLER_TYPES
 from pulsar.models.workspace_state import parse_workspace_document, workspace_json
@@ -844,6 +846,11 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(controller.actions),
             {
+                "explore_campaign_dataset",
+                "inspect_campaign_result",
+                "inspect_campaign_file",
+                "select_campaign_overview_entry",
+                "select_campaign",
                 "activate_workspace_tab",
                 "adjust_canvas_default_tile_width",
                 "adjust_canvas_zoom",
@@ -860,6 +867,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "apply_source_dialog_filter",
                 "assign_var_to_grid_cell",
                 "show_working_result_details",
+                "show_metadata_query_details",
                 "open_publish_result",
                 "cancel_publish_result",
                 "confirm_publish_result",
@@ -1072,6 +1080,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(state.change_callbacks),
             {
+                "selectedCampaignPath",
                 "selectedVar",
                 "showOnlyVisualizedVars",
                 "variablePaneView",
@@ -1854,6 +1863,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                             "label": "temperature",
                             "path": "temperature",
                             "source_dataset": "run-a/scalars.bp",
+                            "campaign_path": "/campaign/example.aca",
                         }
                     ],
                 },
@@ -1866,6 +1876,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                             "label": "density",
                             "path": "density",
                             "source_dataset": "run-a/output.bp",
+                            "campaign_path": "/campaign/example.aca",
                         }
                     ],
                 },
@@ -2203,7 +2214,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(summary["count"], 1)
         self.assertEqual(
             summary["filter"],
-            {"source_dataset": {"$in": ["run-128/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["run-128/output.bp"]}}),
         )
 
     def test_source_restriction_preserves_concrete_source_when_producer_is_shared(self):
@@ -2253,7 +2264,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(restriction["count"], 1)
         self.assertEqual(
             restriction["filter"],
-            {"source_dataset": {"$in": ["mhd-low/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["mhd-low/output.bp"]}}),
         )
         self.assertEqual(
             [source["source_dataset"] for source in pressure_summary["sources"]],
@@ -2309,7 +2320,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(restriction["count"], 1)
         self.assertEqual(
             restriction["filter"],
-            {"source_dataset": {"$in": ["mhd-low/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["mhd-low/output.bp"]}}),
         )
         self.assertEqual(
             [source["source_dataset"] for source in pressure_summary["sources"]],
@@ -2358,7 +2369,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(restriction["count"], 1)
         self.assertEqual(
             restriction["filter"],
-            {"source_dataset": {"$in": ["mhd-rounded/output.bp"]}},
+            and_filter({"campaign_path": "/campaign/example.aca"}, {"source_dataset": {"$in": ["mhd-rounded/output.bp"]}}),
         )
 
     def test_application_file_navigation_uses_file_nodes(self):
@@ -2594,6 +2605,116 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         self.assertEqual(state.detailsProvenanceNodes[0]["kind"], "visualization")
         self.assertEqual(state.detailsProvenanceNodes[-1]["label"], "run-b/output.bp")
+
+    def source_binding_controller(self):
+        for run, color in (("rusanov_128", "red"), ("rusanov_64", "blue")):
+            source = f"{run}/output.bp"
+            common = {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "current_z",
+                "variable_name": "current_z",
+                "source_dataset": source,
+                "producer": run,
+                "casename": run,
+                "file": "output.bp",
+                "schema_name": "mhd",
+                "schema_file_group": "output",
+                "schema_mode": "append",
+            }
+            self.collection.insert_one(
+                {
+                    **common,
+                    "variable_type": "variable",
+                    "variable_path": f"{source}/current_z",
+                    "metadata": {"Shape": "2,2"},
+                }
+            )
+            output = io.BytesIO()
+            Image.new("RGB", (2, 2), color).save(output, format="PNG")
+            self.collection.insert_one(
+                {
+                    **common,
+                    "variable_type": "image",
+                    "visualization_name": "heatmap",
+                    "variable_path": f"{source}/image.png",
+                    "frame_index": 0,
+                    "image_bytes": output.getvalue(),
+                }
+            )
+        state, actions = self.make_controller()
+        owner = actions.actions["toggle_sources"].__self__
+        owner.update_selected_var_panels("current_z")
+        rows = {row["source_dataset"]: row for row in state.sourceRowsAll}
+        for index, source in enumerate(("rusanov_128/output.bp", "rusanov_64/output.bp")):
+            state.gridCells[index].update(
+                owner.build_grid_cell_for_variable(
+                    "current_z", preferred_vis="heatmap", source_row=rows[source]
+                )
+            )
+        return state, actions, owner, rows
+
+    def test_source_dialog_preserves_ids_when_changing_and_reopening_plots(self):
+        state, actions, owner, rows = self.source_binding_controller()
+        first, second = "rusanov_128/output.bp", "rusanov_64/output.bp"
+        # Apply the same source-dialog path that previously replaced stable IDs.
+        for index, source in ((0, first), (1, second)):
+            actions.actions["set_active_grid_cell"](index)
+            actions.actions["toggle_sources"]()
+            actions.actions["source_dialog_select"](rows[source]["_key"])
+            actions.actions["apply_source_dialog"]()
+            self.assertEqual(state.gridCells[index]["_source_key"], rows[source]["_key"])
+            self.assertEqual(state.gridCells[index]["source_id"], rows[source]["source_id"])
+
+        for index, source in ((0, first), (1, second), (0, first)):
+            actions.actions["set_active_grid_cell"](index)
+            actions.actions["toggle_sources"]()
+            self.assertEqual(state.selectedSourceKeys, [rows[source]["_key"]])
+            self.assertEqual(
+                owner.source_rows_for_keys(state.selectedSourceKeys)[0]["source_dataset"],
+                source,
+            )
+            actions.actions["cancel_source_dialog"]()
+
+    def test_legacy_plot_keys_resolve_exact_datasets_after_workspace_restore(self):
+        from pulsar.models.source_selection import source_key_for_fields
+
+        state, actions, owner, rows = self.source_binding_controller()
+        sources = ["rusanov_128/output.bp", "rusanov_64/output.bp"]
+        for cell in state.gridCells[:2]:
+            legacy_key = source_key_for_fields(cell)
+            cell["source_id"] = cell["_source_key"] = legacy_key
+        state.selectedSourceKeys = [rows[sources[1]]["_key"]]
+        for index, source in enumerate(sources):
+            self.assertEqual(
+                owner.source_row_for_cell(state.gridCells[index])["source_dataset"], source
+            )
+            actions.actions["set_active_grid_cell"](index)
+            actions.actions["toggle_sources"]()
+            self.assertEqual(state.selectedSourceKeys, [rows[source]["_key"]])
+            actions.actions["cancel_source_dialog"]()
+
+        document = parse_workspace_document(workspace_json(state, "/campaign/example.aca"))
+        restored_state, restored_actions = self.make_controller()
+        restored_owner = restored_actions.actions["toggle_sources"].__self__
+        restored_owner.restore_workspace_state(document)
+        for index, source in enumerate(sources):
+            self.assertEqual(restored_state.gridCells[index]["source_dataset"], source)
+            self.assertEqual(restored_state.gridCells[index]["_source_key"], rows[source]["_key"])
+            self.assertEqual(restored_state.gridCells[index]["source_id"], rows[source]["source_id"])
+
+    def test_unknown_plot_source_does_not_reuse_another_plots_selection(self):
+        state, actions, _owner, rows = self.source_binding_controller()
+        state.selectedSourceKeys = [rows["rusanov_64/output.bp"]["_key"]]
+        state.gridCells[0].update(
+            {
+                "_source_key": "legacy-missing",
+                "source_id": "legacy-missing",
+                "source_dataset": "missing/output.bp",
+            }
+        )
+        actions.actions["set_active_grid_cell"](0)
+        actions.actions["toggle_sources"]()
+        self.assertEqual(state.selectedSourceKeys, [])
 
     def test_plugin_plot1d_source_dialog_applies_multiple_labeled_sources(self):
         for source_dataset, producer in (

@@ -25,6 +25,7 @@ HISTORY_FORMAT = "pulsar-workspace-history"
 HISTORY_VERSION = 1
 
 _CELL_FIELDS = (
+    "query_result_id",
     "working_result_id",
     "variable_id",
     "variable_name",
@@ -35,6 +36,7 @@ _CELL_FIELDS = (
     "_source_keys",
     "_source_fields_list",
     "source_dataset",
+    "campaign_path",
     "source_collection_id",
     "source_collection_label",
     "schema_name",

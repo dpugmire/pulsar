@@ -1,5 +1,6 @@
 """Opt-in local HTTP control of Pulsar's existing workspace operations."""
 
+import asyncio
 import atexit
 import ipaddress
 import json
@@ -9,9 +10,11 @@ import os
 import secrets
 from copy import deepcopy
 from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
 from .client import API_VERSION
+from .metadata_query import MetadataQueryError, source_reference
 from .models import canvas_layout
 from .models.grid import assign_cell, cell_has_content
 from .models.workspace_layout import apply_grid_snapshot, grid_snapshot
@@ -20,6 +23,7 @@ from .publications import PublicationError
 from .results import ResultError
 
 API_PATH = "/pulsar-api/v1"
+TIMELINE_SEEK_TIMEOUT = 10.0
 _TILE_FIELDS = (
     "tile_id",
     "variable_id",
@@ -38,6 +42,7 @@ _TILE_FIELDS = (
     "scalar_field_settings",
     "selection_axis",
     "working_result_id",
+    "query_result_id",
     "publication_status",
     "publication_image_uuid",
     "publication_video_uuid",
@@ -85,6 +90,189 @@ class ViewerControl:
         self.controller = controller
         self.state = controller.state
         self.instance_id = instance_id
+        self._query_lock = asyncio.Lock()
+        self._pending_seek = None
+
+    async def set_time(self, physical_time, tab_id):
+        try:
+            valid_time = (
+                not isinstance(physical_time, bool)
+                and isinstance(physical_time, (int, float))
+                and math.isfinite(physical_time)
+            )
+        except OverflowError:
+            valid_time = False
+        if not valid_time:
+            raise ControlError("physical_time must be a finite number")
+        tab_id = _text(tab_id, "tab_id")
+        tab = next((tab for tab in self.tabs() if tab["tab_id"] == tab_id), None)
+        if tab is None:
+            raise ControlError("Unknown workspace tab", code="not_found", status=404)
+        if self._pending_seek is not None:
+            raise ControlError(
+                "Another time seek is pending", code="seek_busy", status=409
+            )
+        future = asyncio.get_running_loop().create_future()
+        request = {
+            "request_id": str(uuid4()), "tab_id": tab_id,
+            "physical_time": physical_time,
+        }
+        self._pending_seek = request, future, deepcopy(tab["tiles"])
+        try:
+            with self.state:
+                self.controller.activate_workspace_tab(tab["pane_id"], tab_id)
+                self.state.timelineSeekRequest = request
+            receipt = await asyncio.wait_for(future, TIMELINE_SEEK_TIMEOUT)
+            self.controller.record_interaction(
+                "workspace.time_changed", source="python_client", payload=receipt
+            )
+            return receipt
+        except asyncio.TimeoutError as error:
+            raise ControlError(
+                "No browser confirmed the time seek; its outcome is unknown. "
+                "Connect or reload the viewer before retrying.",
+                code="seek_timeout", status=504,
+            ) from error
+        finally:
+            self._pending_seek = None
+            with self.state:
+                self.state.timelineSeekRequest = {}
+
+    def complete_time_seek(self, receipt, **_):
+        if self._pending_seek is None or not isinstance(receipt, dict):
+            return
+        request, future, expected_tiles = self._pending_seek
+        if future.done() or receipt.get("request_id") != request["request_id"]:
+            return
+        if (
+            receipt.get("tab_id") != request["tab_id"]
+            or self.state.workspaceActiveTabId != request["tab_id"]
+        ):
+            future.set_exception(ControlError(
+                "The active tab changed while seeking", code="workspace_changed", status=409
+            ))
+            return
+        if receipt.get("error"):
+            future.set_exception(ControlError(
+                str(receipt["error"]), code="time_unavailable", status=409
+            ))
+            return
+        time = receipt.get("physical_time")
+        index = receipt.get("slider_index")
+        if (
+            not isinstance(time, (int, float)) or isinstance(time, bool)
+            or not math.isfinite(time)
+            or not isinstance(index, int) or isinstance(index, bool) or index < 0
+            or not isinstance(receipt.get("plots"), list)
+        ):
+            future.set_exception(ControlError("Invalid browser time receipt"))
+            return
+        cells = list(self.state.gridCells or [])
+        expected = {tile["cell_index"]: tile for tile in expected_tiles}
+        plots = []
+        for item in receipt.get("plots", []):
+            if not isinstance(item, dict):
+                future.set_exception(ControlError("Invalid browser time receipt"))
+                return
+            index = item.get("cell_index")
+            if not isinstance(index, int) or not 0 <= index < len(cells):
+                future.set_exception(ControlError("Invalid browser time receipt"))
+                return
+            cell = cells[index]
+            identity_fields = (
+                "variable_id", "source_id", "selected_visualization", "tile_id",
+                "working_result_id", "query_result_id", "time_values",
+            )
+            if (
+                item.get("source_id", "") != str(cell.get("source_id", "") or "")
+                or index not in expected
+                or any(cell.get(key) != expected[index].get(key) for key in identity_fields)
+            ):
+                future.set_exception(ControlError(
+                    "A plot changed while seeking", code="workspace_changed", status=409
+                ))
+                return
+            plots.append({
+                **{key: cell.get(key) for key in (
+                    "variable_id", "source_dataset", "source_id", "time_unit",
+                )},
+                **{key: item.get(key) for key in (
+                    "cell_index", "status", "physical_time", "sample_index", "frame_index",
+                )},
+            })
+        future.set_result({
+            "tab_id": request["tab_id"],
+            "requested_time": request["physical_time"],
+            "physical_time": receipt.get("physical_time"),
+            "slider_index": receipt.get("slider_index"),
+            "plots": plots,
+        })
+
+    async def query_schema(self):
+        try:
+            engine = self.controller.metadata_query_engine()
+            return await asyncio.to_thread(engine.schema)
+        except (MetadataQueryError, OSError) as error:
+            raise ControlError(
+                str(error), code="query_unavailable", status=409
+            ) from error
+
+    async def query(self, sql, parameters=None, request=""):
+        if not bool(self.state.dbOk):
+            raise ControlError(
+                "Campaign is not available", code="not_ready", status=409
+            )
+        if self._query_lock.locked():
+            raise ControlError(
+                "Another metadata query is running", code="query_busy", status=409
+            )
+        cancel = Event()
+        try:
+            engine = self.controller.metadata_query_engine()
+            store = self.controller.query_result_store()
+            async with self._query_lock:
+                task = asyncio.create_task(
+                    asyncio.to_thread(
+                        engine.execute, sql, parameters, request, cancel=cancel
+                    )
+                )
+                try:
+                    result = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    cancel.set()
+                    try:
+                        await asyncio.shield(task)
+                    except MetadataQueryError:
+                        pass
+                    raise
+                return await asyncio.to_thread(store.save, result)
+        except (MetadataQueryError, OSError) as error:
+            raise ControlError(str(error), code="query_failed") from error
+
+    def queries(self):
+        try:
+            return self.controller.query_result_store().list()
+        except (MetadataQueryError, OSError) as error:
+            raise ControlError(
+                str(error), code="query_unavailable", status=409
+            ) from error
+
+    def query_result(self, query_id):
+        try:
+            return self.controller.query_result_store().get(query_id)
+        except MetadataQueryError as error:
+            raise ControlError(
+                str(error), code="query_unavailable", status=404
+            ) from error
+
+    def show_query(self, query_id, tab_id):
+        try:
+            tile = self.controller.query_result_store().tile(query_id)
+        except MetadataQueryError as error:
+            raise ControlError(
+                str(error), code="query_unavailable", status=404
+            ) from error
+        return self._add_tile(tile, tab_id, "Add metadata query", "stats")
 
     def context(self):
         state = self.state
@@ -246,21 +434,24 @@ class ViewerControl:
             raise ControlError(str(error), code="invalid_result") from error
 
     def add_result(self, result_id, tab_id):
-        tab_id = _text(tab_id, "tab_id")
-        tab = next((tab for tab in self.tabs() if tab["tab_id"] == tab_id), None)
-        if tab is None:
-            raise ControlError("Unknown workspace tab", code="not_found", status=404)
         try:
             tile = self.controller.result_tile(result_id)
         except (ResultError, PublicationError) as error:
             raise ControlError(
                 str(error), code="result_unavailable", status=404
             ) from error
+        return self._add_tile(tile, tab_id, "Add working result", "image")
+
+    def _add_tile(self, tile, tab_id, label, kind):
+        tab_id = _text(tab_id, "tab_id")
+        tab = next((tab for tab in self.tabs() if tab["tab_id"] == tab_id), None)
+        if tab is None:
+            raise ControlError("Unknown workspace tab", code="not_found", status=404)
         previous_layout = self.controller._workspace_layout()
         previous_grid = grid_snapshot(self.state)
         previous_selected = self.state.selectedVar, self.state.draggedVar
         try:
-            with self.controller.history.transaction("Add working result"):
+            with self.controller.history.transaction(label):
                 self.controller.activate_workspace_tab(tab["pane_id"], tab_id)
                 cells = self.controller.normalize_grid_cells(self.state.gridCells)
                 if self.controller.normalize_grid_layout_mode() == "freeform":
@@ -274,13 +465,15 @@ class ViewerControl:
                     width = canvas_layout.normalize_drop_width(
                         self.state.canvasDefaultTileWidth
                     )
+                    if kind == "stats":
+                        width = max(width, 12)
                     item = canvas_layout.geometry(
                         self.controller.next_canvas_tile_id(cells),
-                        "image",
+                        kind,
                         0,
                         0,
                         width,
-                        width * 2,
+                        12 if kind == "stats" else width * 2,
                         columns=columns,
                     )
                     item = canvas_layout.nearest_free(
@@ -325,7 +518,31 @@ class ViewerControl:
             raise
         return result
 
-    def add_visualization(self, variable_id, tab_id):
+    def _source_row_for_reference(self, variable_id, source_ref):
+        source_ref = _text(source_ref, "source_ref")
+        summary = self.controller.application.get_source_summary(
+            {
+                "variable_id": variable_id,
+                "query": self.controller.active_query_filter() or {},
+            }
+        )
+        matches = [
+            source for source in summary.get("sources", [])
+            if source_reference(source) == source_ref
+        ]
+        if not matches:
+            raise ControlError(
+                "source_ref is not available for this variable in the current query",
+                code="source_not_found", status=404,
+            )
+        if len(matches) != 1:
+            raise ControlError(
+                "source_ref matches more than one source",
+                code="ambiguous_source", status=409,
+            )
+        return self.controller.source_row_from_descriptor(matches[0], variable_id)
+
+    def add_visualization(self, variable_id, tab_id, source_ref=None):
         variable_id = _text(variable_id, "variable_id")
         tab_id = _text(tab_id, "tab_id")
         if not bool(self.state.dbOk):
@@ -345,6 +562,10 @@ class ViewerControl:
                 code="confirmation_required",
                 status=409,
             )
+        source_row = (
+            self._source_row_for_reference(variable_id, source_ref)
+            if source_ref is not None else None
+        )
         previous_layout = self.controller._workspace_layout()
         previous_grid = grid_snapshot(self.state)
         previous_selection = {
@@ -361,7 +582,7 @@ class ViewerControl:
                 try:
                     if self.controller.normalize_grid_layout_mode() == "freeform":
                         index = self.controller.add_var_to_canvas(
-                            variable_id, {}, sync_selection=True
+                            variable_id, {}, sync_selection=True, source_row=source_row
                         )
                         if index < 0:
                             raise ControlError(
@@ -388,7 +609,9 @@ class ViewerControl:
                                 code="workspace_full",
                                 status=409,
                             )
-                        self.controller.assign_var_to_grid_cell(index, variable_id)
+                        self.controller.assign_var_to_grid_cell(
+                            index, variable_id, source_row=source_row
+                        )
                 finally:
                     self.controller._interaction_assignment_source = ""
                 if self.state.showScalarPlotDialog:
@@ -439,6 +662,7 @@ def register_control_api(server, controller, session_file):
     inode = os.fstat(fd).st_ino
     handle = os.fdopen(fd, "w", encoding="utf-8")
     control = ViewerControl(controller, instance_id)
+    server.controller.trigger("pulsar_timeline_seek_result")(control.complete_time_seek)
 
     def write_descriptor():
         handle.seek(0)
@@ -486,9 +710,11 @@ def register_control_api(server, controller, session_file):
                 route = request.path[len(API_PATH) :]
                 payload = {}
                 if request.method == "POST":
-                    limit = {"/results": 160 * 1024, "/workspace": 5 * 1024 * 1024}.get(
-                        route, 16384
-                    )
+                    limit = {
+                        "/results": 160 * 1024,
+                        "/workspace": 5 * 1024 * 1024,
+                        "/queries": 64 * 1024,
+                    }.get(route, 16384)
                     if (
                         request.content_length is not None
                         and request.content_length > limit
@@ -509,7 +735,8 @@ def register_control_api(server, controller, session_file):
                         raise ControlError("Expected a JSON request object")
                     allowed = {
                         "/tabs": {"title", "pane_id"},
-                        "/visualizations": {"variable_id", "tab_id"},
+                        "/visualizations": {"variable_id", "tab_id", "source_ref"},
+                        "/time": {"physical_time", "tab_id"},
                         "/results": {
                             "title",
                             "image_path",
@@ -522,45 +749,27 @@ def register_control_api(server, controller, session_file):
                             "provenance",
                         },
                         "/result-views": {"result_id", "tab_id"},
+                        "/queries": {"sql", "parameters", "request"},
+                        "/query-views": {"query_id", "tab_id"},
                         "/publications": {"result_id", "title", "associations"},
                         "/workspace": {"format", "version", "campaign", "state"},
                     }[route]
                     if set(payload) - allowed:
                         raise ControlError("Unsupported control arguments")
-                with server.state:
-                    if request.method == "GET":
-                        if route.startswith("/results/"):
-                            result = control.result(request.match_info["result_id"])
-                        else:
-                            result = {
-                                "/context": control.context,
-                                "/catalog": control.catalog,
-                                "/tabs": control.tabs,
-                                "/results": control.results,
-                                "/workspace": control.workspace,
-                            }[route]()
-                    elif route == "/tabs":
-                        result = control.create_tab(
-                            payload.get("title"), payload.get("pane_id")
-                        )
-                    elif route == "/visualizations":
-                        result = control.add_visualization(
-                            payload.get("variable_id"), payload.get("tab_id")
-                        )
-                    elif route == "/results":
-                        result = control.register_result(**payload)
-                    elif route == "/publications":
-                        result = control.publish_result(
-                            payload.get("result_id"),
-                            payload.get("title"),
-                            payload.get("associations"),
-                        )
-                    elif route == "/workspace":
-                        result = control.restore_workspace(payload)
-                    else:
-                        result = control.add_result(
-                            payload.get("result_id"), payload.get("tab_id")
-                        )
+                if route == "/query-schema":
+                    result = await control.query_schema()
+                elif route == "/queries" and request.method == "POST":
+                    result = await control.query(
+                        payload.get("sql"),
+                        payload.get("parameters"),
+                        payload.get("request", ""),
+                    )
+                elif route == "/time":
+                    result = await control.set_time(
+                        payload.get("physical_time"), payload.get("tab_id")
+                    )
+                else:
+                    result = apply_request(route, request, payload)
                 return web.json_response(
                     {"api_version": API_VERSION, "result": _json_safe(result)},
                     headers={"Cache-Control": "no-store"},
@@ -587,6 +796,51 @@ def register_control_api(server, controller, session_file):
                     status=500,
                 )
 
+        def apply_request(route, request, payload):
+            with server.state:
+                if request.method == "GET":
+                    if route.startswith("/queries/"):
+                        result = control.query_result(request.match_info["query_id"])
+                    elif route.startswith("/results/"):
+                        result = control.result(request.match_info["result_id"])
+                    else:
+                        result = {
+                            "/context": control.context,
+                            "/catalog": control.catalog,
+                            "/tabs": control.tabs,
+                            "/results": control.results,
+                            "/workspace": control.workspace,
+                            "/queries": control.queries,
+                        }[route]()
+                elif route == "/tabs":
+                    result = control.create_tab(
+                        payload.get("title"), payload.get("pane_id")
+                    )
+                elif route == "/visualizations":
+                    result = control.add_visualization(
+                        payload.get("variable_id"), payload.get("tab_id"),
+                        source_ref=payload.get("source_ref"),
+                    )
+                elif route == "/results":
+                    result = control.register_result(**payload)
+                elif route == "/publications":
+                    result = control.publish_result(
+                        payload.get("result_id"),
+                        payload.get("title"),
+                        payload.get("associations"),
+                    )
+                elif route == "/workspace":
+                    result = control.restore_workspace(payload)
+                elif route == "/query-views":
+                    result = control.show_query(
+                        payload.get("query_id"), payload.get("tab_id")
+                    )
+                else:
+                    result = control.add_result(
+                        payload.get("result_id"), payload.get("tab_id")
+                    )
+                return result
+
         for route in (
             "/context",
             "/catalog",
@@ -594,15 +848,21 @@ def register_control_api(server, controller, session_file):
             "/results",
             "/results/{result_id}",
             "/workspace",
+            "/query-schema",
+            "/queries",
+            "/queries/{query_id}",
         ):
             http_server.app.router.add_get(API_PATH + route, dispatch)
         for route in (
             "/tabs",
+            "/time",
             "/visualizations",
             "/results",
             "/result-views",
             "/publications",
             "/workspace",
+            "/queries",
+            "/query-views",
         ):
             http_server.app.router.add_post(API_PATH + route, dispatch)
 

@@ -21,6 +21,18 @@ class VariablePanel(TrameComponent):
                     classes="pulsar-variable-card-title"
                 ):
                     html.Div("Variables", classes="pulsar-variable-title-text")
+                    vuetify.VSelect(
+                        v_if="(campaignChoices || []).length > 1",
+                        v_model=("selectedCampaignPath",),
+                        items=("campaignChoices",),
+                        item_title="title",
+                        item_value="value",
+                        label="Campaign",
+                        on_update_model_value=(ctrl.select_campaign, "[$event]"),
+                        density="compact",
+                        hide_details=True,
+                        style="max-width:260px;",
+                    )
                     vuetify.VTextField(
                         v_model=("variableSearchText",),
                         placeholder="Search",
@@ -98,12 +110,12 @@ class VariablePanel(TrameComponent):
                                         style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
                                     )
                                 with html.Div(v_if="(variableSearchText || '').trim() || !(variableGroupCollapsed && variableGroupCollapsed[group.name])"):
-                                    with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v.id"):
+                                    with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v.id + '::' + v.campaign_path"):
                                         with html.Div(
-                                            click=(ctrl.pick_var, "[v.id]"),
+                                            click=(ctrl.pick_var, "[v.id, v.campaign_path]"),
                                             draggable="true",
                                             classes="pulsar-draggable-var pulsar-var-item",
-                                            raw_attrs=[':data-item="v.id"', ':title="v.path || v.id"'],
+                                            raw_attrs=[':data-item="v.id"', ':data-campaign-path="v.campaign_path || \'\'"', ':title="v.path || v.id"'],
                                             style=(
                                                 "((v.id === selectedVar) ? 'background:#dfe7ef; box-shadow: inset 0 0 0 1px #b9c8d7;' : '')",
                                             ),

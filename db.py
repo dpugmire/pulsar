@@ -801,7 +801,8 @@ class CampaignDb:
         return label[:-3] if label.lower().endswith(".bp") else label
 
     @classmethod
-    def _source_group_for_doc(cls, doc: Dict[str, Any]) -> Tuple[Tuple[str, str, str, str], Dict[str, Any]]:
+    def _source_group_for_doc(cls, doc: Dict[str, Any]) -> Tuple[Tuple[str, ...], Dict[str, Any]]:
+        campaign_path = str(doc.get("campaign_path", "") or "")
         source_dataset = "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
         producer = "" if doc.get("producer", None) is None else str(doc.get("producer"))
         casename = "" if doc.get("casename", None) is None else str(doc.get("casename"))
@@ -817,6 +818,7 @@ class CampaignDb:
         if source_collection_id:
             return (
                 (
+                    campaign_path,
                     "source_collection",
                     str(doc.get("schema_name", "") or ""),
                     schema_file_group,
@@ -886,7 +888,7 @@ class CampaignDb:
 
         if schema_file_group and schema_mode == "file_per_timestep":
             return (
-                ("schema_file_group", "", "", schema_file_group),
+                (campaign_path, "schema_file_group", "", "", schema_file_group),
                 {
                     "source_dataset": "",
                     "source_label": cls._file_navigation_label(schema_pattern or schema_file_group),
@@ -937,7 +939,7 @@ class CampaignDb:
 
         source_label = source_dataset or file_name or " / ".join(part for part in (producer, casename) if part)
         return (
-            ("source_dataset", source_dataset, producer, file_name),
+            (campaign_path, "source_dataset", source_dataset, producer, file_name),
             {
                 "source_dataset": source_dataset,
                 "source_label": source_label,
@@ -996,7 +998,7 @@ class CampaignDb:
             source["max"] = fmax if current_max is None else max(float(current_max), fmax)
 
     @staticmethod
-    def _finalize_sources(grouped: Dict[Tuple[str, str, str, str], Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _finalize_sources(grouped: Dict[Tuple[str, ...], Dict[str, Any]]) -> List[Dict[str, Any]]:
         sources: List[Dict[str, Any]] = []
         for source in grouped.values():
             files_seen = source.pop("_files_seen", set())
@@ -1032,24 +1034,25 @@ class CampaignDb:
         return sources
 
     @staticmethod
-    def _source_restriction_identity(doc: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    def _source_restriction_identity(doc: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
+        campaign_path = str(doc.get("campaign_path", "") or "")
         source_collection_id = str(doc.get("source_collection_id", "") or "").strip()
         if source_collection_id:
-            return ("source_collection", source_collection_id)
+            return (campaign_path, "source_collection", source_collection_id)
         schema_file_group = str(doc.get("schema_file_group", "") or "").strip()
         schema_mode = str(doc.get("schema_mode", "") or "").strip()
         if schema_file_group and schema_mode == "file_per_timestep":
-            return ("schema_file_group", schema_file_group)
+            return (campaign_path, "schema_file_group", schema_file_group)
 
         source_dataset = str(doc.get("source_dataset", "") or "").strip()
         if source_dataset:
-            return ("source_dataset", source_dataset)
+            return (campaign_path, "source_dataset", source_dataset)
 
         producer = str(doc.get("producer", "") or "").strip()
         casename = str(doc.get("casename", "") or "").strip()
         file_name = str(doc.get("file", "") or "").strip()
         if producer or casename or file_name:
-            return ("legacy_source", f"{producer}\0{casename}\0{file_name}")
+            return (campaign_path, "legacy_source", f"{producer}\0{casename}\0{file_name}")
 
         return None
 
@@ -1204,11 +1207,11 @@ class CampaignDb:
         self,
         source_filter: Dict[str, Any],
         projection: Dict[str, int],
-    ) -> Set[Tuple[str, str]]:
+    ) -> Set[Tuple[str, str, str]]:
         candidate_filter = self._source_restriction_candidate_filter(
             source_filter or {}
         )
-        groups: Dict[Tuple[Tuple[str, str], str], Dict[str, Any]] = {}
+        groups: Dict[Tuple[Tuple[str, str, str], str], Dict[str, Any]] = {}
 
         for doc in self.collection.find(candidate_filter, projection):
             identity = self._source_restriction_identity(doc)
@@ -1225,7 +1228,7 @@ class CampaignDb:
             )
             self._source_restriction_merge_doc_values(values, doc)
 
-        identities: Set[Tuple[str, str]] = set()
+        identities: Set[Tuple[str, str, str]] = set()
         for key, values in groups.items():
             if mongo_filter_matches(source_filter or {}, values):
                 identity, _variable_id = key
@@ -1233,7 +1236,7 @@ class CampaignDb:
         return identities
 
     @staticmethod
-    def _source_restriction_filter_from_identities(
+    def _source_restriction_filter_for_values(
         identities: Set[Tuple[str, str]]
     ) -> Dict[str, Any]:
         if not identities:
@@ -1281,6 +1284,17 @@ class CampaignDb:
             return parts[0]
         return {"$or": parts}
 
+    @staticmethod
+    def _source_restriction_filter_from_identities(identities):
+        parts = []
+        for path in sorted({path for path, _kind, _value in identities}):
+            values = {(kind, value) for campaign, kind, value in identities if campaign == path}
+            predicate = CampaignDb._source_restriction_filter_for_values(values)
+            parts.append(and_filter({"campaign_path": path}, predicate) if path else predicate)
+        if not parts:
+            return {"_id": {"$in": []}}
+        return parts[0] if len(parts) == 1 else {"$or": parts}
+
     def source_restriction_summary(
         self,
         source_filters: List[Dict[str, Any]],
@@ -1317,7 +1331,7 @@ class CampaignDb:
             "source_collection_id": 1,
         }
 
-        matched: Optional[Set[Tuple[str, str]]] = None
+        matched: Optional[Set[Tuple[str, str, str]]] = None
         try:
             for source_filter in source_filters:
                 if self._source_restriction_filter_uses_extrema(
@@ -1399,6 +1413,7 @@ class CampaignDb:
                 "variable_name_physical": 1,
                 "variable_path": 1,
                 "source_dataset": 1,
+                "campaign_path": 1,
                 "variable_type": 1,
                 "variable_group": 1,
                 "variable_group_order": 1,
@@ -1407,7 +1422,7 @@ class CampaignDb:
                 "metadata": 1,
             }
 
-            by_id: Dict[str, Dict[str, Any]] = {}
+            by_id: Dict[Tuple[str, str], Dict[str, Any]] = {}
             for query in queries:
                 for doc in self.collection.find(query, proj):
                     if self._is_static_scalar_variable_doc(doc):
@@ -1416,7 +1431,9 @@ class CampaignDb:
                     variable_id = str(doc.get("variable_id", "") or "").strip()
                     if not variable_id:
                         variable_id = str(doc.get("variable_name", "") or "").strip()
-                    if not variable_id or variable_id in by_id:
+                    campaign_path = str(doc.get("campaign_path", "") or "")
+                    identity = (campaign_path, variable_id)
+                    if not variable_id or identity in by_id:
                         continue
 
                     name = str(doc.get("variable_name", "") or "").strip()
@@ -1434,6 +1451,7 @@ class CampaignDb:
                         "label": label,
                         "path": display_path,
                         "source_dataset": str(doc.get("source_dataset", "") or ""),
+                        "campaign_path": campaign_path,
                     }
                     variable_group = str(doc.get("variable_group", "") or "")
                     if variable_group:
@@ -1442,7 +1460,7 @@ class CampaignDb:
                             doc.get("variable_group_order", 0) or 0
                         )
                         item["role"] = str(doc.get("role", "") or "")
-                    by_id[variable_id] = item
+                    by_id[identity] = item
 
             counts: Dict[str, int] = {}
             for item in by_id.values():
@@ -1567,6 +1585,7 @@ class CampaignDb:
                 "variable_name_physical": 1,
                 "variable_path": 1,
                 "source_dataset": 1,
+                "campaign_path": 1,
                 "producer": 1,
                 "casename": 1,
                 "file": 1,
@@ -1598,6 +1617,7 @@ class CampaignDb:
                         continue
 
                     source_dataset = str(doc.get("source_dataset", "") or "").strip()
+                    campaign_path = str(doc.get("campaign_path", "") or "")
                     schema_file_group = str(doc.get("schema_file_group", "") or "").strip()
                     schema_mode = str(doc.get("schema_mode", "") or "").strip()
                     schema_pattern = str(doc.get("schema_pattern", "") or "").strip()
@@ -1617,23 +1637,23 @@ class CampaignDb:
                     file_name = str(doc.get("file", "") or "").strip()
 
                     if source_collection_id:
-                        source_key = ("source_collection", source_collection_id)
+                        source_key = (campaign_path, "source_collection:" + source_collection_id)
                         source_label = source_collection_label
                         group_source_dataset = ""
                     elif schema_file_group and schema_mode == "file_per_timestep":
-                        source_key = ("schema_file_group", schema_file_group)
+                        source_key = (campaign_path, "schema_file_group:" + schema_file_group)
                         source_label = self._file_navigation_label(
                             schema_pattern or schema_file_group
                         )
                         group_source_dataset = ""
                     elif source_dataset:
-                        source_key = ("source_dataset", source_dataset)
+                        source_key = (campaign_path, "source_dataset:" + source_dataset)
                         source_label = self._file_navigation_label(source_dataset)
                         group_source_dataset = source_dataset
                     else:
                         fallback = " / ".join(part for part in (producer, casename, file_name) if part)
                         source_label = self._file_navigation_label(fallback) or "Unknown source"
-                        source_key = ("legacy_source", source_label)
+                        source_key = (campaign_path, "legacy_source:" + source_label)
                         group_source_dataset = ""
 
                     group = grouped.setdefault(
@@ -1641,6 +1661,7 @@ class CampaignDb:
                         {
                             "name": source_label,
                             "source_dataset": group_source_dataset,
+                            "campaign_path": campaign_path,
                             "variables": [],
                             "_source_files": set(),
                             "_schema_file_count": 0,
@@ -1681,6 +1702,7 @@ class CampaignDb:
                             "label": label,
                             "path": self._variable_display_path({**doc, "variable_id": variable_id}),
                             "source_dataset": source_dataset,
+                            "campaign_path": campaign_path,
                         }
                     )
 
@@ -1770,7 +1792,7 @@ class CampaignDb:
         cursor = self.collection.find(query, proj).sort(
             [("source_dataset", 1), ("producer", 1), ("casename", 1), ("file", 1)]
         )
-        grouped: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        grouped: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         for doc in cursor:
             key, source = self._source_group_for_doc(doc)
             entry = grouped.setdefault(key, source)
@@ -1923,7 +1945,11 @@ class CampaignDb:
             "casename": str(doc.get("casename", "") or ""),
             "file": str(doc.get("file", "") or ""),
         }
+        if doc.get("campaign_path"):
+            source_fields["campaign_path"] = str(doc["campaign_path"])
         source_filter_out: Dict[str, str] = {"variable_id": variable_id}
+        if source_fields.get("campaign_path"):
+            source_filter_out["campaign_path"] = source_fields["campaign_path"]
         if source_fields["source_collection_id"]:
             source_filter_out["source_collection_id"] = source_fields[
                 "source_collection_id"
@@ -1941,6 +1967,7 @@ class CampaignDb:
         return {
             "variable_id": variable_id,
             "variable_name": str(doc.get("variable_name", "") or variable_id),
+            "campaign_path": str(doc.get("campaign_path", "") or ""),
             "display_name": str(doc.get("display_name", "") or ""),
             "variable_path": read_path,
             "metadata": metadata,
@@ -2549,7 +2576,7 @@ class CampaignDb:
                 continue
             candidate = self.scalar_plot_candidate(
                 variable_id,
-                source_filter={"source_dataset": source_dataset},
+                source_filter={**source_filter, "source_dataset": source_dataset},
                 extra_filter=extra_filter,
             )
             if (
@@ -2579,6 +2606,7 @@ class CampaignDb:
                         "variable_id": coordinate_variable,
                         "variable_type": "variable",
                         "source_collection_id": collection_id,
+                        **({"campaign_path": candidate["campaign_path"]} if candidate.get("campaign_path") else {}),
                     },
                     {
                         "_id": 0,
@@ -2789,6 +2817,7 @@ class CampaignDb:
             return {}
 
         first = candidates[0]
+        campaign_path = str(first.get("campaign_path", "") or campaign_path)
         members = self._source_collection_members_for_candidate(
             first,
             fallback_candidates=candidates,
@@ -2969,7 +2998,7 @@ class CampaignDb:
 
         source_fields = dict(candidate.get("source_fields", {}) or {})
         x, y, x_label = self._read_plot_series_cached(
-            campaign_path,
+            str(candidate.get("campaign_path", "") or campaign_path),
             str(candidate.get("variable_path", "") or ""),
             candidate.get("metadata", {}),
             candidate.get("time_values", []),
@@ -3067,6 +3096,7 @@ class CampaignDb:
 
             source_fields = dict(candidate.get("source_fields", {}) or {})
             key = (
+                str(candidate.get("campaign_path", "") or ""),
                 str(candidate.get("variable_path", "") or ""),
                 str(source_fields.get("source_dataset", "") or ""),
                 str(source_fields.get("producer", "") or ""),
@@ -3079,7 +3109,7 @@ class CampaignDb:
 
             try:
                 x, y, x_label = self._read_plot_series_cached(
-                    campaign_path,
+                    str(candidate.get("campaign_path", "") or campaign_path),
                     str(candidate.get("variable_path", "") or ""),
                     candidate.get("metadata", {}),
                     candidate.get("time_values", []),
@@ -3442,7 +3472,7 @@ class CampaignDb:
             mins: List[float] = []
             maxs: List[float] = []
             num_docs = 0
-            source_groups: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+            source_groups: Dict[Tuple[str, ...], Dict[str, Any]] = {}
 
             for doc in source_docs:
                 num_docs += 1
@@ -3737,6 +3767,7 @@ class CampaignDb:
                     {
                         "visualization_item_uuid": 1,
                         "image_storage": 1,
+                        "campaign_path": 1,
                         "frame_index": 1,
                         "physical_time": 1,
                         "time_index": 1,
@@ -3768,7 +3799,11 @@ class CampaignDb:
                 dataset_uuid = str(doc.get("visualization_item_uuid", "") or "")
                 if not dataset_uuid:
                     continue
-                sources.append(f"/pulsar-image/{dataset_uuid}")
+                source = f"/pulsar-image/{dataset_uuid}"
+                if len(self.collection.distinct("campaign_path")) > 1 and doc.get("campaign_path"):
+                    from pulsar.campaign_overview import campaign_key
+                    source += f"?campaign={campaign_key(doc['campaign_path'])}"
+                sources.append(source)
                 frame_indices.append(frame_index)
                 physical_time = to_float(doc.get("physical_time", None))
                 if physical_time is not None:
@@ -3812,6 +3847,7 @@ class CampaignDb:
 
         proj = {
             "_id": 1,
+            "campaign_path": 1,
             "source_dataset": 1,
             "schema_file_group": 1,
             "schema_mode": 1,
@@ -3859,6 +3895,7 @@ class CampaignDb:
 
             for doc in cursor:
                 vis = str(doc.get("visualization_name", "") or "")
+                campaign_path = str(doc.get("campaign_path", "") or "")
                 source_dataset = str(doc.get("source_dataset", "") or "")
                 schema_file_group = str(doc.get("schema_file_group", "") or "")
                 schema_mode = str(doc.get("schema_mode", "") or "")
@@ -3887,6 +3924,10 @@ class CampaignDb:
 
                 if str(doc.get("variable_type", "") or "") == "video":
                     metadata = _dict_field(doc.get("visualization_item_metadata", {}))
+                    media_scope = ""
+                    if len(self.collection.distinct("campaign_path")) > 1 and campaign_path:
+                        from pulsar.campaign_overview import campaign_key
+                        media_scope = f"?campaign={campaign_key(campaign_path)}"
                     dataset_uuid = str(
                         doc.get("visualization_item_uuid", "") or ""
                     )
@@ -3902,6 +3943,7 @@ class CampaignDb:
                         "variable_id": variable_id,
                         "visualization_name": vis,
                         "source_dataset": source_dataset,
+                        "campaign_path": campaign_path,
                         "schema_name": "",
                         "schema_file_group": "",
                         "schema_role": "",
@@ -3929,12 +3971,12 @@ class CampaignDb:
                             doc.get("visualization_activity_provenance", {})
                         ),
                         "visualization_item_uuid": dataset_uuid,
-                        "src": f"/pulsar-media/{dataset_uuid}" if dataset_uuid else "",
+                        "src": f"/pulsar-media/{dataset_uuid}{media_scope}" if dataset_uuid else "",
                         "media_type": "video",
                         "status": "ok" if dataset_uuid else "unavailable",
                         "note": "" if dataset_uuid else "missing video dataset UUID",
                         "fps": float(metadata.get("fps", fps) or fps),
-                        "poster": f"/pulsar-image/{metadata['poster_uuid']}"
+                        "poster": f"/pulsar-image/{metadata['poster_uuid']}{media_scope}"
                         if metadata.get("poster_uuid")
                         else "",
                         "frame_count": frame_count,

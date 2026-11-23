@@ -65,6 +65,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuVisible = False
         self.state.contextMenuKind = ""
         self.state.contextMenuItem = ""
+        self._context_menu_campaign_path = ""
         self.state.contextMenuItemLabel = ""
         self.state.contextMenuTabPaneId = ""
         self.state.contextMenuTabId = ""
@@ -75,6 +76,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuCellCanPlotSettings = False
         self.state.contextMenuCellCanScalarFieldSettings = False
         self.state.contextMenuCellCanResetView = False
+        self.state.contextMenuCellCanExport = False
         self.state.contextMenuCellVisualizationOptions = []
         self.state.contextMenuCellSelectedVisualization = ""
         self.state.contextMenuCellSourcePlugins = []
@@ -85,7 +87,7 @@ class ContextMenuControllerMixin:
     def hide_context_menu_trigger(self, **_):
         self.hide_context_menu()
 
-    def show_item_context_menu(self, item_name, x, y, **_):
+    def show_item_context_menu(self, item_name, x, y, campaign_path="", **_):
         item = str(item_name or "").strip()
         if not item:
             return
@@ -100,6 +102,7 @@ class ContextMenuControllerMixin:
 
         self.state.contextMenuKind = "item"
         self.state.contextMenuItem = item
+        self._context_menu_campaign_path = str(campaign_path or "")
         self.state.contextMenuItemLabel = self.variable_label(item)
         self.state.contextMenuTabPaneId = ""
         self.state.contextMenuTabId = ""
@@ -107,6 +110,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuCellIndex = -1
         self.state.contextMenuCellHasVariable = False
         self.state.contextMenuCellCanAddSource = False
+        self.state.contextMenuCellCanExport = False
         self.state.contextMenuCellVisualizationOptions = []
         self.state.contextMenuCellSelectedVisualization = ""
         self.state.contextMenuCellSourcePlugins = []
@@ -180,6 +184,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuCellCanPlotSettings = can_plot_settings
         self.state.contextMenuCellCanScalarFieldSettings = can_scalar_field_settings
         self.state.contextMenuCellCanResetView = can_reset_view
+        self.state.contextMenuCellCanExport = media_type == "plot1d"
         self.state.contextMenuCellVisualizationOptions = vis_opts
         self.state.contextMenuCellSelectedVisualization = selected_vis
         self.state.contextMenuCellSourcePlugins = source_plugin_entries
@@ -237,12 +242,15 @@ class ContextMenuControllerMixin:
     def context_menu_item_add(self, **_):
         item = str(self.state.contextMenuItem or "").strip()
         if item:
-            self.add_var_to_grid(item)
+            self.add_var_to_grid(item, campaign_path=getattr(self, "_context_menu_campaign_path", ""))
         self.hide_context_menu()
 
     def context_menu_item_select(self, **_):
         item = str(self.state.contextMenuItem or "").strip()
         if item:
+            campaign_path = getattr(self, "_context_menu_campaign_path", "")
+            if campaign_path:
+                self.select_campaign(campaign_path)
             self.set_details_provenance_context(False)
             self.state.selectedVar = item
             self.state.draggedVar = item

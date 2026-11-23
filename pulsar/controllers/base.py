@@ -35,6 +35,7 @@ class ControllerBase:
         self.collection = context.collection
         self.parse_campaign = context.parse_campaign
         self.campaign_path = context.campaign_path
+        self.campaign_paths = tuple(context.campaign_paths or (context.campaign_path,))
         self.image_association_schema_path = context.image_association_schema_path
         self.campaign_schema_path = context.campaign_schema_path
         self.query_translator = context.query_translator

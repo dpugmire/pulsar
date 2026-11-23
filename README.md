@@ -27,6 +27,13 @@ publishing it into campaigns is deferred.
 See [Local Python control](docs/python-control.md) for startup, examples, and
 the versioned API contract.
 
+Python callers can also discover the metadata SQL schema with
+`viewer.query_schema()`, execute read-only joins/rankings with `viewer.query()`,
+and display saved, sortable result tables with `viewer.show_query()`. Tables
+support CSV export, query inspection, and workspace restoration. See
+[Metadata SQL queries](docs/metadata-queries.md) for the views, examples, and
+limits. No raw arrays or media are read by these queries.
+
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a diagram of the browser, Trame,
@@ -86,10 +93,11 @@ than exposing collection documents, ACA paths, or remote API objects to Trame
 controllers. See [PHOBOS_INTEGRATION.md](PHOBOS_INTEGRATION.md) for the planned
 Phobos boundary and remaining migration phases.
 
-Query rearchitecture is currently paused for product and workflow review. See
+The earlier catalog-filter redesign remains documented in
 [QUERY_REDESIGN.md](QUERY_REDESIGN.md) for the current behavior, design options,
 backend constraints, acceptance criteria, and open decisions that should be
-resolved before Phase 5B.2 resumes.
+resolved before Phase 5B.2 resumes. The local Python metadata SQL/result-table
+path described above is additive and does not change that filter behavior.
 
 Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
@@ -190,6 +198,9 @@ Example:
 ```bash
 python app.py campaign.aca
 
+# Browse the contents of all campaign archives in a directory
+python app.py --campaign-directory /path/to/campaigns
+
 # Generate an ephemeral synthetic campaign and launch it
 python app.py --demo
 # Optionally choose a source count from 1 through 49
@@ -206,6 +217,13 @@ python app.py /path/to/lasernet.aca \
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
+
+Directory mode opens a sortable campaign list with expandable directory groups.
+Select a campaign, directory, or BP file to see its metadata and visualization
+samples in the preview pane. A gallery view is also available. View, column,
+and sort preferences are remembered by the browser. Select a result to inspect its
+recorded inputs, linked files, and metadata. See [Campaign browser](docs/campaign-browser.md)
+for data exploration and archive compatibility details.
 
 Demo mode creates 20 time steps for five deterministic sources by default;
 `--demo SOURCE_COUNT` accepts counts from 1 through 49. Each source contains
