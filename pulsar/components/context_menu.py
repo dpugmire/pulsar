@@ -57,6 +57,22 @@ class ContextMenu(TrameComponent):
                 html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
                 with vuetify.Template(v_if="contextMenuCellCanResetView"):
                     html.Div("Reset View", classes="menu-item", click=ctrl.context_menu_cell_reset_view)
+                with vuetify.Template(v_if="contextMenuCellCanExport"):
+                    with html.Div(classes="menu-submenu"):
+                        with html.Div(classes="menu-item menu-submenu-trigger"):
+                            html.Span("Export")
+                            html.Span("›", classes="menu-submenu-arrow")
+                        with html.Div(classes="menu-submenu-panel"):
+                            html.Div(
+                                "SVG…",
+                                classes="menu-item",
+                                click="window.pulsarPlotRuntime && window.pulsarPlotRuntime.exportCell(contextMenuCellIndex, 'svg')",
+                            )
+                            html.Div(
+                                "PNG…",
+                                classes="menu-item",
+                                click="window.pulsarPlotRuntime && window.pulsarPlotRuntime.exportCell(contextMenuCellIndex, 'png')",
+                            )
                 html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
                 with vuetify.Template(v_if="gridLayoutMode === 'spanning'"):
                     with html.Div(classes="menu-submenu"):

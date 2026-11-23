@@ -18,6 +18,7 @@ def defaults():
         "contextMenuCellCanPlotSettings": False,
         "contextMenuCellCanScalarFieldSettings": False,
         "contextMenuCellCanResetView": False,
+        "contextMenuCellCanExport": False,
         "contextMenuCellVisualizationOptions": [],
         "contextMenuCellSelectedVisualization": "",
         "contextMenuCellSourcePlugins": [],
@@ -38,4 +39,5 @@ def right_pane_reset_defaults():
         "contextMenuCellCanAddSource": False,
         "contextMenuCellCanScalarFieldSettings": False,
         "contextMenuCellCanResetView": False,
+        "contextMenuCellCanExport": False,
     }

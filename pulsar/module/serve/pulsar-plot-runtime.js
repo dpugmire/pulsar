@@ -387,6 +387,189 @@
       resetPlotView(el);
     }
   }
+
+  function downloadPlotBlob(blob, filename) {
+    const ownerWindow = runtimeWindow();
+    const url = ownerWindow.URL.createObjectURL(blob);
+    const link = runtimeDocument().createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.style.display = "none";
+    runtimeBody().appendChild(link);
+    link.click();
+    link.remove();
+    ownerWindow.setTimeout(function() { ownerWindow.URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function requestPlotSaveHandle(filename, format) {
+    const ownerWindow = runtimeWindow();
+    if (typeof ownerWindow.showSaveFilePicker !== "function") return null;
+    const type = String(format || "").toLowerCase() === "svg"
+      ? {
+          description: "SVG image",
+          accept: { "image/svg+xml": [".svg"] },
+        }
+      : {
+          description: "PNG image",
+          accept: { "image/png": [".png"] },
+        };
+    try {
+      return ownerWindow.showSaveFilePicker({
+        suggestedName: filename,
+        startIn: "downloads",
+        types: [type],
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  async function writePlotFile(handle, blob) {
+    const ownerWindow = runtimeWindow();
+    try {
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+    } catch (error) {
+      if (error && error.name === "AbortError") return;
+      ownerWindow.alert("Could not save plot: " + String(error && error.message || error));
+    }
+  }
+
+  function savePlotBlob(blob, filename, handlePromise) {
+    if (!handlePromise) {
+      downloadPlotBlob(blob, filename);
+      return;
+    }
+    handlePromise.then(function(handle) {
+      return writePlotFile(handle, blob);
+    }).catch(function(error) {
+      if (error && error.name === "AbortError") return;
+      runtimeWindow().alert("Could not save plot: " + String(error && error.message || error));
+    });
+  }
+
+  function renderPngBlob(svgBlob, pixelWidth, pixelHeight) {
+    return new Promise(function(resolve, reject) {
+      const ownerWindow = runtimeWindow();
+      const canvas = runtimeDocument().createElement("canvas");
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("Could not create a PNG canvas."));
+        return;
+      }
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, pixelWidth, pixelHeight);
+      const image = new ownerWindow.Image();
+      image.onerror = function() {
+        ownerWindow.URL.revokeObjectURL(image.src);
+        reject(new Error("Could not render the plot as PNG."));
+      };
+      image.onload = function() {
+        context.drawImage(image, 0, 0, pixelWidth, pixelHeight);
+        ownerWindow.URL.revokeObjectURL(image.src);
+        canvas.toBlob(function(blob) {
+          if (blob) resolve(blob);
+          else reject(new Error("Could not encode the plot as PNG."));
+        }, "image/png");
+      };
+      image.src = ownerWindow.URL.createObjectURL(svgBlob);
+    });
+  }
+
+  function requestedPngSize(ownerWindow, viewWidth, viewHeight) {
+    const requestedWidth = ownerWindow.prompt(
+      "PNG width in pixels (100–12000):",
+      String(Math.round(viewWidth))
+    );
+    if (requestedWidth === null || String(requestedWidth).trim() === "") return null;
+    const pixelWidth = Math.round(Number(requestedWidth));
+    if (!Number.isFinite(pixelWidth) || pixelWidth < 100 || pixelWidth > 12000) {
+      ownerWindow.alert("Enter a width from 100 to 12000 pixels.");
+      return null;
+    }
+    return {
+      width: pixelWidth,
+      height: Math.max(1, Math.round(pixelWidth * viewHeight / viewWidth)),
+    };
+  }
+
+  function reportPlotSaveError(error) {
+    if (error && error.name === "AbortError") return;
+    runtimeWindow().alert("Could not save plot: " + String(error && error.message || error));
+  }
+
+  function exportPlotCell(cellIndex, format) {
+    const idx = Number(cellIndex);
+    if (!Number.isInteger(idx) || idx < 0 || !runtimeRoot) return;
+    const normalizedFormat = String(format || "").toLowerCase();
+    if (normalizedFormat !== "svg" && normalizedFormat !== "png") return;
+    const cell = runtimeRoot.querySelector(
+      '.pulsar-dropcell[data-cell-index="' + String(idx) + '"]'
+    );
+    const el = cell && cell.querySelector(".pulsar-plot1d");
+    if (!el) return;
+    const filename = "pulsar-plot-" + (idx + 1);
+    const saveHandle = requestPlotSaveHandle(
+      filename + "." + normalizedFormat,
+      normalizedFormat
+    );
+    renderPlot1d(el);
+    const sourceSvg = el.querySelector("svg");
+    if (!sourceSvg) return;
+
+    const svg = sourceSvg.cloneNode(true);
+    svg.querySelectorAll(
+      ".pulsar-plot1d-cursor-line, g[display='none'], g[pointer-events='none']"
+    ).forEach(function(node) {
+      node.remove();
+    });
+    const viewBox = (svg.getAttribute("viewBox") || "0 0 300 300")
+      .trim().split(/[ ,]+/).map(Number);
+    const viewWidth = Math.max(1, Number(viewBox[2]) || 300);
+    const viewHeight = Math.max(1, Number(viewBox[3]) || 300);
+    svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    svg.setAttribute("width", String(viewWidth));
+    svg.setAttribute("height", String(viewHeight));
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.style.background = "#ffffff";
+    svg.style.fontFamily = "Arial, Helvetica, sans-serif";
+    const background = createSvgNode("rect");
+    background.setAttribute("x", "0");
+    background.setAttribute("y", "0");
+    background.setAttribute("width", String(viewWidth));
+    background.setAttribute("height", String(viewHeight));
+    background.setAttribute("fill", "#ffffff");
+    svg.insertBefore(background, svg.firstChild);
+
+    const ownerWindow = runtimeWindow();
+    const serialized = new ownerWindow.XMLSerializer().serializeToString(svg);
+    const svgBlob = new ownerWindow.Blob([serialized], {
+      type: "image/svg+xml;charset=utf-8",
+    });
+    if (normalizedFormat === "svg") {
+      savePlotBlob(svgBlob, filename + ".svg", saveHandle);
+      return;
+    }
+
+    if (saveHandle) {
+      saveHandle.then(async function(handle) {
+        const size = requestedPngSize(ownerWindow, viewWidth, viewHeight);
+        if (!size) return;
+        const pngBlob = await renderPngBlob(svgBlob, size.width, size.height);
+        await writePlotFile(handle, pngBlob);
+      }).catch(reportPlotSaveError);
+      return;
+    }
+
+    const size = requestedPngSize(ownerWindow, viewWidth, viewHeight);
+    if (!size) return;
+    renderPngBlob(svgBlob, size.width, size.height).then(function(blob) {
+      downloadPlotBlob(blob, filename + ".png");
+    }).catch(reportPlotSaveError);
+  }
   function plotLocalPoint(el, event) {
     const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0 };
     return {
@@ -1320,6 +1503,7 @@
   runtime.renderAll = renderAllPlot1d;
   runtime.updateCursors = updatePlotCursors;
   runtime.resetViewForCellIndex = resetPlotViewForCellIndex;
+  runtime.exportCell = exportPlotCell;
   runtime.scheduleRender = scheduleRenderAllPlot1d;
   runtimes.plot = runtime;
   window.pulsarPlotRuntime = runtime;

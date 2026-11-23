@@ -76,6 +76,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuCellCanPlotSettings = False
         self.state.contextMenuCellCanScalarFieldSettings = False
         self.state.contextMenuCellCanResetView = False
+        self.state.contextMenuCellCanExport = False
         self.state.contextMenuCellVisualizationOptions = []
         self.state.contextMenuCellSelectedVisualization = ""
         self.state.contextMenuCellSourcePlugins = []
@@ -109,6 +110,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuCellIndex = -1
         self.state.contextMenuCellHasVariable = False
         self.state.contextMenuCellCanAddSource = False
+        self.state.contextMenuCellCanExport = False
         self.state.contextMenuCellVisualizationOptions = []
         self.state.contextMenuCellSelectedVisualization = ""
         self.state.contextMenuCellSourcePlugins = []
@@ -182,6 +184,7 @@ class ContextMenuControllerMixin:
         self.state.contextMenuCellCanPlotSettings = can_plot_settings
         self.state.contextMenuCellCanScalarFieldSettings = can_scalar_field_settings
         self.state.contextMenuCellCanResetView = can_reset_view
+        self.state.contextMenuCellCanExport = media_type == "plot1d"
         self.state.contextMenuCellVisualizationOptions = vis_opts
         self.state.contextMenuCellSelectedVisualization = selected_vis
         self.state.contextMenuCellSourcePlugins = source_plugin_entries
