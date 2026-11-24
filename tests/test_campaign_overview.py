@@ -21,6 +21,8 @@ from pulsar.campaign_overview import (
     campaign_summary,
 )
 from pulsar.controllers.campaigns import CampaignOverviewControllerMixin
+from pulsar.controllers.grid import GridControllerMixin
+from pulsar.models.grid import empty_grid_cell
 from sqlite_store import SQLiteCampaignCollection
 
 
@@ -90,6 +92,200 @@ def test_copies_keep_separate_contents_and_packages_use_recorded_links(tmp_path)
         assert overview[0]["results"][0]["id"] != overview[1]["results"][0]["id"]
     finally:
         collection.close()
+
+
+def test_visualization_associations_keep_variables_grouped_by_source_file(tmp_path):
+    path = str(tmp_path / "campaign.aca")
+    docs = [{
+        "campaign_path": path, "variable_type": "image", "variable_id": "pressure",
+        "visualization_name": "comparison", "visualization_sequence_name": "comparison",
+        "visualization_variables": [
+            {"name": "pressure", "source_dataset": "run-a/output.bp"},
+            {"name": "density", "source_dataset": "run-a/output.bp"},
+            {"name": "pressure", "source_dataset": "run-b/output.bp"},
+        ],
+    }]
+    result = campaign_summary(path, docs, {"uuid": "", "datasets": [], "error": ""})["results"][0]
+    assert result["inputs"] == [
+        {"source": "run-a/output.bp", "variable": "pressure"},
+        {"source": "run-a/output.bp", "variable": "density"},
+        {"source": "run-b/output.bp", "variable": "pressure"},
+    ]
+    assert result["has_variable_association"] is True
+
+
+def test_campaign_overview_refresh_exposes_variable_free_visualizations_in_catalog():
+    campaign = {
+        "id": "campaign", "name": "Campaign", "path": "/campaign.aca", "error": "",
+        "datasets": [], "supporting_files": [], "results": [
+            {"id": "standalone", "title": "Campaign overview", "kind": "Image",
+             "has_variable_association": False, "inputs": [], "artifacts": []},
+            {"id": "file-only", "title": "File-based image", "kind": "Image",
+             "has_variable_association": False, "inputs": [{"source": "guide.txt", "variable": ""}], "artifacts": []},
+            {"id": "associated", "title": "Variable image", "kind": "Image",
+             "has_variable_association": True, "inputs": [{"source": "run.bp", "variable": "pressure"}], "artifacts": []},
+        ],
+    }
+    controller = CampaignOverviewControllerMixin()
+    controller._campaign_result_records = {}
+    controller._campaign_load_errors = {}
+    controller.campaign_paths = ["/campaign.aca"]
+    controller.collection = Mock()
+    controller.state = SimpleNamespace()
+    with patch("pulsar.controllers.campaigns.build_campaign_overview", return_value=[campaign]):
+        controller.refresh_campaign_overview()
+    assert [item["id"] for item in controller.state.campaignVisualizations] == ["standalone", "file-only"]
+    assert controller._campaign_result_records["file-only"]["inputs"][0]["source"] == "guide.txt"
+
+
+def test_campaign_visualization_drop_creates_workspace_media_tile():
+    class Controller(GridControllerMixin):
+        def __init__(self):
+            self.state = SimpleNamespace(gridCells=[empty_grid_cell()], activeGridCell=-1)
+            self._campaign_result_records = {
+                "campaign-result": {
+                    "campaign_path": "/demo.aca", "title": "Synthetic campaign guide",
+                    "preview": "/pulsar-campaign-preview/campaign-result", "video": "",
+                }
+            }
+
+        @staticmethod
+        def is_valid_grid_index(index):
+            return index == 0
+
+        @staticmethod
+        def normalize_grid_cells(cells):
+            return list(cells)
+
+        def set_grid_selection(self, indices, active=None):
+            self.state.selectedGridCellIndices = indices
+            self.state.activeGridCell = active
+
+    controller = Controller()
+    controller.assign_campaign_visualization_to_grid_cell_trigger("campaign-result", 0)
+    cell = controller.state.gridCells[0]
+    assert cell["variable_id"] == ""
+    assert cell["media_type"] == "image"
+    assert cell["src"] == "/pulsar-campaign-preview/campaign-result"
+    assert cell["display_title"] == "Synthetic campaign guide"
+
+
+def test_campaign_image_sequence_drop_preserves_its_frames():
+    class Controller(GridControllerMixin):
+        def __init__(self):
+            self.state = SimpleNamespace(gridCells=[empty_grid_cell()], activeGridCell=-1)
+            self._campaign_result_records = {
+                "sequence": {
+                    "title": "Campaign sequence", "preview": "/preview/sequence",
+                    "frame_sources": ["/pulsar-image/frame-a", "/pulsar-image/frame-b"],
+                    "frame_indices": [0, 1], "time_values": [0, 1],
+                }
+            }
+
+        @staticmethod
+        def is_valid_grid_index(index):
+            return index == 0
+
+        @staticmethod
+        def normalize_grid_cells(cells):
+            return list(cells)
+
+        def set_grid_selection(self, indices, active=None):
+            self.state.selectedGridCellIndices = indices
+            self.state.activeGridCell = active
+
+    controller = Controller()
+    controller.assign_campaign_visualization_to_grid_cell_trigger("sequence", 0)
+    cell = controller.state.gridCells[0]
+    assert cell["media_type"] == "image_sequence"
+    assert cell["src"] == "/pulsar-image/frame-a"
+    assert cell["frame_count"] == 2
+    assert cell["frame_sources"] == ["/pulsar-image/frame-a", "/pulsar-image/frame-b"]
+
+
+def test_campaign_visualization_drop_adds_a_tile_to_freeform_canvas():
+    class Controller(GridControllerMixin):
+        def __init__(self):
+            self.state = SimpleNamespace(
+                gridCells=[], canvasSnapToGrid=False, canvasDefaultTileWidth=8,
+                canvasLayoutRevision=0, canvasLayoutError="",
+                workspaceActivePaneId="pane", workspaceActiveTabId="tab",
+            )
+            self._campaign_result_records = {
+                "campaign-result": {
+                    "campaign_path": "/demo.aca", "title": "Synthetic campaign guide",
+                    "preview": "/pulsar-campaign-preview/campaign-result",
+                }
+            }
+
+        @staticmethod
+        def normalize_grid_layout_mode():
+            return "freeform"
+
+        @staticmethod
+        def normalize_grid_cells(cells):
+            return list(cells)
+
+        @staticmethod
+        def canvas_columns():
+            return 24
+
+        @staticmethod
+        def canvas_geometries(cells):
+            return []
+
+        @staticmethod
+        def next_canvas_tile_id(cells):
+            return "tile-1"
+
+        def set_grid_selection(self, indices, active=None):
+            self.state.selectedGridCellIndices = indices
+            self.state.activeGridCell = active
+
+    controller = Controller()
+    controller.add_campaign_visualization_to_canvas_trigger(
+        "campaign-result", {"x": 4, "y": 5, "w": 8, "h": 6}, "pane", "tab"
+    )
+    assert len(controller.state.gridCells) == 1
+    assert controller.state.gridCells[0]["display_title"] == "Synthetic campaign guide"
+    assert controller.state.gridCells[0]["canvas_x"] == 4
+    assert controller.state.gridCells[0]["canvas_y"] == 5
+    assert controller.state.canvasLayoutRevision == 1
+
+
+def test_campaign_selection_lists_all_visualizations_including_unassociated_results(tmp_path):
+    campaign = {
+        "id": "campaign", "name": "Campaign", "path": str(tmp_path / "campaign.aca"),
+        "error": "", "datasets": [], "supporting_files": [], "results": [
+            {"id": str(index), "title": f"Visualization {index}", "preview": f"/preview/{index}",
+             "caption": "Time not recorded", "kind": "Image", "inputs": [], "artifacts": []}
+            for index in range(5)
+        ],
+    }
+    controller = CampaignOverviewControllerMixin()
+    controller._campaign_overview_records = [campaign]
+    controller.state = SimpleNamespace()
+    controller.select_campaign_overview_entry({"kind": "campaign", "campaign_path": campaign["path"]})
+    assert [item["id"] for item in controller.state.campaignSelection["results"]] == ["0", "1", "2", "3", "4"]
+
+
+def test_result_inspector_groups_sources_and_contributing_variables():
+    result = {
+        "id": "result", "inputs": [
+            {"source": "run-b/output.bp", "variable": "pressure"},
+            {"source": "run-a/output.bp", "variable": "density"},
+            {"source": "run-a/output.bp", "variable": "pressure"},
+            {"source": "run-a/output.bp", "variable": "pressure"},
+        ],
+    }
+    controller = CampaignOverviewControllerMixin()
+    controller._campaign_result_records = {"result": result}
+    controller.state = SimpleNamespace()
+    controller.inspect_campaign_result("result")
+    assert controller.state.campaignPackage["source_groups"] == [
+        {"source": "run-a/output.bp", "variables": ["density", "pressure"], "roles": []},
+        {"source": "run-b/output.bp", "variables": ["pressure"], "roles": []},
+    ]
 
 
 def test_inventory_does_not_create_missing_archives(tmp_path):
@@ -397,6 +593,21 @@ def test_overview_shows_only_recorded_bp_datasets_and_three_visualizations(tmp_p
     assert campaign["results"][1]["metadata_text"] == "Detailed record"
 
 
+def test_campaign_selection_keeps_visualizations_without_previews_visible():
+    campaign = {
+        "id": "campaign", "name": "Campaign", "path": "/campaign.aca", "error": "",
+        "datasets": [], "results": [
+            {"id": "scalar", "title": "Scalar field", "kind": "Scalar field", "preview": "", "video": "",
+             "caption": "Time not recorded", "inputs": [], "artifacts": [], "dataset_path": ""},
+        ],
+    }
+    controller = CampaignOverviewControllerMixin()
+    controller._campaign_overview_records = [campaign]
+    controller.state = SimpleNamespace()
+    controller.select_campaign_overview_entry({"kind": "campaign", "campaign_path": "/campaign.aca"})
+    assert controller.state.campaignSelection["results"][0]["id"] == "scalar"
+
+
 def test_directory_groups_keep_bp_paths_and_sample_visualizations_per_directory():
     def result(identifier, sources=(), stored=""):
         return {
@@ -471,6 +682,76 @@ def test_registered_package_metadata_survives_failed_data_ingestion(tmp_path):
         assert result["artifacts"][0]["name"] == "analysis.json"
     finally:
         collection.close()
+
+
+def test_raw_archive_visualization_preserves_each_source_variable_association(tmp_path):
+    path = tmp_path / "campaign.aca"
+    make_archive(path)
+    with sqlite3.connect(path) as con:
+        con.executescript(
+            "create table visualization_sequence(visid int,name text,vistype text,metadata text);"
+            "create table visualization_variable(visid int,datasetid int,variable_name text,role text);"
+            "create table visualization_item(visid int,item_order int,item_type text,item_uuid text,metadata text);"
+        )
+        con.executemany("insert into dataset values(?,?,?,0)", [
+            ("run-a/output.bp", "run-a-id", "ADIOS"),
+            ("run-b/output.bp", "run-b-id", "ADIOS"),
+            ("comparison.png", "image-id", "IMAGE"),
+        ])
+        con.execute("insert into visualization_sequence values(1,'plots/comparison','heatmap','{}')")
+        con.executemany("insert into visualization_variable values(?,?,?,?)", [
+            (1, 5, "pressure", "primary"), (1, 6, "density", "comparison"),
+        ])
+        con.execute("insert into visualization_item values(1,0,'IMAGE','image-id','{}')")
+    collection = SQLiteCampaignCollection(tmp_path / "sidecar.sqlite")
+    try:
+        overview = build_campaign_overview(collection, [str(path)])
+        assert overview[0]["results"][0]["inputs"] == [
+            {"source": "run-a/output.bp", "variable": "pressure"},
+            {"source": "run-b/output.bp", "variable": "density"},
+        ]
+    finally:
+        collection.close()
+
+
+def test_raw_archive_reader_exposes_source_only_and_unassociated_visualizations(tmp_path):
+    from ingest_campaign import _load_visualization_api_index
+    from pulsar.campaign_overview import archive_result_documents
+
+    path = tmp_path / "campaign.aca"
+    make_archive(path)
+    with sqlite3.connect(path) as con:
+        con.executescript(
+            "create table visualization_sequence(visid int,name text,vistype text,metadata text);"
+            "create table visualization_variable(visid int,datasetid int,variable_name text,role text);"
+            "create table visualization_file(visid int,datasetid int,role text);"
+            "create table visualization_item(visid int,item_order int,item_type text,item_uuid text,metadata text);"
+        )
+        con.executemany("insert into dataset values(?,?,?,0)", [
+            ("guide.png", "guide-id", "IMAGE"),
+            ("unassociated.png", "other-guide-id", "IMAGE"),
+        ])
+        con.executemany("insert into visualization_sequence values(?,?,?,?)", [
+            (1, "campaign/guide", "image", "{}"),
+            (2, "campaign/unassociated", "image", "{}"),
+        ])
+        con.execute("insert into visualization_file values(1,2,'context')")
+        con.executemany("insert into visualization_item values(?,?,?,?,?)", [
+            (1, 0, "IMAGE", "guide-id", "{}"),
+            (2, 0, "IMAGE", "other-guide-id", "{}"),
+        ])
+
+    entries = _load_visualization_api_index(str(path))
+    guide = next(entry for entry in entries.values() if entry["sequence_name"] == "campaign/guide")
+    assert guide["variables"] == []
+    assert guide["source_files"] == [{"dataset": "analysis.json", "role": "context"}]
+    documents = archive_result_documents(str(path))
+    campaign = campaign_summary(str(path), documents, archive_inventory(str(path)))
+    by_title = {result["title"]: result for result in campaign["results"]}
+    assert by_title["guide"]["inputs"] == [
+        {"source": "analysis.json", "variable": "", "role": "context"}
+    ]
+    assert by_title["unassociated"]["inputs"] == []
 
 
 def test_unassociated_images_are_visible_without_invented_inputs(tmp_path):

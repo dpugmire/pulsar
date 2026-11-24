@@ -2890,6 +2890,15 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
             scalar_metadata_select = "NULL as scalar_field_metadata"
             scalar_metadata_join = ""
 
+        source_file_select = "source_file.name as source_file, vf.role as source_file_role"
+        source_file_join = (
+            "left join visualization_file as vf on vf.visid = vs.visid "
+            "left join dataset as source_file on source_file.rowid = vf.datasetid"
+        )
+        if "visualization_file" not in available_tables:
+            source_file_select = "NULL as source_file, NULL as source_file_role"
+            source_file_join = ""
+
         # The visualization API describes payloads semantically, while the
         # payload datasets hold either rendered images or raw scalar fields.
         # This join builds the bridge: sequence -> item dataset, plus sequence
@@ -2911,13 +2920,15 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                 {scalar_metadata_select},
                 source_dataset.name as source_dataset,
                 vv.variable_name as variable_name,
-                vv.role as role
+                vv.role as role,
+                {source_file_select}
             from visualization_sequence as vs
             join visualization_item as vi on vi.visid = vs.visid
             left join dataset as item_dataset on item_dataset.uuid = vi.item_uuid
             {scalar_metadata_join}
             left join visualization_variable as vv on vv.visid = vs.visid
             left join dataset as source_dataset on source_dataset.rowid = vv.datasetid
+            {source_file_join}
             where upper(vi.item_type) in ('IMAGE', 'SCALAR_FIELD', 'VIDEO')
             order by vs.visid, vi.item_order, vv.variable_name, vv.role
             """
@@ -2955,6 +2966,7 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                     ),
                     "scalar_field_metadata": _json_object_or_empty(row["scalar_field_metadata"]),
                     "variables": [],
+                    "source_files": [],
                 },
             )
 
@@ -2970,6 +2982,15 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                         "source_dataset": str(row["source_dataset"] or ""),
                     }
                 )
+
+            source_file = str(row["source_file"] or "").strip()
+            if source_file:
+                association = {
+                    "dataset": source_file,
+                    "role": str(row["source_file_role"] or "source"),
+                }
+                if association not in entry["source_files"]:
+                    entry["source_files"].append(association)
 
         for entry in index.values():
             variables = _normalize_visualization_variables(entry.get("variables", []))
@@ -3974,6 +3995,7 @@ def parse_campaign(
                     )
                     visualization_variables = list(visualization_api_entry.get("variables", []))
                     display_variables = list(visualization_api_entry.get("display_variables", []))
+                    image_variable_records = []
                     if display_variables:
                         # Insert one viewer document per displayed source
                         # variable. Multi-variable visualizations therefore show
@@ -3995,6 +4017,16 @@ def parse_campaign(
                                     "source_dataset": str(api_var.get("source_dataset", "") or ""),
                                 }
                             )
+                    else:
+                        image_variable_records = [
+                            {
+                                "physical_var": "",
+                                "logical_var": "",
+                                "variable_id": "",
+                                "roles": [],
+                                "source_dataset": "",
+                            }
+                        ]
                     association_source = str(
                         visualization_api_entry.get(
                             "association_source",
@@ -4039,7 +4071,7 @@ def parse_campaign(
                             print("[warn]", msg)
                         association_source = "legacy-unmatched"
 
-                if not image_variable_records:
+                if not image_variable_records and visualization_api_entry is None:
                     image_variable_records = [
                         {
                             "physical_var": physical_var,
@@ -4111,6 +4143,7 @@ def parse_campaign(
                                 visualization_api_entry.get("visualization_kind", "") or ""
                             ),
                             "visualization_variables": visualization_variables,
+                            "visualization_files": visualization_api_entry.get("source_files", []),
                             "visualization_item_order": int(
                                 visualization_api_entry.get("item_order", 0) or 0
                             ),
@@ -4141,7 +4174,9 @@ def parse_campaign(
                         )
 
                 for record in image_variable_records:
-                    record_source_dataset = str(record.get("source_dataset", "") or source_dataset)
+                    record_source_dataset = str(record.get("source_dataset", "") or "")
+                    if visualization_api_entry is None:
+                        record_source_dataset = record_source_dataset or source_dataset
                     document = dict(base_document)
                     # These fields are the normalized viewer-facing association:
                     # which source variable this image represents, which source
@@ -4157,15 +4192,16 @@ def parse_campaign(
                             "visualization_source_dataset": record_source_dataset,
                         }
                     )
-                    document.update(
-                        _schema_metadata_for_variable(
-                            schema_context,
-                            record_source_dataset or source_dataset,
-                            str(record.get("variable_id") or record["physical_var"]),
-                            frame_index=frame_index_value,
-                            include_time_values=False,
+                    if record.get("variable_id") or record.get("physical_var"):
+                        document.update(
+                            _schema_metadata_for_variable(
+                                schema_context,
+                                record_source_dataset or source_dataset,
+                                str(record.get("variable_id") or record["physical_var"]),
+                                frame_index=frame_index_value,
+                                include_time_values=False,
+                            )
                         )
-                    )
                     collection.insert_one(document)
                 continue
             else:
@@ -4229,21 +4265,10 @@ def parse_campaign(
                 visualization_api_entry.get("display_variables", [])
             )
             if not display_variables:
-                display_variables = [
-                    {
-                        "name": str(
-                            visualization_api_entry.get("visualization_name", "")
-                            or item_name
-                        ),
-                        "roles": [],
-                        "source_dataset": "",
-                    }
-                ]
+                display_variables = [{"name": "", "roles": [], "source_dataset": ""}]
             visual_variables = list(visualization_api_entry.get("variables", []))
             for api_var in display_variables:
                 physical_var = str(api_var.get("name", "") or "").strip()
-                if not physical_var:
-                    continue
                 source_dataset = str(api_var.get("source_dataset", "") or "")
                 try:
                     item_order = int(
@@ -4282,6 +4307,7 @@ def parse_campaign(
                     ),
                     "visualization_item_type": "IMAGE",
                     "visualization_variables": visual_variables,
+                    "visualization_files": visualization_api_entry.get("source_files", []),
                     "visualization_roles": list(api_var.get("roles", [])),
                     "variable_path": item_name,
                     "variable_type": "image",
@@ -4297,15 +4323,16 @@ def parse_campaign(
                         or "visualization-api"
                     ),
                 }
-                document.update(
-                    _schema_metadata_for_variable(
-                        schema_context,
-                        source_dataset,
-                        physical_var,
-                        frame_index=item_order,
-                        include_time_values=False,
+                if physical_var:
+                    document.update(
+                        _schema_metadata_for_variable(
+                            schema_context,
+                            source_dataset,
+                            physical_var,
+                            frame_index=item_order,
+                            include_time_values=False,
+                        )
                     )
-                )
                 collection.insert_one(document)
             continue
 
@@ -4358,10 +4385,8 @@ def parse_campaign(
             if not variable_records:
                 variable_records = [
                     {
-                        "physical_var": item_name,
-                        "logical_var": _map_physical_to_logical_name(
-                            item_name, image_assoc_schema
-                        ),
+                        "physical_var": "",
+                        "logical_var": "",
                         "source_dataset": "",
                         "roles": [],
                     }
@@ -4404,6 +4429,7 @@ def parse_campaign(
                     ),
                     "visualization_item_type": "VIDEO",
                     "visualization_variables": normalized_video_variables,
+                    "visualization_files": visualization_api_entry.get("source_files", []),
                     "visualization_roles": record["roles"],
                     "variable_path": item_name,
                     "variable_type": "video",
@@ -4463,15 +4489,8 @@ def parse_campaign(
                 )
 
         if not scalar_variable_records:
-            fallback_var = visualization_name or item_name
             scalar_variable_records = [
-                {
-                    "physical_var": fallback_var,
-                    "logical_var": _map_physical_to_logical_name(fallback_var, image_assoc_schema),
-                    "variable_id": fallback_var,
-                    "roles": [],
-                    "source_dataset": "",
-                }
+                {"physical_var": "", "logical_var": "", "variable_id": "", "roles": [], "source_dataset": ""}
             ]
 
         fmin = _to_float(scalar_metadata.get("min", None))
@@ -4503,6 +4522,7 @@ def parse_campaign(
             "visualization_sequence_name": str(visualization_api_entry.get("sequence_name", "") or ""),
             "visualization_kind": str(visualization_api_entry.get("visualization_kind", "") or ""),
             "visualization_variables": list(visualization_api_entry.get("variables", [])),
+            "visualization_files": visualization_api_entry.get("source_files", []),
             "visualization_item_order": int(visualization_api_entry.get("item_order", 0) or 0),
             "visualization_item_uuid": str(visualization_api_entry.get("item_uuid", "") or ""),
             "visualization_item_type": item_type,
@@ -4534,15 +4554,16 @@ def parse_campaign(
                     "visualization_source_dataset": record_source_dataset,
                 }
             )
-            document.update(
-                _schema_metadata_for_variable(
-                    schema_context,
-                    record_source_dataset,
-                    str(record.get("variable_id") or record["physical_var"]),
-                    frame_index=int(visualization_api_entry.get("item_order", 0) or 0),
-                    include_time_values=False,
+            if record.get("variable_id") or record.get("physical_var"):
+                document.update(
+                    _schema_metadata_for_variable(
+                        schema_context,
+                        record_source_dataset,
+                        str(record.get("variable_id") or record["physical_var"]),
+                        frame_index=int(visualization_api_entry.get("item_order", 0) or 0),
+                        include_time_values=False,
+                    )
                 )
-            )
             collection.insert_one(document)
             scalar_field_visualization_count += 1
 

@@ -37,6 +37,24 @@ class CampaignOverviewControllerMixin:
                 self._campaign_result_records[result["id"]] = result
         self._campaign_overview_records = campaigns
         self.state.campaignOverview = [campaign_overview_card(campaign) for campaign in campaigns]
+        self.state.campaignVisualizations = [
+            {
+                "id": result["id"],
+                "campaign_path": campaign["path"],
+                "campaign_name": campaign["name"],
+                "title": result["title"],
+                "kind": result["kind"],
+                "preview": result.get("preview", ""),
+                "video": result.get("video", ""),
+                "frame_sources": result.get("frame_sources", []),
+                "frame_indices": result.get("frame_indices", []),
+                "time_values": result.get("time_values", []),
+                "caption": result.get("caption", ""),
+            }
+            for campaign in campaigns
+            for result in campaign["results"]
+            if not result.get("has_variable_association", False)
+        ]
 
     def select_campaign_overview_entry(self, selection, **_):
         if not isinstance(selection, dict):
@@ -80,10 +98,12 @@ class CampaignOverviewControllerMixin:
             results = [result for result in results if result["id"] in result_ids]
         elif kind != "campaign":
             return
+        # Campaign selection is the campaign-wide visualization catalog. File
+        # and directory selections remain scoped to their associated results.
         detail["results"] = [
             {key: result[key] for key in ("id", "title", "preview", "caption", "kind")}
-            for result in results if result.get("preview")
-        ][:3]
+            for result in results
+        ]
         self.state.campaignSelection = detail
 
     def explore_campaign_dataset(self, campaign_path, dataset="", **_):
@@ -108,6 +128,21 @@ class CampaignOverviewControllerMixin:
             return
         package = deepcopy(result)
         package.pop("_preview", None)
+        package["inputs"] = sorted(
+            package.get("inputs", []),
+            key=lambda item: (item.get("source", ""), item.get("variable", ""), item.get("role", "")),
+        )
+        source_groups = {}
+        for item in package["inputs"]:
+            group = source_groups.setdefault(
+                item.get("source", ""),
+                {"source": item.get("source", ""), "variables": [], "roles": []},
+            )
+            if item.get("variable") and item["variable"] not in group["variables"]:
+                group["variables"].append(item["variable"])
+            if item.get("role") and item["role"] not in group["roles"]:
+                group["roles"].append(item["role"])
+        package["source_groups"] = list(source_groups.values())
         self.state.campaignPackage = package
         self.state.campaignFile = {}
         self.state.showCampaignPackage = True

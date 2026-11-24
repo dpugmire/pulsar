@@ -48,7 +48,7 @@ class CampaignOverview(TrameComponent):
                 html.Summary("Recorded run parameters")
                 with html.Div(v_for="parameter in campaignSelection.parameters", key="parameter.name + parameter.value"):
                     html.Div("{{ parameter.name }} = {{ parameter.value }}", classes="pulsar-campaign-input")
-            html.H4("Visualizations", classes="pulsar-campaign-selection-gallery-title")
+            html.H4("{{ campaignSelection.kind === 'campaign' ? 'Campaign visualizations' : 'Visualizations' }}", classes="pulsar-campaign-selection-gallery-title")
             html.P("No recorded visualization previews for this selection", v_if="!campaignSelection.results.length", classes="pulsar-campaign-muted")
             with html.Div(classes="pulsar-campaign-selection-gallery"):
                 with vuetify.Template(v_for="result in campaignSelection.results", key="result.id"):
@@ -75,9 +75,13 @@ class CampaignOverview(TrameComponent):
                         html.Img(v_if="campaignPackage.preview && !campaignPackage.video", src=("campaignPackage.preview",), alt=("campaignPackage.title",), classes="pulsar-campaign-inspector-media", raw_attrs=['onerror="this.style.display=\'none\'"'])
                         html.H3("Associated data")
                         html.P("No source associations recorded", v_if="!campaignPackage.inputs.length", classes="pulsar-campaign-muted")
-                        with vuetify.Template(v_for="input in campaignPackage.inputs", key="input.source + '::' + input.variable"):
-                            html.Div("{{ input.source }} → {{ input.variable }}", classes="pulsar-campaign-input")
-                            vuetify.VBtn("Browse input", v_if="campaignPackage.explorable_sources.includes(input.source)", variant="text", size="small", click=(ctrl.explore_campaign_dataset, "[campaignPackage.campaign_path, input.source]"))
+                        with html.Div(v_for="group in campaignPackage.source_groups", key="group.source"):
+                            html.Div("{{ group.source }}", classes="pulsar-campaign-input")
+                            html.Div("{{ group.roles.join(', ') }}", v_if="group.roles.length", classes="pulsar-campaign-muted")
+                            with html.Div(v_for="variable in group.variables", key="variable", classes="pulsar-campaign-source-variable"):
+                                html.Span("↳ {{ variable }}")
+                            vuetify.VBtn("Browse source", v_if="campaignPackage.explorable_sources.includes(group.source)", variant="text", size="small", click=(ctrl.explore_campaign_dataset, "[campaignPackage.campaign_path, group.source]"))
+                            vuetify.VBtn("File details", v_if="!campaignPackage.explorable_sources.includes(group.source)", variant="text", size="small", click=(ctrl.inspect_campaign_file, "[campaignPackage.campaign_path, group.source]"))
                         html.H3("Linked files")
                         html.P("No configuration or data file links recorded", v_if="!campaignPackage.artifacts.length", classes="pulsar-campaign-muted")
                         with vuetify.Template(v_for="file in campaignPackage.artifacts", key="file.name"):

@@ -135,6 +135,8 @@ def merge_grid_geometry(cell: GridCell, index: int, rows: int, cols: int) -> Gri
 
 
 def cell_has_content(cell: GridCell) -> bool:
+    if cell.get("campaign_visualization_id"):
+        return True
     if str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip():
         return True
     if str(cell.get("src", "") or cell.get("media_type", "") or "").strip():
@@ -351,7 +353,12 @@ def is_selectable_grid_cell(cells: List[GridCell], index: int) -> bool:
     if bool(cell.get("grid_hidden", False)):
         return False
     return bool(
-        str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+        str(
+            cell.get("campaign_visualization_id", "")
+            or cell.get("variable_id", "")
+            or cell.get("variable_name", "")
+            or ""
+        ).strip()
     )
 
 

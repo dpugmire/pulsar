@@ -67,6 +67,8 @@ class GridControllerMixin:
         ),
         ("move_grid_cell_trigger", "move_grid_cell_trigger"),
         ("assign_var_to_grid_cell_trigger", "assign_var_to_grid_cell_trigger"),
+        ("assign_campaign_visualization_to_grid_cell_trigger", "assign_campaign_visualization_to_grid_cell_trigger"),
+        ("add_campaign_visualization_to_canvas_trigger", "add_campaign_visualization_to_canvas_trigger"),
         ("commit_canvas_layout_trigger", "commit_canvas_layout_trigger"),
         ("add_var_to_canvas_trigger", "add_var_to_canvas_trigger"),
         ("sync_canvas_fit_zoom_trigger", "sync_canvas_fit_zoom_trigger"),
@@ -103,6 +105,8 @@ class GridControllerMixin:
         "commit_grid_track_resize_trigger": "Resize grid track",
         "move_grid_cell_trigger": "Move plot",
         "assign_var_to_grid_cell_trigger": "Assign plot",
+        "assign_campaign_visualization_to_grid_cell_trigger": "Add campaign visualization",
+        "add_campaign_visualization_to_canvas_trigger": "Add campaign visualization",
         "commit_canvas_layout_trigger": "Move or resize plot",
         "add_var_to_canvas_trigger": "Add plot",
     }
@@ -1244,18 +1248,12 @@ class GridControllerMixin:
 
         target = -1
         if self.is_valid_grid_index(active):
-            if not str(
-                cells[active].get("variable_id", "")
-                or cells[active].get("variable_name", "")
-                or ""
-            ).strip():
+            if not cell_has_content(cells[active]):
                 target = active
 
         if target < 0:
             for i, c in enumerate(cells):
-                if not str(
-                    c.get("variable_id", "") or c.get("variable_name", "") or ""
-                ).strip():
+                if not cell_has_content(c):
                     target = i
                     break
 
@@ -1327,6 +1325,13 @@ class GridControllerMixin:
             use_multi = bool(int(multi))
         except Exception:
             use_multi = False
+
+        if cells[idx].get("campaign_visualization_id"):
+            selected = self.normalize_grid_selection(cells=cells) if use_multi else []
+            self.set_grid_selection(sorted(set(selected + [idx])), active=idx)
+            self.state.selectedVar = ""
+            self.state.draggedVar = ""
+            return
 
         if cells[idx].get("working_result_id") or cells[idx].get("query_result_id"):
             selected = self.normalize_grid_selection(cells=cells) if use_multi else []
@@ -1557,9 +1562,7 @@ class GridControllerMixin:
 
         cells = self.normalize_grid_cells(self.state.gridCells)
         source = dict(cells[src] or {})
-        if not str(
-            source.get("variable_id", "") or source.get("variable_name", "") or ""
-        ).strip():
+        if not cell_has_content(source):
             return
 
         # Move + overwrite: destination takes source tile, source is cleared.
@@ -2057,6 +2060,110 @@ class GridControllerMixin:
         # After drag/drop, clear variable highlight in the left panel.
         self.state.selectedVar = ""
         self.state.draggedVar = ""
+
+    def campaign_visualization_cell(self, visualization_id):
+        result = getattr(self, "_campaign_result_records", {}).get(str(visualization_id))
+        if not isinstance(result, dict):
+            return None
+        frame_sources = list(result.get("frame_sources", []) or [])
+        video = str(result.get("video", "") or "")
+        media_type = (
+            "video" if video else
+            "image_sequence" if len(frame_sources) > 1 else
+            "image" if result.get("preview") or frame_sources else
+            ""
+        )
+        src = video or (frame_sources[0] if frame_sources else str(result.get("preview", "") or ""))
+        if not media_type or not src:
+            return None
+        title = str(result.get("title", "Campaign visualization") or "Campaign visualization")
+        cell = empty_grid_cell()
+        cell.update({
+            "display_title": title,
+            "visualization_name": title,
+            "selected_visualization": title,
+            "visualization_options": [title],
+            "campaign_path": str(result.get("campaign_path", "") or ""),
+            "campaign_visualization_id": str(visualization_id),
+            "media_type": media_type,
+            "src": src,
+            "poster": str(result.get("preview", "") or ""),
+            "frame_sources": frame_sources,
+            "frame_indices": list(result.get("frame_indices", []) or []),
+            "time_values": list(result.get("time_values", []) or []),
+            "frame_count": len(frame_sources) if media_type == "image_sequence" else int(result.get("frame_count", 0) or 0),
+            "time_mode": str(result.get("time_mode", "timestep") or "timestep"),
+            "fps": 2,
+            "status": "ready",
+            "note": "Campaign visualization",
+        })
+        return cell
+
+    def assign_campaign_visualization_to_grid_cell_trigger(self, visualization_id, cell_index, **_):
+        try:
+            idx = int(cell_index)
+        except (TypeError, ValueError):
+            return
+        if not self.is_valid_grid_index(idx):
+            return
+        cell = self.campaign_visualization_cell(visualization_id)
+        if cell is None:
+            return
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        if (
+            idx < len(cells)
+            and str(cells[idx].get("campaign_visualization_id", ""))
+            == str(visualization_id)
+        ):
+            return
+        assign_cell(cells, idx, cell)
+        self.state.gridCells = self.normalize_grid_cells(cells)
+        self.state.activeGridCell = idx
+        self.set_grid_selection([idx], active=idx)
+
+    def add_campaign_visualization_to_canvas_trigger(
+        self, visualization_id, geometry_payload=None, pane_id="", tab_id="",
+        layout_payload="", **_,
+    ):
+        if pane_id and str(pane_id) != str(self.state.workspaceActivePaneId or ""):
+            return
+        if tab_id and str(tab_id) != str(self.state.workspaceActiveTabId or ""):
+            return
+        if self.normalize_grid_layout_mode() != "freeform":
+            return
+        if layout_payload and not self.commit_canvas_layout(layout_payload, pane_id=pane_id, tab_id=tab_id):
+            return
+        cell = self.campaign_visualization_cell(visualization_id)
+        if cell is None:
+            return
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        if len(cells) >= canvas_layout.CANVAS_MAX_TILES:
+            self.state.canvasLayoutError = "Freeform canvas reached its tile limit"
+            return
+        proposed = self.parse_canvas_payload(geometry_payload, {})
+        if not isinstance(proposed, dict):
+            proposed = {}
+        tile_id = self.next_canvas_tile_id(cells)
+        columns = self.canvas_columns()
+        default_w = canvas_layout.normalize_drop_width(
+            getattr(self.state, "canvasDefaultTileWidth", canvas_layout.CANVAS_DEFAULT_DROP_WIDTH)
+        )
+        default_h = max(canvas_layout.minimum_size("plot")[1], default_w * 2)
+        item = canvas_layout.geometry(
+            tile_id, "plot", proposed.get("x", 0), proposed.get("y", 0),
+            proposed.get("w", default_w), proposed.get("h", default_h),
+            snap=bool(getattr(self.state, "canvasSnapToGrid", True)), columns=columns,
+        )
+        others = self.canvas_geometries(cells)
+        if any(canvas_layout.overlaps(item, other) for other in others):
+            item = canvas_layout.nearest_free(item, others, columns=columns)
+        cells.append(canvas_layout.geometry_to_cell(cell, item))
+        self.state.gridCells = self.normalize_grid_cells(cells)
+        target = len(self.state.gridCells) - 1
+        self.state.activeGridCell = target
+        self.set_grid_selection([target], active=target)
+        self.state.canvasLayoutRevision = int(getattr(self.state, "canvasLayoutRevision", 0) or 0) + 1
+        self.state.canvasLayoutError = ""
 
     def pick_grid_cell_visualization(self, cell_index: int, value=None, **_):
         try:

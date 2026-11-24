@@ -17,6 +17,7 @@ def defaults():
         "selectedCampaignPath": "",
         "campaignDisplay": "workspace",
         "campaignOverview": [],
+        "campaignVisualizations": [],
         "campaignSelection": {},
         "campaignDatasetPath": "",
         "campaignPackage": {},
