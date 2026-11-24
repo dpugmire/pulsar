@@ -416,6 +416,9 @@ def campaign_summary(path, documents, inventory=None):
                     f"/pulsar-media/{doc['visualization_item_uuid']}?campaign={key}"
                     if kind == "video" and doc.get("visualization_item_uuid") else ""
                 ),
+                "frame_count": doc.get("frame_count", 0),
+                "time_values": list(doc.get("time_values", []) or []),
+                "time_mode": str(doc.get("time_mode", "timestep") or "timestep"),
                 "inputs": [],
                 "artifacts": [],
                 "records": [],
@@ -450,6 +453,29 @@ def campaign_summary(path, documents, inventory=None):
         }
         if not result["records"]:
             result["records"].append(record)
+        # Keep the producer's file-to-variable mapping when it is available.
+        # Legacy records only have source_dataset/variable_id, handled below.
+        for association in doc.get("visualization_variables", []) or []:
+            if not isinstance(association, dict):
+                continue
+            associated_source = str(association.get("source_dataset", "") or "")
+            associated_variable = str(association.get("name", "") or "")
+            if associated_source and associated_variable and not associated_variable.startswith(("published-image:", "published-video:")):
+                item = {"source": associated_source, "variable": associated_variable}
+                if item not in result["inputs"]:
+                    result["inputs"].append(item)
+        for association in doc.get("visualization_files", []) or []:
+            if not isinstance(association, dict):
+                continue
+            associated_source = str(association.get("dataset", "") or "").strip()
+            if associated_source:
+                item = {
+                    "source": associated_source,
+                    "variable": "",
+                    "role": str(association.get("role", "") or ""),
+                }
+                if item not in result["inputs"]:
+                    result["inputs"].append(item)
         # Only exact references in recorded metadata establish a package link.
         references = set(_strings(record))
         item_uuid = str(doc.get("visualization_item_uuid", "") or "")
@@ -534,7 +560,23 @@ def campaign_summary(path, documents, inventory=None):
             # Stable ordering also handles legacy frames without an explicit order.
             frames.sort(key=lambda frame: frame["frame_index"] if frame["frame_index"] is not None else 0)
             result["_preview"] = frames[midpoint_frame_index([frame["physical_time"] for frame in frames])]
+        result["frame_sources"] = [
+            f"/pulsar-image/{frame['uuid']}?campaign={key}"
+            for frame in frames
+            if frame.get("uuid")
+        ]
+        result["frame_indices"] = [
+            frame["frame_index"] if frame["frame_index"] is not None else index
+            for index, frame in enumerate(frames)
+        ]
+        if not result.get("video"):
+            result["time_values"] = [
+                frame["physical_time"] if frame["physical_time"] is not None else index
+                for index, frame in enumerate(frames)
+            ]
         variables = sorted(result.pop("_variables", set()))
+        result["variable_ids"] = variables
+        result["has_variable_association"] = bool(variables)
         caption = ", ".join(variables[:3])
         if len(variables) > 3:
             caption += f" +{len(variables) - 3}"
@@ -553,7 +595,16 @@ def campaign_summary(path, documents, inventory=None):
             timing = "Time not recorded"
         result["caption"] = " · ".join(part for part in (caption, timing) if part)
         result["metadata_text"] = json.dumps(result.pop("records"), indent=2, ensure_ascii=False)
-        result["explorable_sources"] = sorted(sources)
+        associated_adios_sources = {
+            str(item.get("source", ""))
+            for item in result["inputs"]
+            if str(item.get("source", "")) in {
+                str(dataset.get("name", ""))
+                for dataset in inventory["datasets"]
+                if str(dataset.get("fileformat", "")).upper() == "ADIOS"
+            }
+        }
+        result["explorable_sources"] = sorted(set(sources) | associated_adios_sources)
     return {
         "id": key, "path": path, "name": Path(path).stem,
         "uuid": inventory["uuid"], "updated": updated, "error": inventory["error"],
@@ -588,7 +639,8 @@ def archive_result_documents(path):
         kind = {"IMAGE": "image", "VIDEO": "video", "SCALAR_FIELD": "scalarField"}.get(entry["item_type"])
         if kind is None:
             continue
-        for variable in entry.get("variables") or [{}]:
+        variables = entry.get("variables") or [{}]
+        for variable in variables:
             documents.append({
                 "variable_type": kind,
                 "variable_id": variable.get("name", ""),
@@ -600,6 +652,8 @@ def archive_result_documents(path):
                 "visualization_item_metadata": entry["item_metadata"],
                 "visualization_item_order": entry["item_order"],
                 "archive_dataset_path": entry["item_dataset_name"],
+                "visualization_variables": variables,
+                "visualization_files": entry.get("source_files", []),
                 "variable_path": "",  # No ADIOS variable path was resolved.
             })
     return documents

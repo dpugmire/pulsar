@@ -20,6 +20,8 @@
     let floatingResize = null;
     let workspaceSplitDrag = null;
     let workspaceTabDrag = null;
+    let campaignVisualizationPointerDrag = null;
+    let suppressCampaignVisualizationClick = false;
     let tabOverflowFrame = 0;
     let tabOverflowMutationObserver = null;
     const floatingPanelResizeObserver =
@@ -341,8 +343,91 @@
       }
     }
 
+    function finishCampaignVisualizationDrag() {
+      const drag = campaignVisualizationPointerDrag;
+      if (!drag) return null;
+      campaignVisualizationPointerDrag = null;
+      if (drag.hoverCell) drag.hoverCell.classList.remove("pulsar-drop-hover");
+      if (drag.preview) drag.preview.remove();
+      drag.element.style.opacity = drag.originalOpacity;
+      document.body.classList.remove("pulsar-campaign-visualization-dragging");
+      releasePointerCapture({ handle: drag.element, pointerId: drag.pointerId });
+      return drag;
+    }
+
+    function createCampaignDragPreview(drag) {
+      drag.preview = document.createElement("div");
+      drag.preview.className = "pulsar-campaign-drag-preview";
+      if (drag.previewUrl) {
+        const image = document.createElement("img");
+        image.alt = "";
+        image.addEventListener("error", () => {
+          image.remove();
+          positionCampaignDragPreview(drag, drag.clientX, drag.clientY);
+        }, { once: true });
+        image.addEventListener("load", () => {
+          positionCampaignDragPreview(drag, drag.clientX, drag.clientY);
+        }, { once: true });
+        image.src = drag.previewUrl;
+        drag.preview.appendChild(image);
+      }
+      const title = document.createElement("span");
+      title.textContent = drag.title || "Campaign visualization";
+      drag.preview.appendChild(title);
+      document.body.appendChild(drag.preview);
+    }
+
+    function positionCampaignDragPreview(drag, x, y) {
+      drag.clientX = x;
+      drag.clientY = y;
+      if (!drag.preview) return;
+      const bounds = drag.preview.getBoundingClientRect();
+      drag.preview.style.left = `${Math.max(4, Math.min(x + 14, window.innerWidth - bounds.width - 4))}px`;
+      drag.preview.style.top = `${Math.max(4, Math.min(y + 14, window.innerHeight - bounds.height - 4))}px`;
+    }
+
+    function cancelCampaignVisualizationDrag(event) {
+      if (event.type === "keydown" && event.key !== "Escape") return;
+      finishCampaignVisualizationDrag();
+    }
+
     function onPointerDown(event) {
       if (event.button !== undefined && event.button !== 0) return;
+      const campaignVisualization = closestWithinRoot(
+        event && event.target,
+        ".pulsar-draggable-campaign-visualization",
+        root
+      );
+      if (campaignVisualization) {
+        // Freeform layout owns native dragging; do not start a pointer drag too.
+        if (campaignVisualization.getAttribute("draggable") === "true") return;
+        finishCampaignVisualizationDrag();
+        const visualizationId =
+          campaignVisualization.getAttribute("data-visualization-id") || "";
+        if (visualizationId) {
+          campaignVisualizationPointerDrag = {
+            element: campaignVisualization,
+            visualizationId,
+            pointerId: event.pointerId,
+            startX: Number(event.clientX) || 0,
+            startY: Number(event.clientY) || 0,
+            dragging: false,
+            hoverCell: null,
+            preview: null,
+            originalOpacity: campaignVisualization.style.opacity,
+            previewUrl: campaignVisualization.getAttribute("data-preview-url") || "",
+            title:
+              campaignVisualization.getAttribute("data-visualization-title") ||
+              campaignVisualization.textContent.trim(),
+          };
+          try {
+            campaignVisualization.setPointerCapture(event.pointerId);
+          } catch (_) {
+            // Older browsers may not support pointer capture.
+          }
+        }
+        return;
+      }
       const resizeHandle = closestWithinRoot(
         event && event.target,
         ".pulsar-provenance-resize-handle",
@@ -452,6 +537,43 @@
     }
 
     function onPointerMove(event) {
+      if (
+        campaignVisualizationPointerDrag &&
+        (campaignVisualizationPointerDrag.pointerId === undefined ||
+          event.pointerId === campaignVisualizationPointerDrag.pointerId)
+      ) {
+        const drag = campaignVisualizationPointerDrag;
+        const dx = (Number(event.clientX) || 0) - drag.startX;
+        const dy = (Number(event.clientY) || 0) - drag.startY;
+        if (!drag.dragging && Math.hypot(dx, dy) >= 6) {
+          drag.dragging = true;
+          drag.element.style.opacity = "0.45";
+          document.body.classList.add("pulsar-campaign-visualization-dragging");
+          createCampaignDragPreview(drag);
+        }
+        if (drag.dragging) {
+          if (drag.preview) {
+            positionCampaignDragPreview(drag, Number(event.clientX) || 0, Number(event.clientY) || 0);
+          }
+          const target = document.elementFromPoint(
+            Number(event.clientX) || 0,
+            Number(event.clientY) || 0
+          );
+          const cell = closestWithinRoot(target, ".pulsar-dropcell", root);
+          const preview = cell && cell.closest(".pulsar-workspace-grid-preview");
+          const nextCell =
+            preview || (cell && cell.closest(".pulsar-freeform-canvas"))
+              ? null
+              : cell;
+          if (drag.hoverCell !== nextCell) {
+            if (drag.hoverCell) drag.hoverCell.classList.remove("pulsar-drop-hover");
+            drag.hoverCell = nextCell;
+            if (drag.hoverCell) drag.hoverCell.classList.add("pulsar-drop-hover");
+          }
+          event.preventDefault();
+        }
+        return;
+      }
       if (floatingResize) {
         if (
           floatingResize.pointerId !== undefined &&
@@ -543,6 +665,41 @@
 
     function onPointerEnd(event) {
       if (
+        campaignVisualizationPointerDrag &&
+        (campaignVisualizationPointerDrag.pointerId === undefined ||
+          event.pointerId === campaignVisualizationPointerDrag.pointerId)
+      ) {
+        const drag = finishCampaignVisualizationDrag();
+        if (drag.dragging) {
+          suppressCampaignVisualizationClick = true;
+          window.setTimeout(() => {
+            suppressCampaignVisualizationClick = false;
+          }, 0);
+        }
+        if (drag.dragging && event.type === "pointerup") {
+          const target = document.elementFromPoint(
+            Number(event.clientX) || 0,
+            Number(event.clientY) || 0
+          );
+          const cell = closestWithinRoot(target, ".pulsar-dropcell", root);
+          const preview = cell && cell.closest(".pulsar-workspace-grid-preview");
+          const cellIndex = cell && cell.getAttribute("data-cell-index");
+          if (
+            !preview &&
+            cell &&
+            !cell.closest(".pulsar-freeform-canvas") &&
+            cellIndex !== null
+          ) {
+            trameTrigger("assign_campaign_visualization_to_grid_cell_trigger", [
+              drag.visualizationId,
+              cellIndex,
+            ]);
+            event.preventDefault();
+          }
+        }
+        return;
+      }
+      if (
         floatingResize &&
         (floatingResize.pointerId === undefined ||
           event.pointerId === floatingResize.pointerId)
@@ -568,6 +725,13 @@
     }
 
     function onLostPointerCapture(event) {
+      if (
+        campaignVisualizationPointerDrag &&
+        event.pointerId === campaignVisualizationPointerDrag.pointerId
+      ) {
+        finishCampaignVisualizationDrag();
+        return;
+      }
       if (floatingResize && event.target === floatingResize.handle) {
         finishFloatingResize();
         return;
@@ -796,6 +960,20 @@
         return;
       }
 
+      const campaignVisualization = closestWithinRoot(
+        target,
+        ".pulsar-draggable-campaign-visualization",
+        root
+      );
+      if (campaignVisualization) {
+        const item = campaignVisualization.getAttribute("data-visualization-id") || "";
+        if (!item || campaignVisualization.getAttribute("draggable") !== "true") return;
+        event.dataTransfer.setData("application/x-pulsar-campaign-visualization", item);
+        event.dataTransfer.effectAllowed = "copy";
+        campaignVisualization.style.opacity = "0.45";
+        return;
+      }
+
       const cell = closestWithinRoot(target, ".pulsar-dropcell", root);
       if (!cell) return;
       if (cell.closest(".pulsar-workspace-grid-preview")) return;
@@ -830,6 +1008,12 @@
       }
       const variable = closestWithinRoot(target, ".pulsar-draggable-var", root);
       if (variable) variable.style.opacity = "1";
+      const campaignVisualization = closestWithinRoot(
+        target,
+        ".pulsar-draggable-campaign-visualization",
+        root
+      );
+      if (campaignVisualization) campaignVisualization.style.opacity = "1";
       const cell = closestWithinRoot(target, ".pulsar-dropcell", root);
       if (cell) cell.style.opacity = "1";
       clearWorkspaceGridDropTargets();
@@ -975,6 +1159,13 @@
         return;
       }
       clearWorkspaceGridDropTargets();
+      const campaignVisualization = event.dataTransfer
+        ? event.dataTransfer.getData("application/x-pulsar-campaign-visualization") || ""
+        : "";
+      if (campaignVisualization && targetIndex !== null) {
+        trameTrigger("assign_campaign_visualization_to_grid_cell_trigger", [campaignVisualization, targetIndex]);
+        return;
+      }
       if (fromCell !== "" && targetIndex !== null) {
         trameTrigger("move_grid_cell_trigger", [fromCell, targetIndex]);
         return;
@@ -1056,6 +1247,18 @@
       }
     }
 
+    function onClickCapture(event) {
+      if (!suppressCampaignVisualizationClick) return;
+      suppressCampaignVisualizationClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+
+    function onSelectionStart(event) {
+      if (campaignVisualizationPointerDrag) event.preventDefault();
+    }
+
     function onDoubleClick(event) {
       const handle = closestWithinRoot(
         event && event.target,
@@ -1087,11 +1290,16 @@
         pointercancel: onPointerEnd,
         lostpointercapture: onLostPointerCapture,
         scroll: onWorkspaceTabsScroll,
+        click: onClickCapture,
+        selectstart: onSelectionStart,
       },
       window: {
         resize: onWindowResize,
+        blur: cancelCampaignVisualizationDrag,
+        keydown: cancelCampaignVisualizationDrag,
       },
       cleanup() {
+        finishCampaignVisualizationDrag();
         finishFloatingDrag();
         finishFloatingResize();
         finishWorkspaceSplitDrag(false);
@@ -1168,7 +1376,7 @@
       window.removeEventListener(eventName, handler);
     }
     for (const element of root.querySelectorAll(
-      ".pulsar-draggable-var, .pulsar-dropcell"
+      ".pulsar-draggable-var, .pulsar-draggable-campaign-visualization, .pulsar-dropcell"
     )) {
       element.style.opacity = "1";
     }

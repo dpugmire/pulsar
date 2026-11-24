@@ -1801,10 +1801,17 @@ class CatalogControllerMixin:
 
     def variable_pane_view(self) -> str:
         view = str(getattr(self.state, "variablePaneView", "variables") or "variables")
-        return "files" if view == "files" else "variables"
+        return view if view in {"files", "visualizations"} else "variables"
 
     def refresh_variable_list(self):
         view = self.variable_pane_view()
+        if view == "visualizations":
+            self.state.variableGroups = []
+            self.state.filteredVariableGroups = []
+            self.state.variableNames = []
+            self.state.variableLabelsById = {}
+            self.state.variableGroupCollapsed = {}
+            return
         navigation = self.application.get_navigation(
             {
                 "view": view,

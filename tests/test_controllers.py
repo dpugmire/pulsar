@@ -102,7 +102,7 @@ class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
             "ACTION_BINDINGS": 128,
-            "TRIGGER_BINDINGS": 20,
+            "TRIGGER_BINDINGS": 22,
             "STATE_CHANGE_BINDINGS": 5,
         }
 
