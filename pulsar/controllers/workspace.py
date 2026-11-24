@@ -1147,9 +1147,10 @@ class WorkspaceControllerMixin:
         grid = saved_state["grid"]
         visualization = saved_state["visualization"]
 
-        pane_view = str(catalog.get("variable_pane_view", ""))
         self.state.variablePaneView = (
-            pane_view if pane_view in {"files", "visualizations"} else "variables"
+            "files"
+            if str(catalog.get("variable_pane_view", "")) == "files"
+            else "variables"
         )
         collapsed_by_view = catalog.get(
             "variable_group_collapsed_by_view",

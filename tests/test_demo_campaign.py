@@ -1,9 +1,6 @@
 import json
-import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,9 +13,6 @@ from ingest_campaign import (
     parse_campaign,
 )
 from plugin_runtime import render_plugin_tile
-from pulsar.campaign_media import read_campaign_preview, read_embedded_video
-from pulsar.campaign_overview import campaign_summary
-from pulsar.controllers.grid import GridControllerMixin
 from pulsar.demo_campaign import (
     DEMO_SOURCES,
     DEMO_VARIABLES_1D,
@@ -37,21 +31,17 @@ def _require_unified_demo_api():
     hpc_campaign = pytest.importorskip("hpc_campaign")
     required = (
         "add_variable",
-        "visualization",
-        "visualization_sequence",
-        "video",
-        "scalar_field_data",
+        "add_image_sequence",
+        "add_activity",
         "data",
         "set_schema",
     )
     missing = [name for name in required if not hasattr(hpc_campaign.Manager, name)]
     if missing:
         pytest.skip(
-            "installed hpc-campaign does not provide required demo API "
+            "installed hpc-campaign does not provide unified demo API "
             f"(missing: {', '.join(missing)})"
         )
-    if not shutil.which("ffmpeg"):
-        pytest.skip("ffmpeg is required to encode the demo MP4")
 
 
 def test_analytical_fields_are_deterministic_and_time_varying():
@@ -139,7 +129,7 @@ def test_generated_demo_archive_and_ingestion(tmp_path: Path):
     config = DemoConfig(
         steps=3,
         samples_1d=16,
-        shape_2d=(9, 11),
+        shape_2d=(8, 10),
         source_count=7,
     )
     demo = generate_demo_campaign(tmp_path, config=config)
@@ -155,29 +145,26 @@ def test_generated_demo_archive_and_ingestion(tmp_path: Path):
         source_count = con.execute(
             "select count(*) from dataset where name like 'sources/%.bp' and deltime = 0"
         ).fetchone()[0]
-        variable_association_count = con.execute(
-            "select count(*) from visualization_variable"
+        variable_count = con.execute(
+            "select count(*) from logical_variable"
         ).fetchone()[0]
-        visualization_count = con.execute(
-            "select count(*) from visualization_sequence"
-        ).fetchone()[0]
-        standalone_count = con.execute(
-            "select count(*) from visualization_sequence s "
-            "where not exists (select 1 from visualization_variable v where v.visid = s.visid)"
+        chunk_count = con.execute(
+            "select count(*) from variable_chunk"
         ).fetchone()[0]
     finally:
         con.close()
 
     assert source_count == 7
-    assert variable_association_count == 42
-    assert visualization_count == 45
-    assert standalone_count == 3
+    assert variable_count == 98
+    assert chunk_count == 126
 
-    representation_index = _load_visualization_api_index(str(demo.campaign_path))
-    assert len(representation_index) == 131
+    representation_index = _load_unified_representation_index(
+        str(demo.campaign_path)
+    )
+    assert len(representation_index) == 126
     assert {
         entry["item_type"] for entry in representation_index.values()
-    } == {"IMAGE", "SCALAR_FIELD", "VIDEO"}
+    } == {"IMAGE", "SCALAR_FIELD"}
 
     collection = open_sqlite_collection(
         str(demo.campaign_path),
@@ -246,53 +233,7 @@ def test_generated_demo_archive_and_ingestion(tmp_path: Path):
             )
             assert len(scalar_docs) == 21
             assert {doc["frame_index"] for doc in scalar_docs} == {0, 1, 2}
-            assert all(doc["association_source"] == "visualization-api" for doc in scalar_docs)
-
-        standalone_docs = [
-            doc for doc in collection.find({"campaign_path": str(demo.campaign_path)})
-            if str(doc.get("visualization_sequence_name", "")).startswith("campaign_visualizations/")
-        ]
-        assert len(standalone_docs) == config.steps + 2
-        assert all(doc["variable_id"] == "" for doc in standalone_docs)
-        assert all(doc["visualization_variables"] == [] for doc in standalone_docs)
-        assert all(doc["visualization_files"] == [] for doc in standalone_docs)
-        standalone_results = campaign_summary(
-            str(demo.campaign_path), standalone_docs,
-            {"uuid": "", "datasets": [], "error": ""},
-        )["results"]
-        assert len(standalone_results) == 3
-        stills = [result for result in standalone_results if not result.get("video") and len(result["frame_sources"]) == 1]
-        sequences = [result for result in standalone_results if len(result["frame_sources"]) > 1]
-        movies = [result for result in standalone_results if result.get("video")]
-        assert len(stills) == len(sequences) == len(movies) == 1
-        assert stills[0]["title"] == "Synthetic campaign guide"
-        assert sequences[0]["title"] == "Moving blob (image sequence)"
-        assert len(sequences[0]["frame_sources"]) == config.steps
-        assert movies[0]["frame_count"] == config.steps
-        assert movies[0]["time_values"] == [0.0, 1.0, 2.0]
-        assert all(not result["has_variable_association"] for result in standalone_results)
-        movie_bytes = read_embedded_video(str(demo.campaign_path), movies[0]["_preview"]["video_uuid"])
-        assert movie_bytes and movie_bytes[4:8] == b"ftyp"
-        stored_movie = tmp_path / "retrieved-demo.mp4"
-        stored_movie.write_bytes(movie_bytes)
-        decoded = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(stored_movie),
-             "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
-            check=True, capture_output=True, timeout=30,
-        )
-        # Odd input dimensions are padded to an even 10 x 12 for H.264.
-        assert len(decoded.stdout) == config.steps * 10 * 12 * 3
-        tile = GridControllerMixin.campaign_visualization_cell(
-            SimpleNamespace(_campaign_result_records={movies[0]["id"]: movies[0]}),
-            movies[0]["id"],
-        )
-        assert tile["media_type"] == "video"
-        assert tile["frame_count"] == config.steps
-        assert tile["time_mode"] == "physical_time"
-        assert tile["time_values"] == [0.0, 1.0, 2.0]
-        for result in standalone_results:
-            preview = read_campaign_preview(result["_preview"])
-            assert preview and preview.startswith(b"\xff\xd8")
+            assert all(doc["association_source"] == "unified-variable" for doc in scalar_docs)
 
         image_frames, image_total, image_indices, _, _ = (
             db.get_movie_frames_for_stream(

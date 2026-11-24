@@ -164,11 +164,7 @@ class ContextMenuControllerMixin:
         )
         can_scalar_field_settings = has_var and self.is_scalar_field_cell(cell)
         media_type = str(cell.get("media_type", "") or "")
-        can_reset_view = (
-            has_var
-            or bool(cell.get("working_result_id"))
-            or bool(cell.get("campaign_visualization_id"))
-        ) and (
+        can_reset_view = (has_var or bool(cell.get("working_result_id"))) and (
             media_type == "plot1d"
             or (bool(str(cell.get("src", "") or "").strip()) and media_type != "plot1d")
         )

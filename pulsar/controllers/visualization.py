@@ -1970,18 +1970,6 @@ class VisualizationControllerMixin:
         updated: List[Dict[str, Any]] = []
 
         for c in cells:
-            if c.get("campaign_visualization_id"):
-                tile = self.campaign_visualization_cell(c["campaign_visualization_id"])
-                if tile is None:
-                    tile = empty_grid_cell()
-                    tile.update({
-                        "campaign_visualization_id": c["campaign_visualization_id"],
-                        "campaign_path": c.get("campaign_path", ""),
-                        "status": "error",
-                        "note": "Campaign visualization is no longer available",
-                    })
-                updated.append(preserve_grid_geometry(tile, c))
-                continue
             if c.get("query_result_id"):
                 updated.append(
                     preserve_grid_geometry(self.query_result_cell(c["query_result_id"]), c)

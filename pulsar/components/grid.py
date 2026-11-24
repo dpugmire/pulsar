@@ -537,7 +537,7 @@ def _build_inactive_workspace_grids(ctrl):
                                     ':data-cell-index="i"',
                                     ':data-pane-id="pane.id"',
                                     ':data-tab-id="tab.id"',
-                                    ':data-cell-filled="((tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== \'empty\'))) ? 1 : 0)"',
+                                    ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-selection-axis="JSON.stringify((tile && tile.selection_axis) || {})"',
                                     ':data-axis-sync-status="(tile && tile.axis_sync_status) || \'\'"',
                                     ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
@@ -555,7 +555,7 @@ def _build_inactive_workspace_grids(ctrl):
                                     " + ((tab.grid.layout_mode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')\"",
                                 ],
                             ):
-                                with vuetify.Template(v_if="tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty'))"):
+                                with vuetify.Template(v_if="tile && tile.variable_name"):
                                     html.Div(
                                         "{{ tile.display_title || tile.variable_name || 'variable' }}",
                                         classes="pulsar-workspace-preview-title",
@@ -609,7 +609,7 @@ def _build_inactive_workspace_grids(ctrl):
                                                         "playsinline",
                                                     ],
                                                 )
-                                with vuetify.Template(v_if="!(tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty')))"):
+                                with vuetify.Template(v_if="!(tile && tile.variable_name)"):
                                     with html.Div(classes="pulsar-empty-cell"):
                                         html.Div("+", classes="pulsar-empty-plus")
 
@@ -974,7 +974,7 @@ class GridWorkspace(TrameComponent):
                                     ':data-source-id="(tile && tile.source_id) || \'\'"',
                                     ':data-pane-id="workspaceActivePaneId"',
                                     ':data-tab-id="workspaceActiveTabId"',
-                                    ':data-cell-filled="((tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== \'empty\'))) ? 1 : 0)"',
+                                    ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
                                     ':data-selection-axis="JSON.stringify((tile && tile.selection_axis) || {})"',
@@ -986,7 +986,7 @@ class GridWorkspace(TrameComponent):
                                     ':data-canvas-w="Number((tile && tile.canvas_w) || 4)"',
                                     ':data-canvas-h="Number((tile && tile.canvas_h) || 3)"',
                                     ':aria-selected="activeGridCell === i ? \'true\' : \'false\'"',
-                                    ':draggable="gridLayoutMode !== \'freeform\' && !!(tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== \'empty\')))"',
+                                    ':draggable="gridLayoutMode !== \'freeform\' && !!(tile && tile.variable_name)"',
                                 ],
                                 style=(
                                     "((gridLayoutMode === 'freeform')"
@@ -1115,7 +1115,7 @@ class GridWorkspace(TrameComponent):
                                         ':data-row-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 2) : Math.floor(i / gridCols)"',
                                     ],
                                 )
-                                with vuetify.Template(v_if="tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty'))"):
+                                with vuetify.Template(v_if="tile && tile.variable_name"):
                                     with html.Div(
                                         classes="pulsar-tile-header",
                                         style=(
@@ -1543,7 +1543,7 @@ class GridWorkspace(TrameComponent):
                                         )
                                     html.Div(
                                         classes=handle_classes,
-                                        v_if="gridLayoutMode === 'freeform' && tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty'))",
+                                        v_if="gridLayoutMode === 'freeform' && tile && tile.variable_name",
                                         raw_attrs=[
                                             'role="separator"',
                                             f'data-resize-edge="{resize_edge}"',
@@ -1551,7 +1551,7 @@ class GridWorkspace(TrameComponent):
                                             f'title="Resize from {resize_edge.replace("-", " ")}"',
                                         ],
                                     )
-                                with vuetify.Template(v_if="!(tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty')))"):
+                                with vuetify.Template(v_if="!(tile && tile.variable_name)"):
                                     with html.Div(classes="pulsar-empty-cell"):
                                         html.Div("+", classes="pulsar-empty-plus")
                                         html.Div("Drop variable here", classes="pulsar-empty-hover-label")

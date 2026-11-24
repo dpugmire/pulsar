@@ -20,7 +20,7 @@ class VariablePanel(TrameComponent):
                 with vuetify.VCardTitle(
                     classes="pulsar-variable-card-title"
                 ):
-                    html.Div("{{ variablePaneView === 'visualizations' ? 'Campaign visualizations' : 'Variables' }}", classes="pulsar-variable-title-text")
+                    html.Div("Variables", classes="pulsar-variable-title-text")
                     vuetify.VSelect(
                         v_if="(campaignChoices || []).length > 1",
                         v_model=("selectedCampaignPath",),
@@ -41,13 +41,15 @@ class VariablePanel(TrameComponent):
                         clearable=True,
                         classes="pulsar-variable-search",
                         raw_attrs=[
-                            ':aria-label="variablePaneView === \'visualizations\' ? \'Search campaign visualizations\' : \'Search variables\'"',
+                            'aria-label="Search variables"',
                             'autocomplete="off"',
                         ],
                     )
                 with vuetify.VCardText(style="flex:1 1 auto; min-height:0; overflow-y:auto;"):
-                    with html.Div(style="display:flex; align-items:center; gap:8px; padding:0 4px 8px 4px;"):
-                        html.Span("Group by:", v_if="variablePaneView !== 'visualizations'", class_="text-caption")
+                    with html.Div(
+                        style="display:flex; align-items:center; gap:8px; padding:0 4px 8px 4px;",
+                    ):
+                        html.Span("Group by:", class_="text-caption")
                         with vuetify.VBtnToggle(
                             v_model=("variablePaneView",),
                             mandatory=True,
@@ -57,41 +59,14 @@ class VariablePanel(TrameComponent):
                         ):
                             vuetify.VBtn("Variable", value="variables", size="small")
                             vuetify.VBtn("File", value="files", size="small")
-                            vuetify.VBtn("Campaign", value="visualizations", size="small")
                     with html.Div(style="padding:0 4px 8px 4px;"):
                         vuetify.VCheckbox(
-                            v_if="variablePaneView !== 'visualizations'",
                             v_model=("showOnlyVisualizedVars",),
                             label="Only with visualizations",
                             density="compact",
                             hide_details=True,
                         )
-                    with html.Div(v_if="variablePaneView === 'visualizations'", classes="pulsar-campaign-visualization-list"):
-                        html.Div(
-                            "No campaign visualizations without variable associations",
-                            v_if="!(campaignVisualizations || []).some(item => (!selectedCampaignPath || item.campaign_path === selectedCampaignPath) && (item.preview || item.video || (item.frame_sources && item.frame_sources.length)) && (!(variableSearchText || '').trim() || (item.title + ' ' + item.campaign_name).toLowerCase().includes((variableSearchText || '').trim().toLowerCase())))",
-                            class_="text-caption",
-                            style="padding:8px 10px; color:#777;",
-                        )
-                        with vuetify.Template(
-                            v_for="visualization in (campaignVisualizations || []).filter(item => (!selectedCampaignPath || item.campaign_path === selectedCampaignPath) && (item.preview || item.video || (item.frame_sources && item.frame_sources.length)) && (!(variableSearchText || '').trim() || (item.title + ' ' + item.campaign_name).toLowerCase().includes((variableSearchText || '').trim().toLowerCase())))",
-                            key="visualization.id",
-                        ):
-                            with html.Div(
-                                classes="pulsar-draggable-campaign-visualization pulsar-campaign-visualization-item",
-                                raw_attrs=[
-                                    'role="button"',
-                                    'tabindex="0"',
-                                    ':draggable="gridLayoutMode === \'freeform\'"',
-                                    ':data-visualization-id="visualization.id"',
-                                    ':data-visualization-title="visualization.title"',
-                                    ':data-preview-url="visualization.preview || (visualization.frame_sources && visualization.frame_sources[0]) || \'\'"',
-                                ],
-                                click=(ctrl.inspect_campaign_result, "[visualization.id]"),
-                            ):
-                                html.Strong("{{ visualization.title }}")
-                                html.Span("{{ visualization.kind }} · {{ visualization.campaign_name }}", classes="pulsar-variable-visualization-caption")
-                    with vuetify.VList(density="compact", class_="pulsar-var-list", v_if="variablePaneView !== 'visualizations'"):
+                    with vuetify.VList(density="compact", class_="pulsar-var-list"):
                         html.Div(
                             "No variables",
                             v_if="!(variableGroups || []).length",

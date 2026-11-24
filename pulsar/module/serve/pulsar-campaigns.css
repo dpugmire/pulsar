@@ -46,7 +46,6 @@
 .pulsar-campaign-metadata { max-height: 35vh; overflow: auto; padding: 16px; background: #f3f6f9; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .pulsar-campaign-file-inspector { border-top: 1px solid #d5dfe8; margin-top: 16px; padding-top: 16px; }
 .pulsar-campaign-input { font-size: 13px; padding: 4px 0; overflow-wrap: anywhere; }
-.pulsar-campaign-source-variable { font-size: 12px; color: #586b7e; padding: 2px 0 2px 16px; overflow-wrap: anywhere; }
 .pulsar-campaign-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; font-size: 13px; }
 .pulsar-campaign-toolbar label { display: flex; align-items: center; gap: 8px; }
 .pulsar-campaign-toolbar select { border: 1px solid #c8d3df; border-radius: 4px; padding: 5px 8px; background: white; }
@@ -87,13 +86,6 @@
 .pulsar-campaign-selection-gallery { display: grid; gap: 12px; }
 .pulsar-campaign-selection-gallery .pulsar-campaign-result { width: 100%; }
 .pulsar-campaign-selection-gallery .pulsar-campaign-preview { height: 190px; }
-.pulsar-campaign-visualization-list { display: grid; gap: 8px; }
-.pulsar-campaign-visualization-item { display: grid; gap: 5px; width: 100%; padding: 8px; text-align: left; color: inherit; border: 1px solid #b8c4d1; border-radius: 4px; background: #f4f7fa; cursor: grab; }
-.pulsar-campaign-visualization-item:active { cursor: grabbing; }
-.pulsar-campaign-visualization-item:hover, .pulsar-campaign-visualization-item:focus-visible { background: #eaf0f6; outline: 2px solid #6c8baa; }
-.pulsar-campaign-visualization-thumbnail { position: relative; height: 100px; display: grid; place-items: center; overflow: hidden; color: #586979; background: #edf2f7; font-size: 12px; }
-.pulsar-campaign-visualization-thumbnail img { position: absolute; width: 100%; height: 100%; object-fit: contain; }
-.pulsar-variable-visualization-caption { color: #66717a; font-size: 11px; line-height: 1.35; }
 .pulsar-campaign-empty-selection { font-size: 13px; color: #586b7e; padding: 20px 6px; }
 .pulsar-campaign-gallery-view { padding: 12px; }
 .pulsar-campaign-gallery-view .pulsar-campaign-section { margin-bottom: 10px; }

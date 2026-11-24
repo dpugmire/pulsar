@@ -120,40 +120,6 @@
   user-select: none;
 }
 .pulsar-dropcell { transition: background 0.15s, outline-color 0.15s; }
-.pulsar-campaign-drag-preview {
-  position: fixed;
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: min(260px, calc(100vw - 8px));
-  box-sizing: border-box;
-  padding: 6px 8px;
-  border: 1px solid #8296a8;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.24);
-  color: #1f2933;
-  font-size: 12px;
-  pointer-events: none;
-}
-.pulsar-campaign-visualization-dragging,
-.pulsar-campaign-visualization-dragging * {
-  user-select: none;
-  -webkit-user-select: none;
-}
-.pulsar-campaign-drag-preview img {
-  width: 52px;
-  height: 42px;
-  flex: 0 0 auto;
-  object-fit: contain;
-  background: #edf2f7;
-}
-.pulsar-campaign-drag-preview span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .pulsar-dropcell[data-axis-sync-status="incompatible"]::after,
 .pulsar-dropcell[data-axis-sync-status="unavailable"]::after,
 .pulsar-dropcell[data-axis-sync-status="unsupported"]::after,
