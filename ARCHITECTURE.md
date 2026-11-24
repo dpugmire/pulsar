@@ -84,8 +84,10 @@ flowchart LR
   resolves the winning value. Numeric source statistics are not sent to the
   provider.
 - The resolved action must pass the existing parser and backend preview before
-  the user can apply it. The generated Python-like query is a temporary local
-  compatibility representation, not model-authored code.
+  the user can apply it. The generated Python-like query is parsed into a typed
+  predicate plan and versioned JSON documents before backend evaluation. SQLite
+  compiles these at its storage boundary; legacy collection filters remain local compatibility
+  inputs. The assistant does not author executable code.
 - An assistant request carries an explicit UI target. The catalog target updates
   the global query; the source-filter target previews and filters only the open
   Sources dialog for its selected variable. Both produce a validated
@@ -106,7 +108,7 @@ flowchart LR
 | --- | --- | --- |
 | Catalog | Backend-neutral navigation and status | Implement against Phobos campaigns, forays, and variables. |
 | Sources | Backend-neutral descriptors, statistics, lookup, and compatibility restriction resolution | Preserve stable source identity and remove the legacy query document after redesign. |
-| Query | Schema-v1 `catalog.query` Viewer Actions with deterministic local source ranking; actions currently compile to Python-like local filter documents after validation | Move execution behind a backend-neutral query capability while retaining the Viewer Action contract and explicit review/apply flow. |
+| Query | Schema-v1 `catalog.query` Viewer Actions with deterministic local source ranking; actions compile validated Python-like text to typed predicates and versioned backend query documents | Move execution behind a backend-neutral query capability while retaining the Viewer Action contract and explicit review/apply flow. |
 | Stored visualization/media | Schema-v1 `visualization.add` assigns one variable to the active cell through existing local controller paths | Add explicit visualization/source/settings arguments after stable descriptors, timeline metadata, and authorized media transport exist. |
 | Generated visualization/plugins | Local synchronous generation and plugin paths | Add job, progress, cancellation, error, and result contracts in Phase 5D. |
 | Phobos | Design and gap analysis only | Add authenticated adapter after capability contracts are stable. |

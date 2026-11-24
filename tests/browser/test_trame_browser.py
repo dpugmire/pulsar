@@ -1554,6 +1554,56 @@ def test_workspace_tab_strip_marks_hidden_tabs_at_each_scroll_edge(
     assert console_errors == [], response_errors
 
 
+def test_real_query_filters_preserve_rows_and_selection_on_invalid_drafts(page, pulsar_server):
+    from playwright.sync_api import expect
+
+    console_errors, page_errors, response_errors = _open_app(page, pulsar_server, mode="query")
+    page.get_by_text("2D", exact=True).click()
+    variables = page.locator(".pulsar-var-item")
+    expect(variables).to_have_count(2)
+    query = page.locator('input[placeholder^="e.g. var =="]')
+    query.fill("var == 'pressure'")
+    page.get_by_role("button", name="Query", exact=True).click()
+    expect(variables).to_have_count(1)
+    expect(variables).to_have_attribute("data-item", "pressure")
+
+    query.fill("min > None")
+    page.get_by_role("button", name="Query", exact=True).click()
+    expect(page.get_by_text("Ordered comparisons require a finite number", exact=False)).to_be_visible()
+    expect(variables).to_have_count(1)
+    expect(variables).to_have_attribute("data-item", "pressure")
+
+    # Restore valid text before opening the source dialog. The failed draft
+    # must not have replaced the catalog's applied predicate.
+    query.fill("var == 'pressure'")
+    page.get_by_role("button", name="Query", exact=True).click()
+    variables.click()
+    page.get_by_role("button", name="SOURCES(2)").click()
+    dialog = page.get_by_role("dialog")
+    rows = dialog.locator("tbody tr")
+    expect(rows).to_have_count(2)
+    source_filter = dialog.get_by_placeholder("Natural language + Ask, or Advanced Query + Filter")
+
+    def submit_source_filter(text):
+        source_filter.fill(text)
+        dialog.get_by_role("button", name="Filter", exact=True).click()
+
+    submit_source_filter("max > 10")
+    expect(rows).to_have_count(1)
+    expect(rows).to_contain_text("large/output.bp")
+    rows.click()
+    expect(rows.locator('input[type="radio"]')).to_be_checked()
+
+    submit_source_filter("max > None")
+    expect(dialog.get_by_text("Ordered comparisons require a finite number", exact=False)).to_be_visible()
+    expect(rows).to_have_count(1)
+    expect(rows).to_contain_text("large/output.bp")
+    expect(rows.locator('input[type="radio"]')).to_be_checked()
+    expect(query).to_have_value("var == 'pressure'")
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_query_assistant_reviews_before_applying(page, pulsar_server):
     console_errors, page_errors, response_errors = _open_app(page, pulsar_server)
 

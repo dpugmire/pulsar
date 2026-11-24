@@ -2,16 +2,19 @@
 
 ## Status
 
-Query rearchitecture is intentionally deferred while the viewer's query model
-is reevaluated. This document records the decisions that should be made before
-Phase 5B.2 defines a backend-neutral query contract or changes query behavior.
+The catalog/source predicate contract now uses a typed query model and
+versioned JSON documents. Broader query UX and scope redesign remains deferred
+while the viewer's query model is reevaluated. This document records the current
+predicate contract and decisions needed before Phase 5B.2 expands backend query
+capabilities or changes viewer scope.
 
 The goal is not to preserve the current implementation automatically. The goal
 is to identify the campaign-analysis workflows Pulsar must support, choose a
 clear user model, and only then encode that model in the UI and backend
 contracts.
 
-No query behavior should be inferred from this document until the open design
+The Implemented Predicate Contract section describes current behavior. Later
+workflow, interface, and scope proposals remain design options until their open
 questions have explicit answers.
 
 ## Related Documents
@@ -71,29 +74,66 @@ replaced.
 
 ## Current Implementation Constraints
 
-The current parser uses Python's expression AST and immediately produces
-Mongo-style dictionaries containing operators such as `$and`, `$or`, `$nor`,
-and `$regex`. Controllers retain and combine those dictionaries, and the local
-SQLite compatibility layer translates them into SQL.
+The text parser uses Python's expression AST for syntax validation and produces
+`QueryPlan`, `Compare`, `Junction`, and `Negate` model nodes. A plan separates
+record predicates from top-level `source(...)` predicates. Controllers send
+version-1 JSON query documents through the backend seam; these contain named
+operations, fields, and values rather than SQL or Mongo operators.
 
-The implementation has several consequences that should not be mistaken for
-product requirements:
+SQLite compiles predicates to parameterized SQL at its storage boundary. The
+source-dialog evaluator uses the same model and two-valued Boolean semantics.
+The remaining collection-shaped local data-access code accepts legacy filters
+through `query_from_filter()`. Source restriction resolution adapts predicates
+to that format internally for its existing candidate/aggregate logic. The old
+`python_query_to_filters()`, `python_query_to_mongo()`, and
+`mongo_filter_matches()` names remain compatibility exports for existing callers;
+active controllers use the new parser and evaluator.
 
-- storage syntax leaks into Trame controller state;
-- query parsing, validation, source resolution, and storage translation are
-  coupled;
-- Query and Source Filter evaluate similar syntax against different record
-  shapes;
-- some fields are accepted even when a particular query surface cannot supply
-  reliable values for them;
-- source identity historically preferred `producer`, which can over-match when
-  producer names are reused;
-- backend failures may appear as an empty result instead of a query error;
-- the current state is not a suitable durable viewer-state format.
+### Implemented Predicate Contract
 
-Phase 5B.1 introduced stable source IDs and isolated source discovery behind a
-backend capability, but deliberately retained the old query-document shape as
-a compatibility bridge.
+- Aliases, supported text syntax, and parser complexity limits remain in
+  `query_parser.py`. Unknown fields, type mismatches, nested membership values,
+  and ordered comparisons to `None` or lists are rejected.
+- Missing fields and explicit nulls both compare equal to `None`. A bare field
+  means non-null, so numeric zero and empty text count as present.
+- Equality to a non-null value, ordered comparisons, and substring tests return
+  false for nulls. `not` always complements a Boolean result, including for
+  nulls. Thus `not (min > 0)` includes missing extrema.
+- Membership supports `None`: `min in [None, 0]` includes null extrema and zero.
+  `not in` is its complement. Membership in an empty list is always false;
+  membership exclusion from an empty list is always true.
+- `contains(field, text)` performs a case-sensitive literal substring match.
+  Text is regex-escaped internally; the public language does not accept raw
+  regex patterns.
+- `and`, `or`, and `not` use Python precedence and respect parentheses.
+  All predicates apply, including sibling fields beside legacy Boolean groups.
+- Source clauses remain top-level conjuncts and intersect resolved source
+  identities across clauses. Campaign path participates in source identity.
+  Existing aggregation of per-variable source extrema remains in place.
+- Global filters still propagate to catalog, source discovery, and visualization
+  operations. Source filters still operate on summary rows after global
+  filtering, so summary extrema and individual stored-record extrema can differ.
+- Invalid global queries preserve the active query. Invalid source-filter drafts
+  preserve the active filter, rows, and selection and show an error. The Source
+  Filter action submits the current textbox value explicitly so a rapid click
+  cannot apply the previous draft while Trame batches model updates.
+
+`tests/test_query_semantics.py` fixes expected Python/SQLite selections for nulls,
+negation, membership, literal substrings, and compound predicates.
+`tests/test_multi_campaign_sources.py` covers source-clause intersections and
+archive identity through the controller/backend/storage path.
+
+The separate metadata SQL API retains SQL semantics (including SQL null logic);
+its contract and result tables are described in `docs/metadata-queries.md`.
+
+Remaining design constraints:
+
+- local policy code still builds collection filters and uses collection reads;
+- catalog records and source summary rows have different grains;
+- changing grid refresh scope, query UX, or arbitrary metadata discovery requires
+  the product decisions below;
+- legacy filters remain accepted during migration; new query consumers should
+  use the versioned model documents.
 
 ## Start With Workflows
 

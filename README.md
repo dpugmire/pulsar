@@ -93,7 +93,7 @@ than exposing collection documents, ACA paths, or remote API objects to Trame
 controllers. See [PHOBOS_INTEGRATION.md](PHOBOS_INTEGRATION.md) for the planned
 Phobos boundary and remaining migration phases.
 
-The earlier catalog-filter redesign remains documented in
+The catalog/source predicate contract and broader query redesign are documented in
 [QUERY_REDESIGN.md](QUERY_REDESIGN.md) for the current behavior, design options,
 backend constraints, acceptance criteria, and open decisions that should be
 resolved before Phase 5B.2 resumes. The local Python metadata SQL/result-table

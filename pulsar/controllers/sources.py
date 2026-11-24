@@ -10,7 +10,8 @@ from plugin_runtime import (
     is_plugin_visualization,
     plot1d_payload,
 )
-from query_parser import and_filter, mongo_filter_matches, python_query_to_filters
+from query_parser import and_filter, parse_query_filters
+from pulsar.models.query import query_from_filter, query_matches
 from pulsar.learning.context import stable_fingerprint
 from pulsar.models import source_selection as source_selection_model
 from pulsar.models.grid import (
@@ -595,7 +596,7 @@ class SourcesControllerMixin:
         if not expr:
             return rows
 
-        row_filter, source_filters = python_query_to_filters(expr)
+        row_filter, source_filters = parse_query_filters(expr)
         source_restriction = {}
         if source_filters:
             source_summary = self.application.resolve_source_restriction(
@@ -603,12 +604,12 @@ class SourcesControllerMixin:
             )
             source_restriction = dict(source_summary.get("query", {}) or {})
 
+        predicate = query_from_filter(row_filter)
+        restriction = query_from_filter(source_restriction)
         matched_rows = []
         for row in rows:
             values = self.source_filter_values(row)
-            if mongo_filter_matches(
-                row_filter, values
-            ) and mongo_filter_matches(source_restriction, values):
+            if query_matches(predicate, values) and query_matches(restriction, values):
                 matched_rows.append(row)
         return matched_rows
 
@@ -1306,15 +1307,25 @@ class SourcesControllerMixin:
             ),
         )
 
-    def apply_source_dialog_filter(self, **_):
-        self.state.sourceFilterText = str(
-            self.state.sourceFilterDraftText or ""
-        ).strip()
+    def apply_source_dialog_filter(self, draft=None, **_):
+        # The click payload is authoritative: Trame may still be batching the
+        # textbox model update when the Filter action reaches the server.
+        if draft is not None:
+            self.state.sourceFilterDraftText = draft
+        draft = str(self.state.sourceFilterDraftText or "").strip()
+        try:
+            # Validate before replacing the active filter or visible selection.
+            rows = self.sorted_source_rows(self.source_rows_matching_filter(draft))
+        except Exception as error:
+            self.state.sourceFilterError = f"{type(error).__name__}: {error}"
+            return
+        self.state.sourceFilterText = draft
         self.state.sourceFilterError = ""
-        self.apply_source_filter_and_sort()
+        self.state.sourceRows = rows
+        self.update_selected_source_label()
         if self.state.sourceFilterError or not self.state.sourceFilterText:
             return
-        row_filter, source_filters = python_query_to_filters(
+        row_filter, source_filters = parse_query_filters(
             self.state.sourceFilterText
         )
         self.record_query_applied(

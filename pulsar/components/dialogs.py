@@ -486,7 +486,7 @@ class SourceDialog(TrameComponent):
                                 "Filter",
                                 variant="tonal",
                                 size="small",
-                                click=ctrl.apply_source_dialog_filter,
+                                click=(ctrl.apply_source_dialog_filter, "[sourceFilterDraftText]"),
                             )
                             with vuetify.Template(v_if="sourceDialogMode === 'add'"):
                                 vuetify.VBtn(

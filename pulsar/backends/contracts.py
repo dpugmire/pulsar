@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional, Protocol, TypedDict
 
 
 NavigationView = Literal["variables", "files", "objects", "campaign"]
+# Version-1 predicate documents from pulsar.models.query.query_document().
+# Local compatibility callers may still supply legacy collection filters.
 CatalogFilter = Dict[str, Any]
 
 
@@ -134,7 +136,7 @@ class SourceRestrictionRequest(TypedDict, total=False):
 
 
 class SourceRestrictionResult(TypedDict):
-    """Resolved legacy query used until Phase 5B.2 formalizes filters."""
+    """Resolved source restriction, accepted as a predicate document or legacy filter."""
 
     query: CatalogFilter
     count: int

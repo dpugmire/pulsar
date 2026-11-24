@@ -6,7 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from application import NavigationNode
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
-from query_parser import and_filter, python_query_to_filters
+from query_parser import and_filter, parse_query_filters
+from pulsar.models.query import query_document, query_from_filter
 from pulsar.models.source_selection import (
     normalize_source_keys,
     source_fields_from_row,
@@ -2411,14 +2412,14 @@ Notes:
                 "variable_count": 0,
             }
 
-        query_filter, source_filters = python_query_to_filters(q)
+        query_filter, source_filters = parse_query_filters(q)
         source_restriction: Dict[str, Any] = {}
         source_count = 0
         if source_filters:
             source_summary = self.application.resolve_source_restriction(
                 {"queries": source_filters}
             )
-            source_restriction = dict(source_summary.get("query", {}) or {})
+            source_restriction = query_document(query_from_filter(source_summary.get("query")))
             source_count = int(source_summary.get("count", 0) or 0)
 
         active_filter = self.combined_query_filter(
