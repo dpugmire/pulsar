@@ -167,3 +167,176 @@ def test_unqualified_legacy_source_ids_remain_stable():
     source = {"variable_id": "pressure", "source_dataset": "output.bp"}
     assert LocalCampaignBackend._source_id(source) == "local-source:v1:779c2d63a9a85199fb9424c616165dacdf561f502652a0d8a1eab2582f718d9b"
     assert source_key_for_fields(source) == "pressure|output.bp"
+
+
+def test_typed_catalog_query_intersects_source_clauses(campaigns):
+    controller, _db, collection, paths, _reader = campaigns
+    collection.insert_one({
+        "campaign_path": paths[1], "variable_id": "valid", "variable_name": "valid",
+        "variable_type": "variable", "source_dataset": "output.bp", "min": 1, "max": 1,
+    })
+    controller.state.queryText = (
+        "var == 'pressure' and source(var == 'valid' and min == 1) "
+        "and source(var == 'pressure' and max > 10)"
+    )
+    assert controller.update_query_state()
+    assert controller.state.queryFilter["query_version"] == 1
+    assert controller.state.querySourceRestrictionCount == 1
+    matches = list(collection.find(controller.active_query_filter()))
+    assert [(doc["campaign_path"], doc["variable_name"]) for doc in matches] == [(paths[1], "pressure")]
+
+
+def test_invalid_source_filter_preserves_active_selection(campaigns):
+    controller, _db, _collection, _paths, _reader = campaigns
+    controller.state.sourceFilterText = "min > 0"
+    controller.state.sourceRows = [{"_key": "selected", "variable_id": "pressure"}]
+    controller.state.selectedSourceKeys = ["selected"]
+    controller.state.sourceFilterDraftText = "min > None"
+    controller.apply_source_dialog_filter()
+    assert controller.state.sourceFilterText == "min > 0"
+    assert controller.state.sourceRows == [{"_key": "selected", "variable_id": "pressure"}]
+    assert controller.state.selectedSourceKeys == ["selected"]
+    assert controller.state.sourceFilterError
+
+
+@pytest.mark.parametrize("identity", [
+    {},
+    {"schema_file_group": "output", "schema_mode": "file_per_timestep"},
+    {"source_collection_id": "runs", "schema_name": "test"},
+])
+@pytest.mark.parametrize("clauses, expected_indices", [
+    ("source(var == 'absent')", []),
+    ("source(var == 'valid' and min == 0) and source(var == 'valid' and min == 1)", []),
+    ("source(var == 'valid' and min == 1)", [1]),
+    ("source(var == 'unknown' and min > 0)", []),
+    ("source(var == 'unknown' and min == None)", [0, 1]),
+    ("source(var == 'unknown' and not (min > 0))", [0, 1]),
+])
+def test_typed_source_clause_edge_cases(campaigns, identity, clauses, expected_indices):
+    controller, _db, collection, paths, _reader = campaigns
+    for index, path in enumerate(paths):
+        existing = collection.find_one({"campaign_path": path})
+        collection.delete_many({"campaign_path": path})
+        collection.insert_one({**existing, **identity})
+        for name, extrema in [("valid", {"min": index, "max": index}), ("unknown", {})]:
+            collection.insert_one({
+                "campaign_path": path, "variable_id": name, "variable_name": name,
+                "variable_type": "variable", "source_dataset": "output.bp",
+                **identity, **extrema,
+            })
+    controller.state.queryText = "var == 'pressure' and " + clauses
+    assert controller.update_query_state(), controller.state.queryError
+    assert controller.state.querySourceRestrictionCount == len(expected_indices)
+    matches = list(collection.find(controller.active_query_filter()))
+    assert {doc["campaign_path"] for doc in matches} == {paths[index] for index in expected_indices}
+    assert all(doc["variable_name"] == "pressure" for doc in matches)
+
+
+def test_source_query_workspace_restore_into_fresh_controller(campaigns):
+    from copy import deepcopy
+
+    controller, db, collection, paths, _reader = campaigns
+    controller.state.queryText = "var == 'pressure' and source(var == 'pressure' and max > 10)"
+    assert controller.run_query()
+
+    def selection(owner):
+        summary = owner.application.get_source_summary({
+            "variable_id": "pressure", "query": owner.active_query_filter(),
+        })
+        return {
+            "catalog": deepcopy(owner.state.variableGroups),
+            "sources": [(source["id"], source["campaign_path"], source["maximum"])
+                        for source in summary["sources"]],
+            "count": owner.state.querySourceRestrictionCount,
+        }
+
+    expected = selection(controller)
+    assert expected["count"] == 1
+    assert expected["sources"][0][1] == paths[1]
+    document = parse_workspace_document(workspace_json(controller.state, paths[0]))
+    server = get_server(f"query-restore-{paths[0]}", client_type="vue3")
+    init_state(server.state, db)
+    fresh = PulsarController(ControllerContext(
+        server=server, backend=LocalCampaignBackend(db), db=db, collection=collection,
+        parse_campaign=lambda *_args, **_kwargs: None, campaign_path=paths[0], campaign_paths=tuple(paths),
+    ))
+    assert not fresh.state.queryText
+    fresh.restore_workspace_state(document)
+    assert fresh.state.queryText == controller.state.queryText
+    assert selection(fresh) == expected
+
+
+@pytest.mark.parametrize("operation", ["get_navigation", "resolve_source_restriction"])
+def test_global_query_backend_failure_preserves_selection(campaigns, operation):
+    from copy import deepcopy
+    from pulsar.backends.contracts import QueryExecutionError
+
+    controller, _db, _collection, _paths, _reader = campaigns
+    controller.state.queryText = "var == 'pressure'"
+    assert controller.run_query()
+    controller.state.sourceRows = [{"_key": "chosen", "variable_id": "pressure"}]
+    controller.state.selectedSourceKeys = ["chosen"]
+    fields = ("queryFilter", "querySourceFilters", "querySourceRestrictionFilter",
+              "querySourceRestrictionCount", "queryViewLabel", "variableGroups",
+              "sourceRows", "selectedSourceKeys")
+    previous = {field: deepcopy(getattr(controller.state, field)) for field in fields}
+    controller.state.queryText = "var == 'pressure' and source(max > 10)"
+    with patch.object(controller.application, operation, side_effect=QueryExecutionError("backend offline")):
+        assert not controller.run_query()
+    assert {field: getattr(controller.state, field) for field in fields} == previous
+    assert "backend offline" in controller.state.queryError
+    assert controller.state.queryStatus == "Query ERROR · active query unchanged"
+
+
+def test_source_filter_backend_failure_preserves_selection(campaigns):
+    from copy import deepcopy
+    from pulsar.backends.contracts import QueryExecutionError
+
+    controller, _db, _collection, _paths, _reader = campaigns
+    controller.state.sourceFilterText = "min > 0"
+    controller.state.sourceRowsAll = [{"_key": "chosen", "variable_id": "pressure", "min_value": 1}]
+    controller.state.sourceRows = deepcopy(controller.state.sourceRowsAll)
+    controller.state.selectedSourceKeys = ["chosen"]
+    previous = deepcopy(controller.state.sourceRows)
+    controller.state.sourceFilterDraftText = "source(max > 10)"
+    with patch.object(controller.application, "resolve_source_restriction",
+                      side_effect=QueryExecutionError("backend offline")):
+        controller.apply_source_dialog_filter()
+    assert controller.state.sourceFilterText == "min > 0"
+    assert controller.state.sourceRows == previous
+    assert controller.state.selectedSourceKeys == ["chosen"]
+    assert "backend offline" in controller.state.sourceFilterError
+
+
+@pytest.mark.parametrize("draft, expected_names", [
+    ("max > 10", ["large"]),
+    ("max < 10", ["small"]),
+    ("", ["large", "small"]),
+])
+def test_source_filter_click_payload_overrides_stale_model(campaigns, draft, expected_names):
+    controller, _db, _collection, _paths, _reader = campaigns
+    controller.state.sourceRowsAll = [
+        {"_key": "large", "variable_id": "pressure", "source_dataset": "large", "max_value": 30},
+        {"_key": "small", "variable_id": "pressure", "source_dataset": "small", "max_value": 3},
+    ]
+    controller.state.sourceRows = list(controller.state.sourceRowsAll)
+    controller.state.sourceFilterDraftText = "min > None"
+    controller.apply_source_dialog_filter(draft)
+    assert not controller.state.sourceFilterError
+    assert controller.state.sourceFilterDraftText == draft
+    assert controller.state.sourceFilterText == draft
+    assert [row["_key"] for row in controller.state.sourceRows] == expected_names
+
+
+def test_invalid_click_payload_preserves_filter_when_model_is_still_valid(campaigns):
+    controller, _db, _collection, _paths, _reader = campaigns
+    controller.state.sourceFilterText = "max > 10"
+    controller.state.sourceFilterDraftText = "max > 10"
+    controller.state.sourceRows = [{"_key": "chosen", "max_value": 30}]
+    controller.state.selectedSourceKeys = ["chosen"]
+    controller.apply_source_dialog_filter("max > None")
+    assert controller.state.sourceFilterDraftText == "max > None"
+    assert controller.state.sourceFilterText == "max > 10"
+    assert controller.state.sourceRows == [{"_key": "chosen", "max_value": 30}]
+    assert controller.state.selectedSourceKeys == ["chosen"]
+    assert controller.state.sourceFilterError

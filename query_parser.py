@@ -3,6 +3,11 @@ import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from pulsar.models.query import (
+    Compare, Junction, Negate, QueryPlan, query_document, query_from_filter,
+    query_matches, legacy_filter,
+)
+
 
 MAX_QUERY_LENGTH = 4096
 MAX_QUERY_AST_NODES = 256
@@ -114,6 +119,8 @@ def _const(node: ast.AST):
 def _validate_field_value(field: str, value: Any) -> None:
     values = value if isinstance(value, list) else [value]
     for item in values:
+        if isinstance(item, (list, tuple)):
+            raise QueryValidationError("Membership values must be scalar constants")
         if item is None:
             continue
         if field in TEXT_FIELDS:
@@ -173,7 +180,7 @@ def _parse_query(expr: str) -> ast.Expression:
     return tree
 
 
-def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
+def _compile_query_node(node: ast.AST):
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "source":
         raise QueryValidationError(
             "source(...) is only supported as a top-level 'and' clause"
@@ -199,22 +206,14 @@ def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
             raise QueryValidationError(
                 "contains(...) search value must be a non-empty string"
             )
-        return {field: {"$regex": re.escape(search_text)}}
+        return Compare(field, "regex", re.escape(search_text))
 
     if isinstance(node, ast.BoolOp):
-        op = "$and" if isinstance(node.op, ast.And) else "$or"
-        parts = [_compile_query_node(v) for v in node.values]
-        flat: List[Dict[str, Any]] = []
-        for p in parts:
-            if isinstance(p, dict) and op in p and len(p) == 1:
-                flat.extend(p[op])
-            else:
-                flat.append(p)
-        return {op: flat}
+        op = "and" if isinstance(node.op, ast.And) else "or"
+        return Junction(op, tuple(_compile_query_node(v) for v in node.values))
 
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        inner = _compile_query_node(node.operand)
-        return {"$nor": [inner]}
+        return Negate(_compile_query_node(node.operand))
 
     if isinstance(node, ast.Compare):
         if len(node.ops) != 1 or len(node.comparators) != 1:
@@ -236,7 +235,7 @@ def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
                 )
             value = _const(right)
             _validate_field_value(field, value)
-            return {field: value}
+            return Compare(field, "eq", value)
         if isinstance(op, ast.NotEq):
             if isinstance(right, (ast.List, ast.Tuple)):
                 raise QueryValidationError(
@@ -244,7 +243,7 @@ def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
                 )
             value = _const(right)
             _validate_field_value(field, value)
-            return {field: {"$ne": value}}
+            return Compare(field, "ne", value)
         if isinstance(op, ast.In):
             if not isinstance(right, (ast.List, ast.Tuple)):
                 raise QueryValidationError(
@@ -252,7 +251,7 @@ def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
                 )
             value = _const(right)
             _validate_field_value(field, value)
-            return {field: {"$in": value}}
+            return Compare(field, "in", tuple(value))
         if isinstance(op, ast.NotIn):
             if not isinstance(right, (ast.List, ast.Tuple)):
                 raise QueryValidationError(
@@ -260,13 +259,13 @@ def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
                 )
             value = _const(right)
             _validate_field_value(field, value)
-            return {field: {"$nin": value}}
+            return Compare(field, "nin", tuple(value))
 
         ordered_operators = {
-            ast.Gt: "$gt",
-            ast.GtE: "$gte",
-            ast.Lt: "$lt",
-            ast.LtE: "$lte",
+            ast.Gt: "gt",
+            ast.GtE: "gte",
+            ast.Lt: "lt",
+            ast.LtE: "lte",
         }
         for operator_type, filter_operator in ordered_operators.items():
             if isinstance(op, operator_type):
@@ -276,24 +275,17 @@ def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
                     )
                 value = _const(right)
                 _validate_field_value(field, value)
-                return {field: {filter_operator: value}}
+                if value is None or isinstance(value, list):
+                    raise QueryValidationError("Ordered comparisons require a finite number")
+                return Compare(field, filter_operator, value)
 
         raise QueryValidationError(f"Unsupported operator: {type(op).__name__}")
 
     if isinstance(node, ast.Name):
         field = _field_name(node.id)
-        return {field: {"$ne": None}}
+        return Compare(field, "ne", None)
 
     raise QueryValidationError(f"Unsupported expression: {type(node).__name__}")
-
-
-def _combine_and(filters: List[Dict[str, Any]]) -> Dict[str, Any]:
-    nonempty = [f for f in filters if f]
-    if not nonempty:
-        return {}
-    if len(nonempty) == 1:
-        return nonempty[0]
-    return {"$and": nonempty}
 
 
 def _is_source_call(node: ast.AST) -> bool:
@@ -313,112 +305,56 @@ def _top_level_and_terms(node: ast.AST) -> List[ast.AST]:
     return [node]
 
 
-def python_query_to_mongo(expr: str) -> Dict[str, Any]:
+def parse_query(expr: str) -> QueryPlan:
+    """Parse text into storage-independent predicates and intersected source clauses."""
     expr = (expr or "").strip()
     if not expr:
-        return {}
-
+        return QueryPlan(Junction("and", ()), ())
     tree = _parse_query(expr)
-    return _compile_query_node(tree.body)
-
-
-def python_query_to_filters(expr: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    expr = (expr or "").strip()
-    if not expr:
-        return {}, []
-
-    tree = _parse_query(expr)
-    doc_filters: List[Dict[str, Any]] = []
-    source_filters: List[Dict[str, Any]] = []
-
+    predicates, sources = [], []
     for term in _top_level_and_terms(tree.body):
         if _is_source_call(term):
             if len(term.args) != 1 or term.keywords:
-                raise QueryValidationError(
-                    "source(...) takes exactly one query expression"
-                )
+                raise QueryValidationError("source(...) takes exactly one query expression")
             if _has_source_call(term.args[0]):
-                raise QueryValidationError(
-                    "Nested source(...) clauses are not supported"
-                )
-            source_filters.append(_compile_query_node(term.args[0]))
-            continue
+                raise QueryValidationError("Nested source(...) clauses are not supported")
+            sources.append(_compile_query_node(term.args[0]))
+        else:
+            if _has_source_call(term):
+                raise QueryValidationError("source(...) is only supported as a top-level 'and' clause")
+            predicates.append(_compile_query_node(term))
+    predicate = predicates[0] if len(predicates) == 1 else Junction("and", tuple(predicates))
+    return QueryPlan(predicate, tuple(sources))
 
-        if _has_source_call(term):
-            raise QueryValidationError(
-                "source(...) is only supported as a top-level 'and' clause"
-            )
 
-        doc_filters.append(_compile_query_node(term))
+def parse_query_filters(expr: str):
+    """JSON-safe query documents for Trame and backend requests."""
+    plan = parse_query(expr)
+    return query_document(plan.predicate), [query_document(item) for item in plan.sources]
 
-    return _combine_and(doc_filters), source_filters
+
+def python_query_to_mongo(expr: str) -> Dict[str, Any]:
+    """Compatibility export for callers that still require collection filters."""
+    plan = parse_query(expr)
+    if plan.sources:
+        raise QueryValidationError("source(...) is only supported as a top-level 'and' clause")
+    return legacy_filter(plan.predicate)
+
+
+def python_query_to_filters(expr: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Compatibility export; new controllers use parse_query_filters."""
+    plan = parse_query(expr)
+    return legacy_filter(plan.predicate), [legacy_filter(item) for item in plan.sources]
 
 
 def and_filter(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not extra:
         return base
+    if (base or {}).get("query_version") or extra.get("query_version"):
+        return query_document(Junction("and", (query_from_filter(base), query_from_filter(extra))))
     return {"$and": [base, extra]}
 
 
-def _value_matches(value: Any, condition: Any) -> bool:
-    if not isinstance(condition, dict):
-        return value == condition
-
-    for op, expected in condition.items():
-        if op == "$ne":
-            if value == expected:
-                return False
-            continue
-
-        if op in {"$in", "$nin"}:
-            try:
-                matched = value in expected
-            except TypeError:
-                matched = False
-            if op == "$in" and not matched:
-                return False
-            if op == "$nin" and matched:
-                return False
-            continue
-
-        if op == "$regex":
-            if not isinstance(value, str):
-                return False
-            return re.search(str(expected), value) is not None
-
-        try:
-            if op == "$gt" and not (value > expected):
-                return False
-            if op == "$gte" and not (value >= expected):
-                return False
-            if op == "$lt" and not (value < expected):
-                return False
-            if op == "$lte" and not (value <= expected):
-                return False
-        except TypeError:
-            return False
-
-        if op not in {"$gt", "$gte", "$lt", "$lte"}:
-            raise ValueError(f"Unsupported filter operator: {op}")
-
-    return True
-
-
 def mongo_filter_matches(filter_doc: Dict[str, Any], values: Dict[str, Any]) -> bool:
-    if not filter_doc:
-        return True
-
-    for key, condition in filter_doc.items():
-        if key == "$and":
-            return all(mongo_filter_matches(part, values) for part in condition)
-        if key == "$or":
-            return any(mongo_filter_matches(part, values) for part in condition)
-        if key == "$nor":
-            return not any(mongo_filter_matches(part, values) for part in condition)
-        if key.startswith("$"):
-            raise ValueError(f"Unsupported filter operator: {key}")
-
-        if not _value_matches(values.get(key), condition):
-            return False
-
-    return True
+    """Compatibility export using the shared two-valued query evaluator."""
+    return query_matches(query_from_filter(filter_doc), values)

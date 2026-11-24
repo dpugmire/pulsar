@@ -2,6 +2,7 @@ import copy
 import unittest
 from types import SimpleNamespace
 
+from query_parser import parse_query_filters
 from application import PulsarApplication
 from pulsar.backends import BackendStatus, LocalCampaignBackend
 from pulsar.controllers import attach_controllers
@@ -1341,9 +1342,9 @@ class BackendInjectionTests(unittest.TestCase):
 
         self.assertEqual(
             backend.source_restriction_requests,
-            [{"queries": [{"producer": "run"}]}],
+            [{"queries": [parse_query_filters("producer == 'run'")[0]]}],
         )
-        self.assertEqual(state.querySourceRestrictionFilter, {"producer": "run"})
+        self.assertEqual(state.querySourceRestrictionFilter, parse_query_filters("producer == 'run'")[0])
         self.assertEqual(state.querySourceRestrictionCount, 2)
         self.assertEqual(state.queryStatus, "Query OK · 2 source runs")
 
@@ -1364,7 +1365,7 @@ class BackendInjectionTests(unittest.TestCase):
         )
 
         self.assertTrue(server.controller.actions["run_query"]())
-        self.assertEqual(state.queryFilter, {"variable_name": "energy"})
+        self.assertEqual(state.queryFilter, parse_query_filters("var == 'energy'")[0])
         self.assertEqual(state.queryViewLabel, "var == 'energy'")
         state.activeViewerActionPlan = {"type": "catalog.query"}
         state.activeNaturalLanguageQuery = "show energy"
@@ -1372,7 +1373,7 @@ class BackendInjectionTests(unittest.TestCase):
         state.queryText = "var =="
         self.assertFalse(server.controller.actions["run_query"]())
 
-        self.assertEqual(state.queryFilter, {"variable_name": "energy"})
+        self.assertEqual(state.queryFilter, parse_query_filters("var == 'energy'")[0])
         self.assertEqual(state.queryViewLabel, "var == 'energy'")
         self.assertEqual(
             state.activeViewerActionPlan,

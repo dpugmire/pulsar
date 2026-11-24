@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
+from pulsar.models.query import Compare, Junction, Negate, query_from_filter, regex_matches
+
+
 SIDECAR_SCHEMA_VERSION = 3
 
 INDEXED_FIELDS = {
@@ -169,15 +172,7 @@ def _float_value(value: Any) -> Optional[float]:
 
 
 def _sqlite_regexp(pattern: Any, value: Any) -> int:
-    if pattern is None or value is None:
-        return 0
-    text_pattern = str(pattern)
-    if len(text_pattern) > 2048:
-        return 0
-    try:
-        return int(re.search(text_pattern, str(value)) is not None)
-    except re.error:
-        return 0
+    return int(regex_matches(pattern, value))
 
 
 class _SQLiteAdmin:
@@ -503,94 +498,45 @@ class SQLiteCampaignCollection:
         return self._compile_query(query)
 
     def _compile_query(self, query: Dict[str, Any]) -> Tuple[str, List[Any]]:
-        parts: List[str] = []
-        params: List[Any] = []
-        for key, value in (query or {}).items():
-            if key == "$and":
-                subparts = [self._compile_query(item) for item in self._iter_dicts(value)]
-                if not subparts:
-                    continue
-                parts.append("(" + " and ".join(sql for sql, _ in subparts) + ")")
-                for _, subparams in subparts:
-                    params.extend(subparams)
-                continue
-            if key == "$or":
-                subparts = [self._compile_query(item) for item in self._iter_dicts(value)]
-                if not subparts:
-                    parts.append("0")
-                    continue
-                parts.append("(" + " or ".join(sql for sql, _ in subparts) + ")")
-                for _, subparams in subparts:
-                    params.extend(subparams)
-                continue
-            if key == "$nor":
-                subparts = [self._compile_query(item) for item in self._iter_dicts(value)]
-                if not subparts:
-                    continue
-                parts.append("not (" + " or ".join(sql for sql, _ in subparts) + ")")
-                for _, subparams in subparts:
-                    params.extend(subparams)
-                continue
+        return self._compile_predicate(query_from_filter(query))
 
-            sql, subparams = self._compile_field_condition(key, value)
-            parts.append(sql)
-            params.extend(subparams)
-
-        return (" and ".join(parts) if parts else "1", params)
-
-    @staticmethod
-    def _iter_dicts(value: Any) -> Iterable[Dict[str, Any]]:
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                if isinstance(item, dict):
-                    yield item
-
-    def _compile_field_condition(self, field: str, value: Any) -> Tuple[str, List[Any]]:
-        column = self._field_column(field)
+    def _compile_predicate(self, node):
+        if isinstance(node, Junction):
+            if not node.terms:
+                return ("1" if node.operator == "and" else "0"), []
+            compiled = [self._compile_predicate(term) for term in node.terms]
+            return (
+                "(" + (" and " if node.operator == "and" else " or ").join(sql for sql, _ in compiled) + ")",
+                [value for _, params in compiled for value in params],
+            )
+        if isinstance(node, Negate):
+            sql, params = self._compile_predicate(node.term)
+            return f"not ({sql})", params
+        column = self._field_column(node.field)
         if not column:
-            raise ValueError(f"Unsupported SQLite query field: {field}")
-
-        if isinstance(value, dict):
-            parts: List[str] = []
-            params: List[Any] = []
-            for op, raw in value.items():
-                sql, subparams = self._compile_operator(column, str(op), raw)
-                parts.append(sql)
-                params.extend(subparams)
-            return ("(" + " and ".join(parts) + ")" if parts else "1", params)
-
-        if value is None:
-            return (f"{column} is null", [])
-        return (f"{column} = ?", [value])
-
-    def _compile_operator(self, column: str, op: str, value: Any) -> Tuple[str, List[Any]]:
-        if op == "$ne":
-            if value is None:
-                return (f"{column} is not null", [])
-            return (f"({column} != ? or {column} is null)", [value])
-        if op == "$in":
-            values = list(value or [])
-            if not values:
-                return ("0", [])
-            return (f"{column} in ({', '.join('?' for _ in values)})", values)
-        if op == "$nin":
-            values = list(value or [])
-            if not values:
-                return ("1", [])
-            return (f"({column} not in ({', '.join('?' for _ in values)}) or {column} is null)", values)
-        if op == "$gt":
-            return (f"{column} > ?", [value])
-        if op == "$gte":
-            return (f"{column} >= ?", [value])
-        if op == "$lt":
-            return (f"{column} < ?", [value])
-        if op == "$lte":
-            return (f"{column} <= ?", [value])
-        if op == "$regex":
-            return (f"regexp(?, {column})", [str(value)])
-        if op == "$exists":
-            return (f"{column} is {'not ' if bool(value) else ''}null", [])
-        raise ValueError(f"Unsupported SQLite query operator: {op}")
+            raise ValueError(f"Unsupported SQLite query field: {node.field}")
+        op, value = node.operator, node.value
+        if op == "eq":
+            # IS is null-safe and preserves indexed equality lookups. Wrapping
+            # an equality in coalesce() would force a scan of the campaign.
+            return f"{column} is ?", [value]
+        if op == "ne":
+            sql, params = self._compile_predicate(Compare(node.field, "eq", value))
+            return f"not ({sql})", params
+        if op in {"in", "nin"}:
+            values = [item for item in value if item is not None]
+            sql = f"coalesce({column} in ({', '.join('?' for _ in values)}), 0)" if values else "0"
+            if None in value:
+                sql = f"({sql} or {column} is null)"
+            return (f"not ({sql})" if op == "nin" else sql), values
+        if op in {"gt", "gte", "lt", "lte"}:
+            symbol = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
+            return f"coalesce({column} {symbol} ?, 0)", [value]
+        if op == "regex":
+            return f"regexp(?, {column})", [str(value)]
+        if op == "exists":
+            return f"{column} is {'not ' if value else ''}null", []
+        raise ValueError(f"Unsupported query operator: {op}")
 
     def _order_sql(self, sort_spec: Sequence[Tuple[str, int]]) -> str:
         parts: List[str] = []

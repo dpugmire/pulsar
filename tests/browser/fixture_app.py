@@ -327,7 +327,53 @@ def _campaign_browser_fixture(server):
     server.state.campaignOverview = [campaign_overview_card(campaign)]
 
 
+def _query_fixture_server():
+    """Exercise real controllers and SQLite without requiring an ADIOS archive."""
+    import tempfile
+
+    from db import CampaignDb
+    from pulsar.backends import LocalCampaignBackend
+    from pulsar.controllers import ControllerContext, PulsarController
+    from sqlite_store import SQLiteCampaignCollection
+
+    directory = tempfile.TemporaryDirectory(prefix="pulsar-query-browser-")
+    root = Path(directory.name)
+    collection = SQLiteCampaignCollection(root / "viewer.sqlite")
+    database = CampaignDb(collection)
+    server = get_server("pulsar-browser-query", client_type="vue3")
+    server.enable_module(pulsar_module)
+    init_state(server.state, database)
+
+    def ingest(_path, target, **_):
+        for name in ("pressure", "density"):
+            for source, maximum in (("small", 3), ("large", 30)):
+                target.insert_one({
+                    "campaign_path": str(root / "fixture.aca"),
+                    "variable_id": name, "variable_name": name,
+                    "variable_type": "variable", "source_dataset": f"{source}/output.bp",
+                    "min": 1, "max": maximum,
+                    "metadata": {"Shape": "2,2,2", "Type": "double"},
+                })
+
+    controller = PulsarController(ControllerContext(
+        server=server, backend=LocalCampaignBackend(database), db=database,
+        collection=collection, parse_campaign=ingest,
+        campaign_path=str(root / "fixture.aca"),
+    )).register()
+
+    def cleanup(**_):
+        database.close()
+        collection.close()
+        directory.cleanup()
+
+    server.controller.on_server_exited.add(cleanup)
+    build_ui(server, controller.refresh_variable_list, campaign_name="query-fixture.aca")
+    return server
+
+
 def build_fixture_server(mode):
+    if mode == "query":
+        return _query_fixture_server()
     server = get_server(f"pulsar-browser-{mode}", client_type="vue3")
     server.enable_module(pulsar_module)
     init_state(server.state, FixtureDb())
@@ -1625,6 +1671,7 @@ def main():
     parser.add_argument(
         "--mode",
         choices=(
+            "query",
             "campaigns",
             "step",
             "physical",

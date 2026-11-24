@@ -14,7 +14,8 @@ from adios2 import FileReader
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from media_utils import png_bytes_to_data_uri
-from query_parser import and_filter, mongo_filter_matches
+from query_parser import and_filter
+from pulsar.models.query import legacy_filter, query_from_filter, query_matches
 from pulsar.constants import SCALAR_FIELD_COLORMAP_OPTIONS
 
 
@@ -1229,8 +1230,9 @@ class CampaignDb:
             self._source_restriction_merge_doc_values(values, doc)
 
         identities: Set[Tuple[str, str, str]] = set()
+        predicate = query_from_filter(source_filter)
         for key, values in groups.items():
-            if mongo_filter_matches(source_filter or {}, values):
+            if query_matches(predicate, values):
                 identity, _variable_id = key
                 identities.add(identity)
         return identities
@@ -1299,6 +1301,7 @@ class CampaignDb:
         self,
         source_filters: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        source_filters = [legacy_filter(query_from_filter(item)) for item in source_filters]
         if not source_filters:
             return {"filter": {}, "count": 0}
         if not self.ok:
