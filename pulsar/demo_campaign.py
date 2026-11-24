@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import math
 import os
+import shutil
+import subprocess
 import tempfile
 from contextlib import contextmanager, redirect_stdout
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from typing import Any, Iterator
 import adios2
 import numpy as np
 from PIL import Image
+from PIL import ImageDraw
 
 from db import scalar_field_to_png_bytes
 
@@ -112,7 +115,7 @@ class GeneratedDemoCampaign:
 
 def _hpc_campaign_api():
     try:
-        from hpc_campaign import Manager, VariableSpec  # type: ignore
+        from hpc_campaign import Manager  # type: ignore
     except ImportError as exc:
         raise DemoDependencyError(
             "Demo mode requires unified hpc-campaign support. "
@@ -121,18 +124,20 @@ def _hpc_campaign_api():
 
     required = (
         "add_variable",
-        "add_image_sequence",
-        "add_activity",
+        "visualization",
+        "visualization_sequence",
+        "video",
+        "scalar_field_data",
         "data",
         "set_schema",
     )
     missing = [name for name in required if not hasattr(Manager, name)]
     if missing:
         raise DemoDependencyError(
-            "The installed hpc-campaign does not provide the unified variable API "
+            "The installed hpc-campaign does not provide the visualization API "
             f"required by demo mode (missing: {', '.join(missing)})."
         )
-    return Manager, VariableSpec
+    return Manager
 
 
 def _quiet_hpc_call(function, *args, **kwargs):
@@ -286,28 +291,101 @@ def _heatmap_images(frames: list[np.ndarray], metadata: dict[str, Any]) -> list[
     return images
 
 
-def _store_scalar_chunks(
+def _standalone_visualization(title: str, lines: list[str], accent: tuple[int, int, int]) -> Image.Image:
+    """Create a small campaign-level illustration with no variable inputs."""
+    image = Image.new("RGB", (640, 360), "#f4f7fb")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((28, 28, 612, 332), radius=18, fill="white", outline="#c9d6e2", width=2)
+    draw.rounded_rectangle((28, 28, 612, 104), radius=18, fill=accent)
+    draw.rectangle((28, 78, 612, 104), fill=accent)
+    draw.text((54, 52), title, fill="white", font_size=28)
+    for index, line in enumerate(lines):
+        y = 145 + index * 48
+        draw.ellipse((58, y + 3, 78, y + 23), fill=accent)
+        draw.text((98, y), line, fill="#24384b", font_size=21)
+    return image
+
+
+def _add_standalone_visualizations(
+    manager, config: DemoConfig, images: list[Image.Image], root: Path,
+) -> None:
+    """Register one still, one image sequence, and one movie without variables."""
+    _quiet_hpc_call(
+        manager.visualization,
+        images=[_standalone_visualization(
+            "Synthetic campaign guide",
+            [
+                f"{config.source_count} synthetic source files",
+                f"{config.steps} recorded time steps per source",
+                "Campaign-level visualization with no variable inputs",
+            ],
+            (45, 104, 154),
+        )],
+        sequence_name="campaign_visualizations/campaign_overview",
+        variables=[],
+        metadata={"representation_kind": "image", "title": "Synthetic campaign guide"},
+        store=True,
+    )
+    _quiet_hpc_call(
+        manager.visualization,
+        images=images,
+        sequence_name="campaign_visualizations/moving_blob_sequence",
+        variables=[],
+        steps=list(range(config.steps)),
+        metadata={"representation_kind": "image", "title": "Moving blob (image sequence)"},
+        store=True,
+    )
+    # Encode the same baseline heatmaps used by the variable-associated movie.
+    # Padding makes even-sized H.264 frames without changing the source images.
+    with tempfile.TemporaryDirectory(prefix="campaign-movie-", dir=root) as movie_dir:
+        movie_dir = Path(movie_dir)
+        for index, image in enumerate(images):
+            image.save(movie_dir / f"frame-{index:04d}.png")
+        movie = movie_dir / "moving_blob.mp4"
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-framerate", "2", "-i", str(movie_dir / "frame-%04d.png"),
+                    "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", str(movie),
+                ],
+                capture_output=True, check=True, timeout=60,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise DemoDependencyError("Could not encode the demo MP4 with ffmpeg") from exc
+        _quiet_hpc_call(
+            manager.video,
+            movie,
+            name="campaign_visualizations/moving_blob.mp4",
+            sequence_name="campaign_visualizations/Moving blob (MP4)",
+            variables=[],
+            vis_type="movie",
+            frame_count=config.steps,
+            frame_times=[float(step) for step in range(config.steps)],
+            store=True,
+        )
+
+
+def _store_scalar_fields(
     manager,
-    root: Path,
     source_name: str,
     variable_name: str,
     frames: list[np.ndarray],
+    metadata: dict[str, Any],
 ) -> list[str]:
-    payload_dir = root / "scalar-payloads" / source_name / variable_name
-    payload_dir.mkdir(parents=True, exist_ok=True)
     chunk_names: list[str] = []
     for step, frame in enumerate(frames):
-        payload_path = payload_dir / f"frame-{step:04d}.raw"
-        payload_path.write_bytes(np.asarray(frame, dtype="<f4").tobytes(order="C"))
         payload_name = (
             f"representations/{source_name}/{variable_name}/scalar-field/"
             f"frame-{step:04d}.raw"
         )
         _quiet_hpc_call(
-            manager.text,
-            payload_path.relative_to(root),
+            manager.scalar_field_data,
+            np.asarray(frame, dtype="<f4"),
             name=payload_name,
-            store=True,
+            metadata=metadata,
         )
         chunk_names.append(payload_name)
     return chunk_names
@@ -354,7 +432,9 @@ def generate_demo_campaign(
     """Generate one complete synthetic campaign below ``root``."""
 
     config.validate()
-    Manager, VariableSpec = _hpc_campaign_api()
+    Manager = _hpc_campaign_api()
+    if not shutil.which("ffmpeg"):
+        raise DemoDependencyError("Demo mode requires ffmpeg on PATH to create its MP4 example")
     root = Path(root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     sources_dir = root / "sources"
@@ -372,6 +452,7 @@ def generate_demo_campaign(
             "Generating Pulsar demo campaign "
             f"({len(sources)} sources, {config.steps} steps)..."
         )
+        campaign_images = []
         for source in sources:
             print(f"  synthetic source: {source.name}")
             steps = _source_steps(source, config)
@@ -384,31 +465,36 @@ def generate_demo_campaign(
                 name=source_dataset,
             )
 
-            primary_variables = {
-                variable_name: _quiet_hpc_call(
+            for variable_name in (
+                *DEMO_VARIABLES_1D,
+                *DEMO_VARIABLES_SCALAR,
+                *DEMO_VARIABLES_2D,
+            ):
+                _quiet_hpc_call(
                     manager.add_variable,
                     dataset=source_dataset,
                     variable=variable_name,
+                    definition=variable_name.rsplit("/", 1)[-1],
                 )
-                for variable_name in (
-                    *DEMO_VARIABLES_1D,
-                    *DEMO_VARIABLES_SCALAR,
-                    *DEMO_VARIABLES_2D,
-                )
-            }
 
             representation_dataset = f"representations/{source.name}"
             for variable_name in DEMO_VARIABLES_2D:
                 frames = [step_fields[variable_name] for step_fields in steps]
                 heatmap_metadata = _field_metadata(frames, config, "heatmap")
+                images = _heatmap_images(frames, heatmap_metadata)
+                if source == sources[0] and variable_name == "moving_blob_2d":
+                    campaign_images = images
                 _quiet_hpc_call(
-                    manager.add_image_sequence,
-                    dataset=representation_dataset,
-                    variable=f"{variable_name}/heatmap",
-                    images=_heatmap_images(frames, heatmap_metadata),
-                    inputs={"color-by": primary_variables[variable_name]},
-                    source_steps={"color-by": range(config.steps)},
-                    action_spec={
+                    manager.visualization,
+                    images=images,
+                    sequence_name=f"{representation_dataset}/{variable_name}/heatmap",
+                    variables=[{
+                        "name": variable_name,
+                        "source_dataset": source_dataset,
+                        "role": "color-by",
+                    }],
+                    steps=list(range(config.steps)),
+                    metadata={
                         **heatmap_metadata,
                         "representation_kind": "image",
                     },
@@ -416,31 +502,34 @@ def generate_demo_campaign(
                 )
 
                 scalar_metadata = _field_metadata(frames, config, "scalar_field")
-                scalar_chunks = _store_scalar_chunks(
+                scalar_chunks = _store_scalar_fields(
                     manager,
-                    root,
                     source.name,
                     variable_name,
                     frames,
+                    scalar_metadata,
                 )
                 _quiet_hpc_call(
-                    manager.add_activity,
-                    action="visualization",
-                    inputs={"color-by": primary_variables[variable_name]},
-                    outputs={
-                        "result": VariableSpec(
-                            dataset=representation_dataset,
-                            variable=f"{variable_name}/scalar_field",
-                            definition=variable_name,
-                            chunks=scalar_chunks,
-                        ),
-                    },
-                    action_spec={
-                        **scalar_metadata,
-                        "representation_kind": "scalar_field",
-                    },
-                    source_steps={"color-by": range(config.steps)},
+                    manager.visualization_sequence,
+                    name=f"{representation_dataset}/{variable_name}/scalar_field",
+                    vis_type="scalar_field",
+                    variables=[{
+                        "name": variable_name,
+                        "source_dataset": source_dataset,
+                        "role": "color-by",
+                    }],
+                    items=[
+                        {
+                            "type": "SCALAR_FIELD",
+                            "name": chunk_name,
+                            "metadata": {"frame_index": index},
+                        }
+                        for index, chunk_name in enumerate(scalar_chunks)
+                    ],
+                    metadata={**scalar_metadata, "representation_kind": "scalar_field"},
                 )
+
+        _add_standalone_visualizations(manager, config, campaign_images, root)
 
         schema_path = root / "__campaign_schema.yaml"
         schema_path.write_text(_schema_text(), encoding="utf-8")

@@ -99,10 +99,13 @@ def toggle_timeline_driver(
     if target_index < 0 or target_index >= len(cells):
         return current_index
     cell = cells[target_index] or {}
-    has_variable = str(
-        cell.get("variable_id", "") or cell.get("variable_name", "") or ""
+    has_identity = str(
+        cell.get("campaign_visualization_id", "")
+        or cell.get("variable_id", "")
+        or cell.get("variable_name", "")
+        or ""
     ).strip()
-    if not has_variable or not cell_has_timeline_samples(cell):
+    if not has_identity or not cell_has_timeline_samples(cell):
         return current_index
     return -1 if current_index == target_index else target_index
 

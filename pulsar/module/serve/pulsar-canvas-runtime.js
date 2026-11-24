@@ -784,6 +784,11 @@
       return event.dataTransfer.getData("application/x-pulsar-var") || event.dataTransfer.getData("text/plain") || "";
     }
 
+    function campaignVisualizationFromTransfer(event) {
+      if (!event.dataTransfer) return "";
+      return event.dataTransfer.getData("application/x-pulsar-campaign-visualization") || "";
+    }
+
     function externalInsertionIntent(snapshot, proposed, pointer, metrics) {
       if (!metrics.snap || !metrics.nudge) return null;
       const zone = engine.insertionZone(
@@ -861,7 +866,9 @@
       const canvas = activeCanvas(event.target, root);
       if (!canvas || interaction) return;
       const types = event.dataTransfer ? Array.from(event.dataTransfer.types || []) : [];
-      if (!types.includes("application/x-pulsar-var") && !types.includes("text/plain")) return;
+      const hasVariable = types.includes("application/x-pulsar-var") || types.includes("text/plain");
+      const hasCampaignVisualization = types.includes("application/x-pulsar-campaign-visualization");
+      if (!hasVariable && !hasCampaignVisualization) return;
       const metrics = canvasMetrics(canvas);
       const point = canvasPoint(event, canvas, metrics);
       const snapshot = readLayout(canvas);
@@ -959,11 +966,23 @@
       event.preventDefault();
       event.stopPropagation();
       const item = variableFromTransfer(event);
+      const campaignVisualization = campaignVisualizationFromTransfer(event);
       const target = externalDrop;
       const layoutPayload = target.layout
         ? JSON.stringify(target.layout.map(geometryOnly))
         : "";
       clearExternalDrop();
+      if (campaignVisualization) {
+        const args = [
+          campaignVisualization,
+          JSON.stringify(geometryOnly(target.geometry)),
+          canvas.dataset.paneId || "",
+          canvas.dataset.tabId || "",
+          layoutPayload,
+        ];
+        trameTrigger("add_campaign_visualization_to_canvas_trigger", args);
+        return;
+      }
       if (!item) return;
       const args = [
         item,

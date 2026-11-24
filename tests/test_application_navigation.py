@@ -979,7 +979,9 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(controller.triggers),
             {
+                "add_campaign_visualization_to_canvas_trigger",
                 "add_var_to_canvas_trigger",
+                "assign_campaign_visualization_to_grid_cell_trigger",
                 "assign_var_to_grid_cell_trigger",
                 "commit_canvas_layout_trigger",
                 "commit_grid_track_resize_trigger",
@@ -1107,6 +1109,110 @@ class CampaignDbNavigationTests(unittest.TestCase):
                     callback.__wrapped__,
                     getattr(owner, trigger_methods[trigger_name]),
                 )
+
+    def test_campaign_tiles_survive_refresh_history_and_workspace_restore(self):
+        for mode in ("uniform", "freeform"):
+            with self.subTest(mode=mode):
+                state, controller = self.make_controller()
+                owner = controller.actions["undo_workspace"].__self__
+                owner._campaign_result_records["guide"] = {
+                    "title": "Campaign guide", "preview": "/preview/guide",
+                    "campaign_path": "/campaign/example.aca",
+                }
+                if mode == "freeform":
+                    controller.actions["set_grid_layout_mode"]("freeform")
+                    controller.triggers["add_campaign_visualization_to_canvas_trigger"](
+                        "guide", {"x": 4, "y": 5, "w": 4, "h": 6}
+                    )
+                else:
+                    controller.triggers["assign_campaign_visualization_to_grid_cell_trigger"]("guide", 0)
+                owner.refresh_grid_cells()
+                self.assertEqual(state.gridCells[0]["src"], "/preview/guide")
+                geometry = {key: state.gridCells[0][key] for key in ("tile_id", "canvas_x", "canvas_y")}
+                self.assertTrue(controller.actions["undo_workspace"]())
+                self.assertFalse(any(c.get("campaign_visualization_id") for c in state.gridCells))
+                self.assertTrue(controller.actions["redo_workspace"]())
+                self.assertEqual(state.gridCells[0]["src"], "/preview/guide")
+                state.variablePaneView = "visualizations"
+                document = parse_workspace_document(workspace_json(state, "/campaign/example.aca"))
+                owner.restore_workspace_state(document)
+                self.assertEqual(state.variablePaneView, "visualizations")
+                self.assertEqual(state.gridCells[0]["campaign_visualization_id"], "guide")
+                self.assertEqual(state.gridCells[0]["src"], "/preview/guide")
+                for key, value in geometry.items():
+                    self.assertEqual(state.gridCells[0][key], value)
+
+    def test_campaign_tile_selection_and_variable_add_do_not_replace_it(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["undo_workspace"].__self__
+        owner._campaign_result_records["guide"] = {
+            "title": "Campaign guide", "preview": "/preview/guide",
+        }
+        controller.triggers["assign_campaign_visualization_to_grid_cell_trigger"]("guide", 0)
+        state.selectedVar = "density"
+        controller.actions["set_active_grid_cell"](0)
+        self.assertEqual(state.gridCells[0]["src"], "/preview/guide")
+        self.assertEqual(state.selectedGridCellIndices, [0])
+        self.assertEqual(state.selectedVar, "")
+        controller.actions["add_var_to_grid"]("density")
+        self.assertEqual(state.gridCells[0]["src"], "/preview/guide")
+        self.assertEqual(state.gridCells[1]["variable_id"], "density")
+
+    def test_campaign_animation_can_drive_timeline_and_move_between_cells(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["undo_workspace"].__self__
+        owner._campaign_result_records["animation"] = {
+            "title": "Campaign animation", "preview": "/preview/animation",
+            "frame_sources": ["/frame/0", "/frame/1"],
+            "frame_indices": [0, 1], "time_values": [0.0, 1.0],
+        }
+        controller.triggers["assign_campaign_visualization_to_grid_cell_trigger"]("animation", 0)
+        controller.actions["toggle_timeline_driver_cell"](0)
+        self.assertEqual(state.timelineDriverCell, 0)
+        controller.triggers["move_grid_cell_trigger"](0, 4)
+        self.assertEqual(state.gridCells[0]["status"], "empty")
+        self.assertEqual(state.gridCells[4]["campaign_visualization_id"], "animation")
+        self.assertEqual(state.selectedGridCellIndices, [4])
+        self.assertEqual(state.timelineDriverCell, -1)
+        controller.actions["toggle_timeline_driver_cell"](4)
+        self.assertEqual(state.timelineDriverCell, 4)
+        self.assertTrue(controller.actions["undo_workspace"]())  # Timeline driver change.
+        self.assertTrue(controller.actions["undo_workspace"]())
+        self.assertEqual(state.gridCells[0]["campaign_visualization_id"], "animation")
+        self.assertTrue(controller.actions["redo_workspace"]())
+        self.assertEqual(state.gridCells[4]["campaign_visualization_id"], "animation")
+
+    def test_campaign_media_context_menu_offers_reset_view(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["undo_workspace"].__self__
+        for media_type in ("image", "image_sequence", "video"):
+            with self.subTest(media_type=media_type):
+                state.gridCells[0].update({
+                    "campaign_visualization_id": "guide",
+                    "media_type": media_type,
+                    "src": "/preview/guide",
+                    "status": "ready",
+                })
+                controller.triggers["show_cell_context_menu"](0, 100, 100)
+                self.assertTrue(state.contextMenuCellCanResetView)
+                self.assertFalse(state.contextMenuCellHasVariable)
+                previous_nonce = state.resetViewRequestNonce
+                controller.actions["context_menu_cell_reset_view"]()
+                self.assertEqual(state.resetViewRequest["cell_index"], 0)
+                self.assertEqual(state.resetViewRequest["nonce"], previous_nonce + 1)
+                self.assertFalse(state.contextMenuVisible)
+        owner.clear_grid_cell(0)
+        controller.triggers["show_cell_context_menu"](0, 100, 100)
+        self.assertFalse(state.contextMenuCellCanResetView)
+
+    def test_missing_campaign_tile_remains_visible_as_an_error(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["undo_workspace"].__self__
+        state.gridCells[0]["campaign_visualization_id"] = "missing"
+        owner.refresh_grid_cells()
+        self.assertEqual(state.gridCells[0]["status"], "error")
+        self.assertEqual(state.gridCells[0]["campaign_visualization_id"], "missing")
+        self.assertIn("no longer available", state.gridCells[0]["note"])
 
     def test_workspace_tabs_preserve_independent_grid_state(self):
         state, controller = self.make_controller()
